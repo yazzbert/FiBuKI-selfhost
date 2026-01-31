@@ -539,13 +539,36 @@ export async function syncBankTransactions(
     await batch.commit();
   }
 
-  // Update source
+  // Update source - handle provider-specific data
+  const providerConfig = config as any;
+  const updatedConfig: any = {
+    ...config,
+    lastSyncAt: Timestamp.now(),
+    lastSyncError: undefined,
+  };
+
+  // For Plaid, save the new cursor for incremental syncs
+  if (config.provider === "plaid" && providerConfig._newCursor) {
+    updatedConfig.syncCursor = providerConfig._newCursor;
+  }
+
+  // For finAPI, save refreshed tokens if they were updated
+  if (config.provider === "finapi") {
+    if (providerConfig._refreshedToken) {
+      updatedConfig.userAccessToken = providerConfig._refreshedToken;
+    }
+    if (providerConfig._refreshedRefreshToken) {
+      updatedConfig.userRefreshToken = providerConfig._refreshedRefreshToken;
+    }
+    if (providerConfig._tokenExpiresAt) {
+      updatedConfig.tokenExpiresAt = Timestamp.fromDate(
+        new Date(providerConfig._tokenExpiresAt)
+      );
+    }
+  }
+
   await updateSource(ctx, sourceId, {
-    apiConfig: {
-      ...config,
-      lastSyncAt: Timestamp.now(),
-      lastSyncError: undefined,
-    } as any, // Type assertion - TODO: fix BankingConfig types
+    apiConfig: updatedConfig,
   });
 
   return {
@@ -604,6 +627,8 @@ function getRedirectUrl(providerId: BankingProviderId): string {
       return process.env.TRUELAYER_REDIRECT_URL || "";
     case "plaid":
       return process.env.PLAID_REDIRECT_URL || "";
+    case "finapi":
+      return process.env.FINAPI_REDIRECT_URL || "";
     default:
       throw new Error(`Unknown provider: ${providerId}`);
   }
@@ -640,6 +665,28 @@ function buildApiConfig(
         tokenExpiresAt: Timestamp.fromDate(
           new Date(connection.providerData?.tokenExpiresAt as string)
         ),
+      };
+
+    case "plaid":
+      return {
+        ...baseConfig,
+        provider: "plaid",
+        accessToken: connection.providerData?.accessToken as string,
+        itemId: connection.providerData?.itemId as string,
+        syncCursor: undefined, // Will be populated after first sync
+      };
+
+    case "finapi":
+      return {
+        ...baseConfig,
+        provider: "finapi",
+        bankConnectionId: connection.providerData?.bankConnectionId as number,
+        userAccessToken: connection.providerData?.userAccessToken as string,
+        userRefreshToken: connection.providerData?.userRefreshToken as string,
+        tokenExpiresAt: Timestamp.fromDate(
+          new Date(connection.providerData?.tokenExpiresAt as string)
+        ),
+        finapiUserId: connection.providerData?.finapiUserId as string,
       };
 
     default:

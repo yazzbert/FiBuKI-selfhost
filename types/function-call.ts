@@ -70,8 +70,18 @@ export type CloudFunctionName =
   | "requestUserExport"
   | "validateUserImport"
   | "executeUserImport"
+  // BMD export
+  | "requestBmdExport"
   // Admin functions
-  | "getAutomations";
+  | "getAutomations"
+  // Banking operations
+  | "syncBankTransactions"
+  | "cleanupOrphanedTransactions"
+  | "createBankingConnection"
+  | "updateBankingConnection"
+  | "deleteBankingConnection"
+  | "createApiSource"
+  | "updateSourceApiConfig";
 
 /**
  * Summary statistics for function calls (for dashboards).

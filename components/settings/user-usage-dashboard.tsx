@@ -18,6 +18,7 @@ import { useUserUsage, formatFunctionName } from "@/hooks/use-user-usage";
 import { useFunctionCalls, formatFunctionDisplayName, formatDuration } from "@/hooks/use-function-calls";
 import { USER_TOKEN_RATE_PER_100K } from "@/types/ai-usage";
 import { cn } from "@/lib/utils";
+import { SettingsPageHeader } from "@/components/ui/settings-page-header";
 
 function formatTokens(tokens: number): string {
   if (tokens >= 1000000) {
@@ -66,13 +67,11 @@ export function UserUsageDashboard() {
   return (
     <div className="space-y-6">
       {/* Header with view toggle */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">AI Usage</h2>
-          <p className="text-sm text-muted-foreground">
-            Track your AI feature usage and estimated costs
-          </p>
-        </div>
+      <SettingsPageHeader
+        title="AI Usage"
+        description="Track your AI feature usage and estimated costs"
+        className="mb-0"
+      >
         <div className="flex items-center gap-2">
           <Button
             variant={view === "current" ? "default" : "outline"}
@@ -91,7 +90,7 @@ export function UserUsageDashboard() {
             History
           </Button>
         </div>
-      </div>
+      </SettingsPageHeader>
 
       {/* Current Month View */}
       {view === "current" && (

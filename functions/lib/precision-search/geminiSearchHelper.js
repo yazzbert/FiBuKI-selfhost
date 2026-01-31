@@ -10,6 +10,7 @@ exports.generateSearchQueries = generateSearchQueries;
 exports.analyzeEmailForInvoice = analyzeEmailForInvoice;
 exports.batchMatchTransactionsToFiles = batchMatchTransactionsToFiles;
 const vertexai_1 = require("@google-cloud/vertexai");
+const ai_usage_logger_1 = require("../utils/ai-usage-logger");
 // Using Flash-Lite for maximum speed and lowest cost
 const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
 // Get project ID from environment
@@ -38,7 +39,7 @@ function fixLlmJson(text) {
  * Generate Gmail search queries based on transaction data.
  * Returns 2-4 query variants to try.
  */
-async function generateSearchQueries(transaction, partnerInfo) {
+async function generateSearchQueries(transaction, partnerInfo, userId) {
     const projectId = getProjectId();
     const vertexAI = new vertexai_1.VertexAI({ project: projectId, location: VERTEX_LOCATION });
     const model = vertexAI.getGenerativeModel({ model: GEMINI_MODEL });
@@ -79,6 +80,17 @@ Return JSON only:
         outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
         model: GEMINI_MODEL,
     };
+    // Log AI usage
+    if (userId) {
+        (0, ai_usage_logger_1.logAIUsage)(userId, {
+            function: "searchQueryGeneration",
+            model: GEMINI_MODEL,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+        }).catch((err) => {
+            console.error("[GeminiSearch] Failed to log AI usage:", err);
+        });
+    }
     try {
         // Extract JSON from response and fix common LLM issues
         const cleanedText = fixLlmJson(text);
@@ -101,7 +113,7 @@ Return JSON only:
 /**
  * Analyze an email body to detect invoice links or determine if the email itself is an invoice.
  */
-async function analyzeEmailForInvoice(emailContent, transaction) {
+async function analyzeEmailForInvoice(emailContent, transaction, userId) {
     const projectId = getProjectId();
     const vertexAI = new vertexai_1.VertexAI({ project: projectId, location: VERTEX_LOCATION });
     const model = vertexAI.getGenerativeModel({ model: GEMINI_MODEL });
@@ -152,6 +164,17 @@ Return JSON only:
         outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
         model: GEMINI_MODEL,
     };
+    // Log AI usage
+    if (userId) {
+        (0, ai_usage_logger_1.logAIUsage)(userId, {
+            function: "emailAnalysis",
+            model: GEMINI_MODEL,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+        }).catch((err) => {
+            console.error("[GeminiSearch] Failed to log AI usage:", err);
+        });
+    }
     try {
         const cleanedText = fixLlmJson(text);
         const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
@@ -191,7 +214,7 @@ Return JSON only:
  * Batch match multiple transactions to multiple files.
  * Used for many-to-many matching (e.g., 12 months of Netflix transactions + 11 receipts).
  */
-async function batchMatchTransactionsToFiles(transactions, files) {
+async function batchMatchTransactionsToFiles(transactions, files, userId) {
     const projectId = getProjectId();
     const vertexAI = new vertexai_1.VertexAI({ project: projectId, location: VERTEX_LOCATION });
     const model = vertexAI.getGenerativeModel({ model: GEMINI_MODEL });
@@ -245,6 +268,17 @@ Return JSON only:
         outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
         model: GEMINI_MODEL,
     };
+    // Log AI usage
+    if (userId) {
+        (0, ai_usage_logger_1.logAIUsage)(userId, {
+            function: "batchMatching",
+            model: GEMINI_MODEL,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+        }).catch((err) => {
+            console.error("[GeminiSearch] Failed to log AI usage:", err);
+        });
+    }
     try {
         const cleanedText = fixLlmJson(text);
         const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);

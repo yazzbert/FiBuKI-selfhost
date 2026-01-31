@@ -30,12 +30,19 @@ const matchFilePartner_1 = require("../matching/matchFilePartner");
 const matchFileTransactions_1 = require("../matching/matchFileTransactions");
 // Transaction triggers
 const onTransactionUpdate_1 = require("../matching/onTransactionUpdate");
+const onTransactionsImportedCompanyCheck_1 = require("../matching/onTransactionsImportedCompanyCheck");
 // Partner triggers
 const onPartnerCreate_1 = require("../matching/onPartnerCreate");
 const onPartnerUpdate_1 = require("../matching/onPartnerUpdate");
 // Category triggers
 const onCategoryCreate_1 = require("../matching/onCategoryCreate");
 const onCategoryUpdate_1 = require("../matching/onCategoryUpdate");
+// Callable - Matching (manual triggers)
+const matchPartners_1 = require("../matching/matchPartners");
+const searchExternalPartners_1 = require("../matching/searchExternalPartners");
+// Callable - Agentic search
+const runReceiptSearchForTransaction_1 = require("../workers/runReceiptSearchForTransaction");
+const lookupCompany_1 = require("../ai/lookupCompany");
 // =============================================================================
 // REGISTRY
 // =============================================================================
@@ -43,17 +50,31 @@ const onCategoryUpdate_1 = require("../matching/onCategoryUpdate");
  * All registered automations keyed by ID
  */
 exports.AUTOMATION_REGISTRY = {
+    // =========================================================================
+    // AUTO-TRIGGERS (Firestore document events)
+    // =========================================================================
     // File triggers
     matchFilePartner: matchFilePartner_1.AUTOMATION_META,
     matchFileTransactions: matchFileTransactions_1.AUTOMATION_META,
     // Transaction triggers
     onTransactionUpdate: onTransactionUpdate_1.AUTOMATION_META,
+    onTransactionsImportedCompanyCheck: onTransactionsImportedCompanyCheck_1.AUTOMATION_META,
     // Partner triggers
     onPartnerCreate: onPartnerCreate_1.AUTOMATION_META,
     onPartnerUpdate: onPartnerUpdate_1.AUTOMATION_META,
     // Category triggers
     onCategoryCreate: onCategoryCreate_1.AUTOMATION_META,
     onCategoryUpdate: onCategoryUpdate_1.AUTOMATION_META,
+    // =========================================================================
+    // CALLABLES (Manual/Agent-triggered)
+    // =========================================================================
+    // Manual matching
+    matchPartners: matchPartners_1.AUTOMATION_META,
+    searchExternalPartners: searchExternalPartners_1.AUTOMATION_META,
+    // Agentic search
+    runReceiptSearchForTransaction: runReceiptSearchForTransaction_1.AUTOMATION_META,
+    lookupCompany: lookupCompany_1.AUTOMATION_META_LOOKUP,
+    lookupByVatId: lookupCompany_1.AUTOMATION_META_VAT,
 };
 // =============================================================================
 // QUERY FUNCTIONS

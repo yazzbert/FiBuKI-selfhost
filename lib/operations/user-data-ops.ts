@@ -1,9 +1,127 @@
 import { doc, getDoc, setDoc, Timestamp } from "firebase/firestore";
-import { UserData, UserDataFormData } from "@/types/user-data";
+import { UserData, UserDataFormData, IdentityEntity } from "@/types/user-data";
 import { OperationsContext } from "./types";
 
 const SETTINGS_COLLECTION = "settings";
 const USER_DATA_DOC = "userData";
+
+// ============================================================================
+// Helper Functions for Multi-Entity Identity Data
+// ============================================================================
+
+/**
+ * Get all identity names from all entities (personal + companies)
+ * Includes backward compatibility for deprecated fields
+ */
+export function getAllIdentityNames(userData: UserData | null): string[] {
+  if (!userData) return [];
+
+  const names: string[] = [];
+
+  // New format: personal entity
+  if (userData.personalEntity?.name) {
+    names.push(userData.personalEntity.name);
+    names.push(...(userData.personalEntity.aliases || []));
+  }
+
+  // New format: company entities
+  for (const company of userData.companies || []) {
+    if (company.name) {
+      names.push(company.name);
+      names.push(...(company.aliases || []));
+    }
+  }
+
+  // Backward compatibility: deprecated fields
+  if (userData.name) names.push(userData.name);
+  if (userData.companyName) names.push(userData.companyName);
+  names.push(...(userData.aliases || []));
+
+  // Deduplicate and filter empty
+  return [...new Set(names)].filter(Boolean);
+}
+
+/**
+ * Get all VAT IDs from all entities
+ * Includes backward compatibility for deprecated fields
+ */
+export function getAllIdentityVatIds(userData: UserData | null): string[] {
+  if (!userData) return [];
+
+  const vatIds: string[] = [];
+
+  // New format: personal entity
+  if (userData.personalEntity?.vatId) {
+    vatIds.push(userData.personalEntity.vatId);
+  }
+
+  // New format: company entities
+  for (const company of userData.companies || []) {
+    if (company.vatId) {
+      vatIds.push(company.vatId);
+    }
+  }
+
+  // Backward compatibility: deprecated fields
+  vatIds.push(...(userData.vatIds || []));
+
+  // Deduplicate and filter empty
+  return [...new Set(vatIds)].filter(Boolean);
+}
+
+/**
+ * Get all IBANs from all entities
+ * Includes backward compatibility for deprecated fields
+ */
+export function getAllIdentityIbans(userData: UserData | null): string[] {
+  if (!userData) return [];
+
+  const ibans: string[] = [];
+
+  // New format: personal entity
+  if (userData.personalEntity?.ibans) {
+    ibans.push(...userData.personalEntity.ibans);
+  }
+
+  // New format: company entities
+  for (const company of userData.companies || []) {
+    ibans.push(...(company.ibans || []));
+  }
+
+  // Backward compatibility: deprecated fields
+  ibans.push(...(userData.ibans || []));
+
+  // Deduplicate and filter empty
+  return [...new Set(ibans)].filter(Boolean);
+}
+
+/**
+ * Check if a partner ID is linked to any identity entity
+ */
+export function isPartnerLinkedToIdentity(userData: UserData | null, partnerId: string): boolean {
+  if (!userData || !partnerId) return false;
+
+  // Check personal entity
+  if (userData.personalEntity?.partnerId === partnerId) return true;
+
+  // Check companies
+  for (const company of userData.companies || []) {
+    if (company.partnerId === partnerId) return true;
+  }
+
+  // Backward compatibility
+  if (userData.identityPartnerIds?.name === partnerId) return true;
+  if (userData.identityPartnerIds?.companyName === partnerId) return true;
+
+  return false;
+}
+
+/**
+ * Generate a unique ID for entities
+ */
+export function generateEntityId(): string {
+  return `entity_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
 /**
  * Get user data for the current user
@@ -22,7 +140,8 @@ export async function getUserData(
 }
 
 /**
- * Create or update user data for the current user
+ * Create or update user data for the current user.
+ * Supports both new format (personalEntity + companies) and legacy format.
  */
 export async function saveUserData(
   ctx: OperationsContext,
@@ -32,24 +151,111 @@ export async function saveUserData(
   const docRef = doc(ctx.db, "users", ctx.userId, SETTINGS_COLLECTION, USER_DATA_DOC);
 
   const existingDoc = await getDoc(docRef);
+  const existingData = existingDoc.data();
 
-  const userData: UserData = {
-    name: data.name.trim(),
-    companyName: data.companyName.trim(),
-    country: data.country || existingDoc.data()?.country || "AT",
-    aliases: data.aliases.map((a) => a.trim()).filter(Boolean),
-    vatIds: (data.vatIds || []).map((v) => v.trim().toUpperCase().replace(/[^A-Z0-9]/g, "")).filter(Boolean),
-    ibans: (data.ibans || []).map((i) => i.trim().toUpperCase().replace(/\s/g, "")).filter(Boolean),
-    ownEmails: (data.ownEmails || existingDoc.data()?.ownEmails || [])
+  // Build user data object
+  const userData: Partial<UserData> = {
+    country: data.country || existingData?.country || "AT",
+    taxNumber: data.taxNumber?.replace(/\D/g, "") || existingData?.taxNumber || "",
+    ownEmails: (data.ownEmails || existingData?.ownEmails || [])
       .map((e: string) => e.trim().toLowerCase())
       .filter(Boolean),
-    taxNumber: data.taxNumber?.replace(/\D/g, "") || existingDoc.data()?.taxNumber,
-    markedAsMe: data.markedAsMe || existingDoc.data()?.markedAsMe || [],
     updatedAt: now,
-    createdAt: existingDoc.exists() ? existingDoc.data().createdAt : now,
+    createdAt: existingDoc.exists() ? existingData?.createdAt : now,
   };
 
-  await setDoc(docRef, userData);
+  // Handle new format (personalEntity + companies)
+  if (data.personalEntity) {
+    const personalVatId = data.personalEntity.vatId?.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const personalPartnerId = data.personalEntity.partnerId || existingData?.personalEntity?.partnerId;
+
+    const personalEntity: IdentityEntity = {
+      id: data.personalEntity.id || existingData?.personalEntity?.id || generateEntityId(),
+      type: "person",
+      name: data.personalEntity.name.trim(),
+      aliases: data.personalEntity.aliases.map((a) => a.trim()).filter(Boolean),
+      ibans: data.personalEntity.ibans.map((i) => i.trim().toUpperCase().replace(/\s/g, "")).filter(Boolean),
+      order: data.personalEntity.order ?? 0,
+      createdAt: existingData?.personalEntity?.createdAt || now,
+    };
+
+    // Only include optional fields if they have values (Firestore doesn't accept undefined)
+    if (personalVatId) personalEntity.vatId = personalVatId;
+    if (personalPartnerId) personalEntity.partnerId = personalPartnerId;
+
+    userData.personalEntity = personalEntity;
+  } else if (existingData?.personalEntity) {
+    userData.personalEntity = existingData.personalEntity;
+  }
+
+  if (data.companies !== undefined) {
+    userData.companies = data.companies.map((c, index) => {
+      const companyVatId = c.vatId?.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+      const company: IdentityEntity = {
+        id: c.id || generateEntityId(),
+        type: "company" as const,
+        name: c.name.trim(),
+        aliases: c.aliases.map((a) => a.trim()).filter(Boolean),
+        ibans: c.ibans.map((i) => i.trim().toUpperCase().replace(/\s/g, "")).filter(Boolean),
+        order: c.order ?? index,
+        createdAt: existingData?.companies?.find((ec: IdentityEntity) => ec.id === c.id)?.createdAt || now,
+      };
+
+      // Only include optional fields if they have values
+      if (companyVatId) company.vatId = companyVatId;
+      if (c.partnerId) company.partnerId = c.partnerId;
+
+      return company;
+    });
+  } else if (existingData?.companies) {
+    userData.companies = existingData.companies;
+  }
+
+  // Handle legacy format (for backward compatibility)
+  if (data.name !== undefined) {
+    userData.name = data.name.trim();
+  } else if (existingData?.name !== undefined) {
+    userData.name = existingData.name;
+  }
+
+  if (data.companyName !== undefined) {
+    userData.companyName = data.companyName.trim();
+  } else if (existingData?.companyName !== undefined) {
+    userData.companyName = existingData.companyName;
+  }
+
+  if (data.aliases !== undefined) {
+    userData.aliases = data.aliases.map((a) => a.trim()).filter(Boolean);
+  } else if (existingData?.aliases !== undefined) {
+    userData.aliases = existingData.aliases;
+  }
+
+  if (data.vatIds !== undefined) {
+    userData.vatIds = data.vatIds.map((v) => v.trim().toUpperCase().replace(/[^A-Z0-9]/g, "")).filter(Boolean);
+  } else if (existingData?.vatIds !== undefined) {
+    userData.vatIds = existingData.vatIds;
+  }
+
+  if (data.ibans !== undefined) {
+    userData.ibans = data.ibans.map((i) => i.trim().toUpperCase().replace(/\s/g, "")).filter(Boolean);
+  } else if (existingData?.ibans !== undefined) {
+    userData.ibans = existingData.ibans;
+  }
+
+  if (data.markedAsMe !== undefined) {
+    userData.markedAsMe = data.markedAsMe;
+  } else if (existingData?.markedAsMe !== undefined) {
+    userData.markedAsMe = existingData.markedAsMe;
+  }
+
+  // Only include identityPartnerIds if it exists (avoid undefined in Firestore)
+  const identityPartnerIds = data.identityPartnerIds || existingData?.identityPartnerIds;
+  if (identityPartnerIds) {
+    userData.identityPartnerIds = identityPartnerIds;
+  }
+
+  await setDoc(docRef, userData as UserData);
 }
 
 /**
@@ -77,26 +283,19 @@ export async function createDefaultUserData(ctx: OperationsContext): Promise<voi
 
 /**
  * Check if text matches user data (name, company, or aliases)
- * Used during extraction to determine invoice direction
+ * Used during extraction to determine invoice direction.
+ * Now checks ALL entities (personal + companies) for matches.
  */
 export function matchesUserData(text: string, userData: UserData): boolean {
   if (!text || !userData) return false;
 
   const normalizedText = text.toLowerCase().trim();
 
-  // Check company name
-  if (userData.companyName && normalizedText.includes(userData.companyName.toLowerCase())) {
-    return true;
-  }
+  // Get all identity names (includes personal, companies, and legacy fields)
+  const allNames = getAllIdentityNames(userData);
 
-  // Check user name
-  if (userData.name && normalizedText.includes(userData.name.toLowerCase())) {
-    return true;
-  }
-
-  // Check aliases
-  for (const alias of userData.aliases || []) {
-    if (alias && normalizedText.includes(alias.toLowerCase())) {
+  for (const name of allNames) {
+    if (name && normalizedText.includes(name.toLowerCase())) {
       return true;
     }
   }
@@ -106,28 +305,36 @@ export function matchesUserData(text: string, userData: UserData): boolean {
 
 /**
  * Check if a VAT ID belongs to the user
- * Used during file extraction to identify outgoing invoices
+ * Used during file extraction to identify outgoing invoices.
+ * Now checks ALL entities (personal + companies) for VAT ID matches.
  */
 export function isUserVatId(vatId: string, userData: UserData | null): boolean {
-  if (!vatId || !userData || !userData.vatIds?.length) return false;
+  if (!vatId || !userData) return false;
 
   const normalizedVatId = vatId.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const allVatIds = getAllIdentityVatIds(userData);
 
-  return userData.vatIds.some(
+  if (allVatIds.length === 0) return false;
+
+  return allVatIds.some(
     (userVat) => userVat.toUpperCase().replace(/[^A-Z0-9]/g, "") === normalizedVatId
   );
 }
 
 /**
  * Check if an IBAN belongs to the user
- * Used during file extraction to identify user's own bank accounts
+ * Used during file extraction to identify user's own bank accounts.
+ * Now checks ALL entities (personal + companies) for IBAN matches.
  */
 export function isUserIban(iban: string, userData: UserData | null): boolean {
-  if (!iban || !userData || !userData.ibans?.length) return false;
+  if (!iban || !userData) return false;
 
   const normalizedIban = iban.toUpperCase().replace(/\s/g, "");
+  const allIbans = getAllIdentityIbans(userData);
 
-  return userData.ibans.some(
+  if (allIbans.length === 0) return false;
+
+  return allIbans.some(
     (userIban) => userIban.toUpperCase().replace(/\s/g, "") === normalizedIban
   );
 }

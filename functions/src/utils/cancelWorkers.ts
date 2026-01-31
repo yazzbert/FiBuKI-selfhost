@@ -145,3 +145,51 @@ export async function cancelTransactionWorkersForFile(
 ): Promise<CancelResult> {
   return cancelWorkersForEntity(userId, "file", fileId, ["file_matching"]);
 }
+
+/**
+ * Cancel precision search queue for a specific transaction
+ *
+ * When a user manually connects a file or sets a no-receipt category,
+ * any running precision search for that transaction should stop.
+ */
+export async function cancelPrecisionSearchForTransaction(
+  userId: string,
+  transactionId: string
+): Promise<{ cancelledQueueItems: number }> {
+  let cancelledQueueItems = 0;
+
+  // Find queue items that are processing this specific transaction
+  // (single_transaction scope with matching transactionId)
+  const singleTxQuery = await db
+    .collection("precisionSearchQueue")
+    .where("userId", "==", userId)
+    .where("scope", "==", "single_transaction")
+    .where("transactionId", "==", transactionId)
+    .where("status", "in", ["pending", "processing"])
+    .get();
+
+  if (!singleTxQuery.empty) {
+    const batch = db.batch();
+    for (const doc of singleTxQuery.docs) {
+      batch.update(doc.ref, {
+        status: "completed",
+        completedAt: Timestamp.now(),
+        completionReason: "manual_override",
+      });
+      cancelledQueueItems++;
+    }
+    await batch.commit();
+  }
+
+  // For all_incomplete scope, we can't cancel the whole queue
+  // but we mark the transaction so it gets skipped during processing
+  // This is handled by the isComplete check in the queue processor
+
+  if (cancelledQueueItems > 0) {
+    console.log(
+      `[cancelPrecisionSearchForTransaction] Cancelled ${cancelledQueueItems} queue items for transaction ${transactionId}`
+    );
+  }
+
+  return { cancelledQueueItems };
+}

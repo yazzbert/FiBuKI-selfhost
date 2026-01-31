@@ -30,6 +30,8 @@ interface UseGmailSearchQueriesOptions {
 }
 
 interface GenerateSearchQueriesRequest {
+  /** Transaction ID for cache read/write */
+  transactionId?: string;
   transaction: {
     name: string;
     partner?: string | null;
@@ -97,6 +99,7 @@ export function useGmailSearchQueries({
     setIsLoading(true);
 
     generateSearchQueriesFn({
+      transactionId: transaction.id,
       transaction: {
         name: transaction.name ?? "",
         partner: transaction.partner,

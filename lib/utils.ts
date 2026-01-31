@@ -5,6 +5,31 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * Safely convert various date formats to Date object.
+ * Handles: Firestore Timestamp, serialized timestamp {seconds, nanoseconds}, Date, ISO string
+ */
+export function toDateSafe(value: unknown): Date | null {
+  if (!value) return null;
+  // Firestore Timestamp with toDate method
+  if (typeof value === "object" && "toDate" in value && typeof (value as { toDate: unknown }).toDate === "function") {
+    return (value as { toDate: () => Date }).toDate();
+  }
+  // Serialized Firestore Timestamp {seconds, nanoseconds}
+  if (typeof value === "object" && "seconds" in value) {
+    const ts = value as { seconds: number; nanoseconds?: number };
+    return new Date(ts.seconds * 1000 + (ts.nanoseconds || 0) / 1000000);
+  }
+  // Already a Date
+  if (value instanceof Date) return value;
+  // ISO string or other string format
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
 export function formatCurrency(
   amount: number,
   currency: string = "EUR",

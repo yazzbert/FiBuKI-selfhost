@@ -46,11 +46,10 @@ export const onGmailSyncComplete = onDocumentUpdated(
       `[PrecisionSearch] Gmail sync ${gmailSyncQueueId} completed with ${filesCreated} files`
     );
 
-    // Skip if no files were created (nothing new to match)
-    if (filesCreated === 0) {
-      console.log("[PrecisionSearch] No new files, skipping precision search");
-      return;
-    }
+    // Note: We no longer skip when filesCreated === 0 because:
+    // 1. email_invoice strategy can find HTML invoices even without attachments
+    // 2. This is the entry point for transactions that were skipped earlier
+    //    due to no email integration being connected
 
     // Check if there's already a pending precision search for this user
     const existingSearch = await db

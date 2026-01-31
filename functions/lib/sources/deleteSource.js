@@ -100,7 +100,7 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
             await txBatch.commit();
         }
     }
-    // 4. Clean up TrueLayer/GoCardless connection if this was an API source
+    // 4. Clean up API provider connections if this was an API source
     if (sourceData.type === "api" && sourceData.apiConfig) {
         const apiConfig = sourceData.apiConfig;
         if (apiConfig.provider === "truelayer" && apiConfig.connectionId) {
@@ -119,6 +119,65 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
             }
             catch (err) {
                 console.warn(`[deleteSource] Failed to delete GoCardless requisition:`, err);
+            }
+        }
+        // Delete finAPI bank connection
+        if (apiConfig.provider === "finapi" && apiConfig.bankConnectionId) {
+            try {
+                const clientId = process.env.FINAPI_CLIENT_ID;
+                const clientSecret = process.env.FINAPI_CLIENT_SECRET;
+                const environment = process.env.FINAPI_ENVIRONMENT || "sandbox";
+                const baseUrl = environment === "production"
+                    ? "https://live.finapi.io"
+                    : "https://sandbox.finapi.io";
+                if (clientId && clientSecret) {
+                    let accessToken = apiConfig.userAccessToken;
+                    const refreshToken = sourceData.apiConfig.userRefreshToken;
+                    // Try to refresh the token first if we have a refresh token
+                    if (refreshToken) {
+                        try {
+                            const tokenResponse = await fetch(`${baseUrl}/api/v2/oauth/token`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                                body: new URLSearchParams({
+                                    grant_type: "refresh_token",
+                                    client_id: clientId,
+                                    client_secret: clientSecret,
+                                    refresh_token: refreshToken,
+                                }).toString(),
+                            });
+                            if (tokenResponse.ok) {
+                                const tokenData = await tokenResponse.json();
+                                accessToken = tokenData.access_token;
+                                console.log(`[deleteSource] Refreshed finAPI token for bank connection delete`);
+                            }
+                        }
+                        catch (refreshErr) {
+                            console.warn(`[deleteSource] Failed to refresh finAPI token:`, refreshErr);
+                        }
+                    }
+                    if (accessToken) {
+                        const response = await fetch(`${baseUrl}/api/v2/bankConnections/${apiConfig.bankConnectionId}`, {
+                            method: "DELETE",
+                            headers: {
+                                Authorization: `Bearer ${accessToken}`,
+                            },
+                        });
+                        if (response.ok) {
+                            console.log(`[deleteSource] Deleted finAPI bank connection: ${apiConfig.bankConnectionId}`);
+                        }
+                        else {
+                            const errorText = await response.text();
+                            console.warn(`[deleteSource] finAPI delete returned ${response.status}: ${errorText}`);
+                        }
+                    }
+                    else {
+                        console.warn(`[deleteSource] No access token available to delete finAPI connection`);
+                    }
+                }
+            }
+            catch (err) {
+                console.warn(`[deleteSource] Failed to delete finAPI connection:`, err);
             }
         }
     }

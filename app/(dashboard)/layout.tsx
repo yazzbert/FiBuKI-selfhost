@@ -170,9 +170,15 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
+                  <Link href="/settings/usage" className="flex items-center gap-2">
+                    <Activity className="h-4 w-4" />
+                    Usage
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
                   <Link href="/settings/categories" className="flex items-center gap-2">
                     <Tag className="h-4 w-4" />
-                    No-Receipt Categories
+                    Categories
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>

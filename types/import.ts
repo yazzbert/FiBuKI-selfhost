@@ -251,7 +251,7 @@ export type ImportStatus = "draft" | "completed";
 
 /**
  * Persisted import record - stored in Firestore 'imports' collection.
- * Can be either a draft (in-progress) or completed import.
+ * Can be either a draft (in-progress) or completed import, or an API sync record.
  */
 export interface ImportRecord {
   /** Document ID (same as importJobId stored on transactions) */
@@ -260,7 +260,7 @@ export interface ImportRecord {
   /** The source (bank account) this import belongs to */
   sourceId: string;
 
-  /** Original filename */
+  /** Original filename (for CSV) or "Bank Sync" for API syncs */
   fileName: string;
 
   /** When the import was created */
@@ -268,6 +268,22 @@ export interface ImportRecord {
 
   /** Owner of this import */
   userId: string;
+
+  // === Type discriminator ===
+
+  /** Type of import: "csv" for CSV imports, "api" for bank syncs */
+  importType?: "csv" | "api";
+
+  // === API sync specific fields ===
+
+  /** For API syncs: start date of the sync range */
+  syncDateFrom?: string;
+
+  /** For API syncs: end date of the sync range */
+  syncDateTo?: string;
+
+  /** For API syncs: provider name (e.g., "finapi", "gocardless") */
+  syncProvider?: string;
 
   // === Status (draft support) ===
 

@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { Institution } from "./use-institutions";
+import { useAuth } from "@/components/auth/auth-provider";
 
 /**
  * Connection flow steps
@@ -59,11 +60,23 @@ const initialState: BankConnectionState = {
  * @param sourceId - Optional existing source ID for linking/reconnecting
  */
 export function useBankConnection(sourceId?: string | null) {
+  const { user } = useAuth();
   const [state, setState] = useState<BankConnectionState>(() => ({
     ...initialState,
     linkToSourceId: sourceId || null,
   }));
   const [isLoading, setIsLoading] = useState(false);
+
+  // Helper to get auth headers
+  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    if (!user) return {};
+    try {
+      const token = await user.getIdToken();
+      return { Authorization: `Bearer ${token}` };
+    } catch {
+      return {};
+    }
+  }, [user]);
 
   /**
    * Select a country and move to bank selection
@@ -84,6 +97,7 @@ export function useBankConnection(sourceId?: string | null) {
     setState((s) => ({
       ...s,
       step: "select-country",
+      selectedCountry: null,
       selectedInstitution: null,
       error: null,
     }));
@@ -101,14 +115,18 @@ export function useBankConnection(sourceId?: string | null) {
     }));
 
     try {
-      // Get auth URL from TrueLayer
-      const response = await fetch("/api/truelayer/connect", {
+      const authHeaders = await getAuthHeaders();
+
+      // Use generic banking API (routes to configured provider - finAPI)
+      const response = await fetch("/api/banking/connect", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders,
+        },
         body: JSON.stringify({
-          providerId: institution.id,
-          providerName: institution.name,
-          providerLogo: institution.logo,
+          providerId: institution.providerId || "finapi",
+          institutionId: institution.id,
           sourceId: state.linkToSourceId,
         }),
       });
@@ -122,11 +140,12 @@ export function useBankConnection(sourceId?: string | null) {
       setState((s) => ({
         ...s,
         step: "authorizing",
+        connectionId: data.connectionId,
         authorizationUrl: data.authUrl,
       }));
 
-      // Redirect to TrueLayer auth (same window - they'll redirect back)
-      window.location.href = data.authUrl;
+      // Open bank auth in new tab (user completes there, then clicks "I've completed")
+      window.open(data.authUrl, "_blank", "noopener,noreferrer");
     } catch (err) {
       setState((s) => ({
         ...s,
@@ -136,20 +155,58 @@ export function useBankConnection(sourceId?: string | null) {
     } finally {
       setIsLoading(false);
     }
-  }, [state.linkToSourceId]);
+  }, [state.linkToSourceId, getAuthHeaders]);
 
   /**
-   * Check connection status (not needed for TrueLayer - callback handles it)
-   * Kept for compatibility but does nothing
+   * Check connection status
    */
   const checkStatus = useCallback(async (connectionId: string) => {
-    // TrueLayer handles this in the callback - no polling needed
-    // The callback redirects directly to the accounts page
-    setState((s) => ({
-      ...s,
-      connectionId,
-    }));
-  }, []);
+    setIsLoading(true);
+    try {
+      const authHeaders = await getAuthHeaders();
+      const response = await fetch(`/api/banking/connections/${connectionId}`, {
+        headers: authHeaders,
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to check connection status");
+      }
+
+      // Handle different statuses
+      if (data.status === "rejected") {
+        setState((s) => ({
+          ...s,
+          connectionId,
+          step: "error",
+          error: data.statusMessage || "Bank connection was rejected",
+        }));
+      } else if (data.status === "linked") {
+        setState((s) => ({
+          ...s,
+          connectionId,
+          accounts: data.accounts || [],
+          step: "select-accounts",
+        }));
+      } else {
+        // Still pending/authorizing
+        setState((s) => ({
+          ...s,
+          connectionId,
+          step: "authorizing",
+        }));
+      }
+    } catch (err) {
+      setState((s) => ({
+        ...s,
+        connectionId,
+        step: "error",
+        error: err instanceof Error ? err.message : "Failed to check status",
+      }));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [getAuthHeaders]);
 
   /**
    * Create a source from a selected account
@@ -170,9 +227,10 @@ export function useBankConnection(sourceId?: string | null) {
       setState((s) => ({ ...s, step: "creating-source" }));
 
       try {
-        const response = await fetch("/api/truelayer/accounts", {
+        const authHeaders = await getAuthHeaders();
+        const response = await fetch("/api/banking/accounts", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({
             connectionId: connId,
             accountId,
@@ -202,7 +260,7 @@ export function useBankConnection(sourceId?: string | null) {
         setIsLoading(false);
       }
     },
-    [state.connectionId, state.linkToSourceId]
+    [state.connectionId, state.linkToSourceId, getAuthHeaders]
   );
 
   /**

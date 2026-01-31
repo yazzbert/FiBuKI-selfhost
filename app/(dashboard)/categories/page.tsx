@@ -12,7 +12,7 @@ import { usePageTitle } from "@/hooks/use-page-title";
 
 const PANEL_WIDTH_KEY = "categoryDetailPanelWidth";
 const DEFAULT_PANEL_WIDTH = 480;
-const MIN_PANEL_WIDTH = 380;
+const MIN_PANEL_WIDTH = 280;
 const MAX_PANEL_WIDTH = 700;
 
 function CategoryTableFallback() {
@@ -170,7 +170,7 @@ function CategoriesContent() {
             onMouseDown={handleResizeStart}
           />
           {/* Panel content */}
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden detail-panel-container">
             <CategoryDetailPanel
               category={selectedCategory}
               onClose={handleCloseDetail}

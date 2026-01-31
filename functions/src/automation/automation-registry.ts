@@ -29,6 +29,7 @@ import { AUTOMATION_META as matchFileTransactionsMeta } from "../matching/matchF
 
 // Transaction triggers
 import { AUTOMATION_META as onTransactionUpdateMeta } from "../matching/onTransactionUpdate";
+import { AUTOMATION_META as onTransactionsImportedCompanyCheckMeta } from "../matching/onTransactionsImportedCompanyCheck";
 
 // Partner triggers
 import { AUTOMATION_META as onPartnerCreateMeta } from "../matching/onPartnerCreate";
@@ -38,6 +39,17 @@ import { AUTOMATION_META as onPartnerUpdateMeta } from "../matching/onPartnerUpd
 import { AUTOMATION_META as onCategoryCreateMeta } from "../matching/onCategoryCreate";
 import { AUTOMATION_META as onCategoryUpdateMeta } from "../matching/onCategoryUpdate";
 
+// Callable - Matching (manual triggers)
+import { AUTOMATION_META as matchPartnersMeta } from "../matching/matchPartners";
+import { AUTOMATION_META as searchExternalPartnersMeta } from "../matching/searchExternalPartners";
+
+// Callable - Agentic search
+import { AUTOMATION_META as runReceiptSearchMeta } from "../workers/runReceiptSearchForTransaction";
+import {
+  AUTOMATION_META_LOOKUP as lookupCompanyMeta,
+  AUTOMATION_META_VAT as lookupByVatIdMeta,
+} from "../ai/lookupCompany";
+
 // =============================================================================
 // REGISTRY
 // =============================================================================
@@ -46,12 +58,17 @@ import { AUTOMATION_META as onCategoryUpdateMeta } from "../matching/onCategoryU
  * All registered automations keyed by ID
  */
 export const AUTOMATION_REGISTRY: Record<string, AutomationMeta> = {
+  // =========================================================================
+  // AUTO-TRIGGERS (Firestore document events)
+  // =========================================================================
+
   // File triggers
   matchFilePartner: matchFilePartnerMeta,
   matchFileTransactions: matchFileTransactionsMeta,
 
   // Transaction triggers
   onTransactionUpdate: onTransactionUpdateMeta,
+  onTransactionsImportedCompanyCheck: onTransactionsImportedCompanyCheckMeta,
 
   // Partner triggers
   onPartnerCreate: onPartnerCreateMeta,
@@ -60,6 +77,19 @@ export const AUTOMATION_REGISTRY: Record<string, AutomationMeta> = {
   // Category triggers
   onCategoryCreate: onCategoryCreateMeta,
   onCategoryUpdate: onCategoryUpdateMeta,
+
+  // =========================================================================
+  // CALLABLES (Manual/Agent-triggered)
+  // =========================================================================
+
+  // Manual matching
+  matchPartners: matchPartnersMeta,
+  searchExternalPartners: searchExternalPartnersMeta,
+
+  // Agentic search
+  runReceiptSearchForTransaction: runReceiptSearchMeta,
+  lookupCompany: lookupCompanyMeta,
+  lookupByVatId: lookupByVatIdMeta,
 };
 
 // =============================================================================

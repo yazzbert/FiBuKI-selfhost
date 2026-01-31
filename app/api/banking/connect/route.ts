@@ -2,7 +2,8 @@ export const dynamic = "force-dynamic";
 /**
  * Unified Banking Connection API
  *
- * Creates bank connections through any configured provider
+ * Creates bank connections through any configured provider.
+ * Uses Cloud Function for Firestore operations.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -12,14 +13,25 @@ import {
   BankingProviderId,
   initializeBankingProviders,
 } from "@/lib/banking";
-import { createBankConnection } from "@/lib/operations/banking-ops";
-import { getAdminDb } from "@/lib/firebase/admin";
-import { OperationsContext } from "@/lib/operations/types";
+import { callCloudFunction, setAuthToken } from "@/lib/firebase/callable-server";
+import {
+  CreateBankingConnectionRequest,
+  CreateBankingConnectionResponse,
+} from "@/types/banking-sync";
 
 // Initialize providers on module load
 initializeBankingProviders();
 
+// Get redirect URL for provider callbacks
+function getRedirectUrl(providerId: BankingProviderId): string {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  return `${baseUrl}/api/finapi/callback`;
+}
+
 export async function POST(request: NextRequest) {
+  // Set auth token for Cloud Function calls
+  setAuthToken(request.headers.get("Authorization"));
+
   try {
     const userId = await getServerUserIdWithFallback(request);
     if (!userId) {
@@ -62,25 +74,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create connection using operations layer
-    const ctx: OperationsContext = {
-      db: getAdminDb() as any, // Firebase Admin DB
-      userId,
-    };
+    // Get institution info
+    const institution = await provider.getInstitution(institutionId);
 
-    const result = await createBankConnection(
-      ctx,
-      providerId as BankingProviderId,
+    // Create connection with provider (external API call)
+    const redirectUrl = getRedirectUrl(providerId as BankingProviderId);
+    const result = await provider.createConnection({
       institutionId,
-      {
-        sourceId,
-        maxHistoryDays,
-        language,
-      }
-    );
+      redirectUrl,
+      maxHistoryDays,
+      language,
+      reference: `conn_${userId}_${Date.now()}`,
+    });
+
+    // Store connection via Cloud Function
+    const connectionResult = await callCloudFunction<
+      CreateBankingConnectionRequest,
+      CreateBankingConnectionResponse
+    >("createBankingConnection", {
+      providerId,
+      providerConnectionId: result.connectionId,
+      institutionId,
+      institutionName: institution.name,
+      institutionLogo: institution.logoUrl || null,
+      authUrl: result.authUrl,
+      expiresAt: result.expiresAt.toISOString(),
+      providerData: result.providerData || {},
+      linkToSourceId: sourceId || null,
+    });
 
     return NextResponse.json({
-      connectionId: result.connectionId,
+      connectionId: connectionResult.connectionId,
       authUrl: result.authUrl,
       expiresAt: result.expiresAt.toISOString(),
       provider: providerId,

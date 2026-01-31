@@ -1,44 +1,9 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { initializeApp, getApps } from "firebase/app";
-import {
-  getFirestore,
-  connectFirestoreEmulator,
-  doc,
-  getDoc,
-  updateDoc,
-  collection,
-  query,
-  where,
-  getDocs,
-  deleteDoc,
-  deleteField,
-} from "firebase/firestore";
+import { getAdminDb } from "@/lib/firebase/admin";
+import { FieldValue } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
-
-// Initialize Firebase for server-side
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyDhxXMbHgaD1z9n0bkuVaSRmmiCrbNL-l4",
-  authDomain: "taxstudio-f12fb.firebaseapp.com",
-  projectId: "taxstudio-f12fb",
-  storageBucket: "taxstudio-f12fb.firebasestorage.app",
-  messagingSenderId: "534848611676",
-  appId: "1:534848611676:web:8a3d1ede57c65b7e884d99",
-};
-
-const appName = "source-disconnect";
-const app = getApps().find(a => a.name === appName) || initializeApp(firebaseConfig, appName);
-const db = getFirestore(app);
-
-// Connect to emulator in development
-if (process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_USE_EMULATORS !== "false") {
-  try {
-    connectFirestoreEmulator(db, "localhost", 8080);
-    console.log("[Source Disconnect] Connected to Firestore emulator");
-  } catch {
-    // Already connected
-  }
-}
+import { FinapiClient, FinapiEnvironment } from "@/lib/finapi/client";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -51,19 +16,23 @@ interface RouteParams {
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const userId = await getServerUserIdWithFallback(request);
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { id: sourceId } = await params;
+    const db = getAdminDb();
 
     console.log(`[Source Disconnect] Disconnecting source: ${sourceId}`);
 
     // Get the source
-    const sourceRef = doc(db, "sources", sourceId);
-    const sourceSnap = await getDoc(sourceRef);
+    const sourceDoc = await db.collection("sources").doc(sourceId).get();
 
-    if (!sourceSnap.exists()) {
+    if (!sourceDoc.exists) {
       return NextResponse.json({ error: "Source not found" }, { status: 404 });
     }
 
-    const source = sourceSnap.data();
+    const source = sourceDoc.data()!;
 
     if (source.userId !== userId) {
       return NextResponse.json({ error: "Source not found" }, { status: 404 });
@@ -76,28 +45,55 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Delete all transactions that were synced via API (no importJobId)
-    const transactionsQuery = query(
-      collection(db, "transactions"),
-      where("sourceId", "==", sourceId),
-      where("importJobId", "==", null)
-    );
+    const apiConfig = source.apiConfig;
 
-    const transactionsSnap = await getDocs(transactionsQuery);
-    let deletedTransactions = 0;
+    // Delete finAPI bank connection if applicable
+    if (apiConfig.provider === "finapi" && apiConfig.bankConnectionId && apiConfig.userAccessToken) {
+      try {
+        const clientId = process.env.FINAPI_CLIENT_ID;
+        const clientSecret = process.env.FINAPI_CLIENT_SECRET;
+        const environment = (process.env.FINAPI_ENVIRONMENT || "sandbox") as FinapiEnvironment;
 
-    for (const txDoc of transactionsSnap.docs) {
-      await deleteDoc(txDoc.ref);
-      deletedTransactions++;
+        if (clientId && clientSecret) {
+          const client = new FinapiClient({ clientId, clientSecret, environment });
+          await client.deleteBankConnection(apiConfig.bankConnectionId, apiConfig.userAccessToken);
+          console.log(`[Source Disconnect] Deleted finAPI bank connection: ${apiConfig.bankConnectionId}`);
+        }
+      } catch (err) {
+        // Log but don't fail - connection might already be deleted or expired
+        console.error("[Source Disconnect] Failed to delete finAPI connection:", err);
+      }
     }
 
-    console.log(`[Source Disconnect] Deleted ${deletedTransactions} synced transactions`);
+    // Delete all transactions for this source (both API synced and CSV imported)
+    const transactionsQuery = await db
+      .collection("transactions")
+      .where("sourceId", "==", sourceId)
+      .get();
+
+    let deletedTransactions = 0;
+    const BATCH_SIZE = 500;
+
+    // Delete in batches
+    for (let i = 0; i < transactionsQuery.docs.length; i += BATCH_SIZE) {
+      const batch = db.batch();
+      const slice = transactionsQuery.docs.slice(i, i + BATCH_SIZE);
+
+      for (const txDoc of slice) {
+        batch.delete(txDoc.ref);
+        deletedTransactions++;
+      }
+
+      await batch.commit();
+    }
+
+    console.log(`[Source Disconnect] Deleted ${deletedTransactions} transactions`);
 
     // Update source to remove API connection
-    await updateDoc(sourceRef, {
+    await db.collection("sources").doc(sourceId).update({
       type: "csv",
-      apiConfig: deleteField(),
-      updatedAt: new Date(),
+      apiConfig: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     console.log(`[Source Disconnect] Source ${sourceId} disconnected successfully`);

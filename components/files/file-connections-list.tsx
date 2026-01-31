@@ -25,6 +25,7 @@ import {
 } from "@/lib/matching/transaction-matcher";
 
 // Consistent field row component (matches transaction-files-section and file-detail-panel)
+// Uses container queries to stack vertically when panel is narrow (<300px)
 function FieldRow({
   label,
   children,
@@ -37,14 +38,14 @@ function FieldRow({
   return (
     <div
       className={cn(
-        "flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4",
+        "flex items-baseline gap-4 field-row-responsive",
         className
       )}
     >
-      <span className="text-sm text-muted-foreground shrink-0 sm:w-28">
+      <span className="text-sm text-muted-foreground shrink-0 w-28 field-row-label">
         {label}
       </span>
-      <span className="text-sm">{children}</span>
+      <span className="text-sm field-row-value">{children}</span>
     </div>
   );
 }

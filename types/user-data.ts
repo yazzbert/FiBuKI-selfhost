@@ -1,52 +1,55 @@
 import { Timestamp } from "firebase/firestore";
+import { FinanzOnlineConfig } from "./finanzonline";
 
 /**
  * User data for classification and extraction prompts.
  * Used to ensure the user doesn't get accidentally marked as the partner for an invoice.
  * Collection: /users/{userId}/settings/userData
  */
+
 /** ISO 3166-1 alpha-2 country codes supported for tax reporting */
 export type TaxCountryCode = "AT" | "DE" | "CH";
 
-export interface UserData {
-  /** User's full name (e.g., "Felix Häusler") */
+/**
+ * A single identity entity (person or company)
+ * Each entity can have its own name, VAT ID, IBANs, and aliases
+ */
+export interface IdentityEntity {
+  /** Unique identifier */
+  id: string;
+
+  /** Entity type - person (freelancer) or company */
+  type: "person" | "company";
+
+  /** Display name */
   name: string;
 
-  /** User's company name (e.g., "Infinity Vertigo GmbH") */
-  companyName: string;
+  /** Alternative names/spellings */
+  aliases: string[];
 
+  /** VAT ID for this entity */
+  vatId?: string;
+
+  /** Bank accounts for this entity */
+  ibans: string[];
+
+  /** Linked partner ID (created automatically for matching) */
+  partnerId?: string;
+
+  /** Order for display (lower = higher in list) */
+  order: number;
+
+  /** When entity was created */
+  createdAt: Timestamp;
+}
+
+export interface UserData {
   /**
    * User's tax residence country (ISO 3166-1 alpha-2).
    * Determines which tax forms and reporting formats are available.
    * Default: "AT" (Austria)
    */
   country?: TaxCountryCode;
-
-  /**
-   * Aliases to match against (e.g., "Haeusler" for umlauts).
-   * These help identify if the user is the invoice issuer vs recipient.
-   */
-  aliases: string[];
-
-  /**
-   * User's own VAT IDs (e.g., ["ATU12345678"]).
-   * Used to identify outgoing invoices and prevent matching user's own VAT as partner.
-   */
-  vatIds: string[];
-
-  /**
-   * User's own IBANs (manually added).
-   * Note: IBANs from connected bank accounts are inferred automatically.
-   */
-  ibans: string[];
-
-  /**
-   * User's own email addresses (e.g., ["felix@gmail.com", "info@mycompany.de"]).
-   * Manually added. Emails from connected integrations are inferred automatically.
-   * Used to prevent matching user's own email as partner during file matching.
-   * Full email matching prevents false positives with common domains like gmail.com.
-   */
-  ownEmails?: string[];
 
   /**
    * User's tax number (Steuernummer/FASTNR).
@@ -56,10 +59,78 @@ export interface UserData {
   taxNumber?: string;
 
   /**
+   * User's own email addresses (e.g., ["felix@gmail.com", "info@mycompany.de"]).
+   * Manually added. Emails from connected integrations are inferred automatically.
+   * Used to prevent matching user's own email as partner during file matching.
+   */
+  ownEmails?: string[];
+
+  /**
+   * Primary personal identity (freelancer).
+   * Always exists, type: "person".
+   */
+  personalEntity?: IdentityEntity;
+
+  /**
+   * Additional company entities.
+   * Array of companies the user operates as.
+   */
+  companies?: IdentityEntity[];
+
+  /**
+   * FinanzOnline WebService configuration.
+   * For direct UVA submission to Austrian tax authority.
+   */
+  finanzonline?: FinanzOnlineConfig;
+
+  // ============================================================================
+  // DEPRECATED FIELDS - kept for backward compatibility during migration
+  // ============================================================================
+
+  /**
+   * @deprecated Use personalEntity.name instead
+   * User's full name (e.g., "Felix Häusler")
+   */
+  name?: string;
+
+  /**
+   * @deprecated Use companies array instead
+   * User's company name (e.g., "Infinity Vertigo GmbH")
+   */
+  companyName?: string;
+
+  /**
+   * @deprecated Aliases are now per-entity
+   * Aliases to match against (e.g., "Haeusler" for umlauts).
+   */
+  aliases?: string[];
+
+  /**
+   * @deprecated VAT IDs are now per-entity
+   * User's own VAT IDs (e.g., ["ATU12345678"]).
+   */
+  vatIds?: string[];
+
+  /**
+   * @deprecated IBANs are now per-entity
+   * User's own IBANs (manually added).
+   */
+  ibans?: string[];
+
+  /**
+   * @deprecated Partners are now linked via entity.partnerId
    * Partner IDs that were marked as "this is my company".
-   * Used to show visual indicators and allow easy undo.
    */
   markedAsMe?: string[];
+
+  /**
+   * @deprecated Use entity.partnerId instead
+   * Partner IDs that are auto-synced from identity settings.
+   */
+  identityPartnerIds?: {
+    name?: string;
+    companyName?: string;
+  };
 
   /** When the user data was last updated */
   updatedAt: Timestamp;
@@ -69,18 +140,44 @@ export interface UserData {
 }
 
 /**
+ * Form data for creating/updating an identity entity
+ */
+export interface IdentityEntityFormData {
+  id?: string;
+  type: "person" | "company";
+  name: string;
+  aliases: string[];
+  vatId?: string;
+  ibans: string[];
+  partnerId?: string;
+  order?: number;
+}
+
+/**
  * Form data for creating/updating user data
  */
 export interface UserDataFormData {
-  name: string;
-  companyName: string;
   country?: TaxCountryCode;
-  aliases: string[];
-  vatIds: string[];
-  ibans: string[];
-  ownEmails?: string[];
   taxNumber?: string;
+  ownEmails?: string[];
+
+  /** Personal entity data */
+  personalEntity?: IdentityEntityFormData;
+
+  /** Company entities data */
+  companies?: IdentityEntityFormData[];
+
+  // Deprecated fields for backward compatibility
+  name?: string;
+  companyName?: string;
+  aliases?: string[];
+  vatIds?: string[];
+  ibans?: string[];
   markedAsMe?: string[];
+  identityPartnerIds?: {
+    name?: string;
+    companyName?: string;
+  };
 }
 
 /**

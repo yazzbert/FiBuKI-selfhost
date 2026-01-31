@@ -3,6 +3,7 @@
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSources } from "@/hooks/use-sources";
+import { useAuth } from "@/components/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +16,6 @@ import {
   Trash2,
   Loader2,
   Link2,
-  Unlink,
   RefreshCw,
   AlertTriangle,
   Globe,
@@ -23,7 +23,6 @@ import {
 import { useImports } from "@/hooks/use-imports";
 import { ImportHistoryCard } from "@/components/sources/import-history-card";
 import { DraftImportsSection } from "@/components/sources/draft-imports-section";
-import { SyncStatusCard } from "@/components/sources/sync-status-card";
 import { EditSourceDialog } from "@/components/sources/edit-source-dialog";
 import { format } from "date-fns";
 import { Pencil } from "lucide-react";
@@ -38,6 +37,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { GoCardlessConnectorConfig, ApiConnectorConfig } from "@/types/source";
 import { TrueLayerApiConfig } from "@/types/truelayer";
 import { formatIban } from "@/lib/import/deduplication";
@@ -50,10 +56,11 @@ interface SourceDetailPageProps {
 export default function SourceDetailPage({ params }: SourceDetailPageProps) {
   const { id } = use(params);
   const router = useRouter();
+  const { user } = useAuth();
   const { sources, loading, deleteSource, updateSource } = useSources();
   const { imports, drafts, loading: importsLoading, deleteImport, deleteDraft } = useImports(id);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
 
   const source = sources.find((s) => s.id === id);
@@ -99,56 +106,76 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
     router.push(`/sources/connect?sourceId=${source.id}`);
   };
 
-  const handleDisconnect = async () => {
-    setIsDisconnecting(true);
-    try {
-      // Call API to disconnect and optionally delete transactions
-      const response = await fetch(`/api/sources/${source.id}/disconnect`, {
-        method: "POST",
-      });
-      const data = await response.json();
-      if (response.ok) {
-        console.log("Disconnected:", data);
-        // The source will update via real-time listener
-      } else {
-        console.error("Disconnect failed:", data.error);
-        alert(`Failed to disconnect: ${data.error}`);
-      }
-    } catch (error) {
-      console.error("Failed to disconnect:", error);
-      alert("Failed to disconnect");
-    } finally {
-      setIsDisconnecting(false);
-    }
-  };
-
   const handleSaveEdit = async (data: Partial<typeof source>) => {
     await updateSource(source.id, data);
   };
 
-  // Check for any API connection (GoCardless or TrueLayer)
+  const handleSync = async (fromYear?: number) => {
+    setIsSyncing(true);
+    try {
+      const currentSyncYear = fromYear || finapiConfig?.syncFromYear || new Date().getFullYear();
+
+      // Call Cloud Function directly (same pattern as CSV imports)
+      const { callFunction } = await import("@/lib/firebase/callable");
+      const result = await callFunction<
+        { sourceId: string; fromYear?: number },
+        { success: boolean; imported: number; skipped: number; reassigned: number; total: number }
+      >("syncBankTransactions", {
+        sourceId: source.id,
+        fromYear: currentSyncYear,
+      });
+
+      console.log("Sync complete:", result);
+    } catch (error) {
+      console.error("Failed to sync:", error);
+      const message = error instanceof Error ? error.message : "Failed to sync";
+      alert(`Sync failed: ${message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSyncClick = () => handleSync();
+
+  const handleYearChange = async (year: string) => {
+    const newYear = parseInt(year, 10);
+    // Update source with new syncFromYear and trigger re-sync
+    await updateSource(source.id, {
+      apiConfig: {
+        ...source.apiConfig,
+        syncFromYear: newYear,
+      },
+    } as any);
+    // Re-sync with new year (will delete old transactions and fetch from new date)
+    await handleSync(newYear);
+  };
+
+  // Check for any API connection (GoCardless, TrueLayer, or finAPI)
   const isApiConnected = source.type === "api" &&
-    (source.apiConfig?.provider === "gocardless" || source.apiConfig?.provider === "truelayer");
+    (source.apiConfig?.provider === "gocardless" ||
+     source.apiConfig?.provider === "truelayer" ||
+     source.apiConfig?.provider === "finapi");
   const isGoCardless = source.apiConfig?.provider === "gocardless";
   const isTrueLayer = source.apiConfig?.provider === "truelayer";
+  const isFinapi = source.apiConfig?.provider === "finapi";
 
   const goCardlessConfig = isGoCardless ? source.apiConfig as unknown as GoCardlessConnectorConfig : undefined;
   const trueLayerConfig = isTrueLayer ? source.apiConfig as unknown as TrueLayerApiConfig : undefined;
+  const finapiConfig = isFinapi ? source.apiConfig as any : undefined;
 
-  // Check if re-auth is needed (only GoCardless has expiry)
-  const needsReauth = isGoCardless && goCardlessConfig?.agreementExpiresAt
-    ? goCardlessConfig.agreementExpiresAt.toDate() < new Date()
-    : false;
+  // Check if re-auth is needed (GoCardless and finAPI have expiry)
+  const expiresAt = goCardlessConfig?.agreementExpiresAt?.toDate() || finapiConfig?.expiresAt?.toDate();
+  const needsReauth = expiresAt ? expiresAt < new Date() : false;
 
-  // Days until expiry (only GoCardless)
-  const daysUntilExpiry = isGoCardless && goCardlessConfig?.agreementExpiresAt
-    ? Math.max(0, Math.floor((goCardlessConfig.agreementExpiresAt.toDate().getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+  // Days until expiry
+  const daysUntilExpiry = expiresAt
+    ? Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     : null;
 
   // Get provider name for display
-  const providerName = goCardlessConfig?.institutionName || trueLayerConfig?.providerName || "Bank";
-  const providerLogo = goCardlessConfig?.institutionLogo || trueLayerConfig?.providerLogo;
-  const lastSyncAt = goCardlessConfig?.lastSyncAt || trueLayerConfig?.lastSyncAt;
+  const providerName = goCardlessConfig?.institutionName || trueLayerConfig?.providerName || finapiConfig?.institutionName || "Bank";
+  const providerLogo = goCardlessConfig?.institutionLogo || trueLayerConfig?.providerLogo || finapiConfig?.institutionLogo;
+  const lastSyncAt = goCardlessConfig?.lastSyncAt || trueLayerConfig?.lastSyncAt || finapiConfig?.lastSyncAt;
 
   return (
     <div className="px-6 py-6">
@@ -163,34 +190,49 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-primary/10">
-              {source.accountKind === "credit_card" ? (
-                <CreditCard className="h-6 w-6 text-primary" />
-              ) : (
-                <Building2 className="h-6 w-6 text-primary" />
-              )}
-            </div>
+            {isApiConnected && providerLogo ? (
+              <div className="relative">
+                <img
+                  src={providerLogo}
+                  alt=""
+                  className="h-10 w-10 rounded-lg object-contain border border-border"
+                />
+                {/* Account type overlay */}
+                <div className="absolute -bottom-1 -right-1 p-1 rounded-full bg-background border border-border shadow-sm">
+                  {source.accountKind === "credit_card" ? (
+                    <CreditCard className="h-3 w-3" />
+                  ) : (
+                    <Building2 className="h-3 w-3" />
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="p-2.5 rounded-lg bg-primary/10 border border-border">
+                {source.accountKind === "credit_card" ? (
+                  <CreditCard className="h-6 w-6 text-primary" />
+                ) : (
+                  <Building2 className="h-6 w-6 text-primary" />
+                )}
+              </div>
+            )}
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-semibold">{source.name}</h1>
-                {isApiConnected ? (
-                  <Badge
-                    variant={needsReauth ? "destructive" : "outline"}
-                    className={!needsReauth ? (
-                      daysUntilExpiry !== null && daysUntilExpiry <= 7
-                        ? "border-yellow-500 text-yellow-600"
-                        : "border-green-500 text-green-600"
-                    ) : ""}
-                  >
-                    {needsReauth ? "Reconnect Required" :
-                     daysUntilExpiry !== null && daysUntilExpiry <= 7 ? "Expires Soon" : "Connected"}
-                  </Badge>
-                ) : (
+                {/* Only show badge for warnings, not for normal connected state */}
+                {isApiConnected && needsReauth && (
+                  <Badge variant="destructive">Reconnect Required</Badge>
+                )}
+                {isApiConnected && !needsReauth && daysUntilExpiry !== null && daysUntilExpiry <= 7 && (
+                  <Badge variant="outline" className="border-yellow-500 text-yellow-600">Expires Soon</Badge>
+                )}
+                {!isApiConnected && (
                   <Badge variant="secondary">CSV Import</Badge>
                 )}
               </div>
               <p className="text-sm text-muted-foreground font-mono">
-                {formatIban(source.iban)}
+                {source.accountKind === "credit_card"
+                  ? `${source.cardBrand?.toUpperCase() || "Card"} ••••${source.cardLast4 || ""}`
+                  : formatIban(source.iban)}
               </p>
             </div>
           </div>
@@ -234,43 +276,6 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
 
           {isApiConnected ? (
             <>
-              {/* Disconnect button */}
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-destructive hover:text-destructive"
-                    disabled={isDisconnecting}
-                  >
-                    {isDisconnecting ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <Unlink className="h-4 w-4 mr-2" />
-                    )}
-                    Disconnect
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Disconnect Bank?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This will remove the bank connection and delete all synced transactions
-                      for &quot;{source.name}&quot;. CSV imports will not be affected.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={handleDisconnect}
-                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    >
-                      Disconnect
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-
               {/* Renew/Reconnect button (only for GoCardless) */}
               {isGoCardless && (
                 <Button
@@ -299,10 +304,12 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
             </Button>
           )}
 
-          <Button size="sm" onClick={() => router.push(`/sources/${source.id}/import`)}>
-            <Upload className="h-4 w-4 mr-2" />
-            Import CSV
-          </Button>
+          {!isApiConnected && (
+            <Button size="sm" onClick={() => router.push(`/sources/${source.id}/import`)}>
+              <Upload className="h-4 w-4 mr-2" />
+              Import CSV
+            </Button>
+          )}
         </div>
       </div>
 
@@ -437,12 +444,15 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
             isLoading={importsLoading}
           />
 
-          {/* Import History */}
+          {/* Import/Sync History */}
           <ImportHistoryCard
             imports={imports}
             loading={importsLoading}
             sourceId={source.id}
             onDeleteImport={deleteImport}
+            isApiConnected={isApiConnected}
+            onSync={isApiConnected && !needsReauth ? handleSyncClick : undefined}
+            isSyncing={isSyncing}
           />
 
           {/* Saved Mappings */}
@@ -474,8 +484,6 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
         {/* Right Column - Only show for API connected accounts */}
         {isApiConnected && (
           <div className="space-y-6">
-            <SyncStatusCard sourceId={source.id} onReauth={handleConnect} />
-
             {/* Connection Details */}
             <Card>
               <CardHeader>
@@ -503,22 +511,14 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Provider</span>
                   <span className="font-medium capitalize">
-                    {isTrueLayer ? "TrueLayer" : isGoCardless ? "GoCardless" : "API"}
+                    {isTrueLayer ? "TrueLayer" : isGoCardless ? "GoCardless" : isFinapi ? "finAPI" : "API"}
                   </span>
                 </div>
-                {isGoCardless && goCardlessConfig?.agreementExpiresAt && (
+                {expiresAt && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Valid Until</span>
-                    <span className="font-medium">
-                      {format(goCardlessConfig.agreementExpiresAt.toDate(), "MMM d, yyyy")}
-                    </span>
-                  </div>
-                )}
-                {isTrueLayer && trueLayerConfig?.connectedAt && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Connected</span>
-                    <span className="font-medium">
-                      {format(trueLayerConfig.connectedAt.toDate(), "MMM d, yyyy")}
+                    <span className={`font-medium ${needsReauth ? "text-destructive" : daysUntilExpiry !== null && daysUntilExpiry <= 7 ? "text-yellow-600" : ""}`}>
+                      {format(expiresAt, "MMM d, yyyy")}
                     </span>
                   </div>
                 )}
@@ -530,6 +530,26 @@ export default function SourceDetailPage({ params }: SourceDetailPageProps) {
                     </span>
                   </div>
                 )}
+                {/* Year selector for sync range */}
+                <div className="flex justify-between items-center text-sm pt-2 border-t">
+                  <span className="text-muted-foreground">Sync From</span>
+                  <Select
+                    value={String(finapiConfig?.syncFromYear || new Date().getFullYear())}
+                    onValueChange={handleYearChange}
+                    disabled={isSyncing}
+                  >
+                    <SelectTrigger className="w-24 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i).map((year) => (
+                        <SelectItem key={year} value={String(year)}>
+                          {year}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </CardContent>
             </Card>
           </div>

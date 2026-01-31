@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 
 const PANEL_WIDTH_KEY = "transactionDetailPanelWidth";
 const DEFAULT_PANEL_WIDTH = 480;
-const MIN_PANEL_WIDTH = 380;
+const MIN_PANEL_WIDTH = 280;
 const MAX_PANEL_WIDTH = 700;
 
 function TransactionTableFallback() {
@@ -430,7 +430,7 @@ function TransactionsContent() {
             onMouseDown={handleResizeStart}
           />
           {/* Panel content */}
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden detail-panel-container">
             <TransactionDetailPanel
               transaction={selectedTransaction}
               source={selectedSource}

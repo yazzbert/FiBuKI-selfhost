@@ -1,10 +1,12 @@
 /**
  * Callable Cloud Function for generating Gmail search queries
  * Uses Gemini Flash Lite for intelligent suggestions
+ * Caches results on the transaction document for consistency between UI and Agent
  */
 
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { createHash } from "crypto";
 import { generateTypedQueriesWithGemini } from "./generateQueriesWithGemini";
 import {
   QueryGenerationPartner,
@@ -13,7 +15,12 @@ import {
 
 const db = getFirestore();
 
+/** Cache TTL in milliseconds (30 days) */
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 interface GenerateSearchQueriesRequest {
+  /** Transaction ID for cache read/write (optional for backward compatibility) */
+  transactionId?: string;
   transaction: {
     name: string;
     partner?: string | null;
@@ -24,16 +31,76 @@ interface GenerateSearchQueriesRequest {
     amount?: number;
   };
   maxQueries?: number;
+  /** Force regeneration even if cached */
+  forceRefresh?: boolean;
 }
 
 interface GenerateSearchQueriesResponse {
   queries: string[];
   /** Typed suggestions with category info for UI pills */
   suggestions: TypedSuggestion[];
+  /** Whether result came from cache */
+  fromCache?: boolean;
+}
+
+/**
+ * Generate a hash of partner data for cache invalidation.
+ * When partner's emailDomains, aliases, or fileSourcePatterns change,
+ * the hash will differ and trigger regeneration.
+ */
+function hashPartnerData(partner: QueryGenerationPartner | undefined): string {
+  if (!partner) return "";
+  const data = {
+    name: partner.name || "",
+    emailDomains: (partner.emailDomains || []).slice().sort(),
+    aliases: (partner.aliases || []).slice().sort(),
+    fileSourcePatterns: (partner.fileSourcePatterns || [])
+      .map((p) => p.pattern)
+      .sort(),
+  };
+  return createHash("md5").update(JSON.stringify(data)).digest("hex");
+}
+
+/**
+ * Check if cached suggestions are still valid
+ */
+function isCacheValid(
+  cached: {
+    suggestions: TypedSuggestion[];
+    generatedAt: Timestamp;
+    partnerId?: string | null;
+    partnerDataHash?: string;
+  },
+  currentPartnerId: string | null | undefined,
+  currentPartnerHash: string
+): boolean {
+  // Check if partner changed
+  if ((cached.partnerId || null) !== (currentPartnerId || null)) {
+    return false;
+  }
+
+  // Check if partner data changed (emailDomains, aliases, etc.)
+  if ((cached.partnerDataHash || "") !== currentPartnerHash) {
+    return false;
+  }
+
+  // Check TTL
+  const generatedAt = cached.generatedAt?.toMillis?.() || 0;
+  if (Date.now() - generatedAt > CACHE_TTL_MS) {
+    return false;
+  }
+
+  // Must have at least one suggestion
+  if (!cached.suggestions || cached.suggestions.length === 0) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
  * Generate Gmail search queries for a transaction using Gemini
+ * Caches results on the transaction document
  */
 export const generateSearchQueriesCallable = onCall<
   GenerateSearchQueriesRequest,
@@ -48,7 +115,7 @@ export const generateSearchQueriesCallable = onCall<
       throw new HttpsError("unauthenticated", "Must be authenticated");
     }
 
-    const { transaction, maxQueries = 8 } = request.data;
+    const { transactionId, transaction, maxQueries = 8, forceRefresh = false } = request.data;
 
     if (!transaction || !transaction.name) {
       throw new HttpsError("invalid-argument", "Transaction with name is required");
@@ -74,6 +141,40 @@ export const generateSearchQueriesCallable = onCall<
       }
     }
 
+    // Compute partner data hash for cache validation
+    const partnerDataHash = hashPartnerData(partnerData);
+
+    // Try to use cached suggestions if transactionId provided
+    if (transactionId && !forceRefresh) {
+      try {
+        const txDoc = await db.collection("transactions").doc(transactionId).get();
+        if (txDoc.exists) {
+          const txData = txDoc.data();
+          const cached = txData?.searchSuggestions;
+
+          // Check if user owns this transaction
+          if (txData?.userId !== request.auth.uid) {
+            throw new HttpsError("permission-denied", "Not authorized to access this transaction");
+          }
+
+          if (cached && isCacheValid(cached, transaction.partnerId, partnerDataHash)) {
+            // Cache hit - return cached suggestions
+            return {
+              queries: cached.suggestions.map((s: TypedSuggestion) => s.query),
+              suggestions: cached.suggestions,
+              fromCache: true,
+            };
+          }
+        }
+      } catch (error) {
+        // If cache read fails, continue to generate new suggestions
+        if ((error as { code?: string })?.code === "permission-denied") {
+          throw error;
+        }
+        console.warn("[generateSearchQueriesCallable] Cache read failed:", error);
+      }
+    }
+
     // Generate typed suggestions using Gemini (sorted by search effectiveness)
     const suggestions = await generateTypedQueriesWithGemini(
       {
@@ -84,8 +185,27 @@ export const generateSearchQueriesCallable = onCall<
         amount: transaction.amount,
       },
       partnerData,
-      maxQueries
+      maxQueries,
+      request.auth.uid
     );
+
+    // Save to cache if transactionId provided
+    if (transactionId && suggestions.length > 0) {
+      try {
+        await db.collection("transactions").doc(transactionId).update({
+          searchSuggestions: {
+            suggestions,
+            generatedAt: FieldValue.serverTimestamp(),
+            partnerId: transaction.partnerId || null,
+            partnerDataHash,
+          },
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } catch (error) {
+        // Cache write failure is not fatal - log and continue
+        console.warn("[generateSearchQueriesCallable] Cache write failed:", error);
+      }
+    }
 
     // Also return plain queries for backward compatibility
     const queries = suggestions.map((s) => s.query);
@@ -93,6 +213,7 @@ export const generateSearchQueriesCallable = onCall<
     return {
       queries,
       suggestions,
+      fromCache: false,
     };
   }
 );

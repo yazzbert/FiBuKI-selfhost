@@ -33,12 +33,51 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.matchPartners = void 0;
+exports.matchPartners = exports.AUTOMATION_META = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-admin/firestore");
 const partner_matcher_1 = require("../utils/partner-matcher");
 const matchCategories_1 = require("./matchCategories");
 const createLocalPartnerFromGlobal_1 = require("./createLocalPartnerFromGlobal");
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+exports.AUTOMATION_META = {
+    id: "matchPartners",
+    name: "Match Partners (Manual)",
+    description: "Manually triggered partner matching for transactions. Matches by IBAN, name, and aliases; queues agentic search for uncertain matches.",
+    trigger: {
+        type: "callable",
+        regions: ["europe-west1"],
+    },
+    effects: [
+        {
+            entity: "transaction",
+            fields: [
+                "partnerId",
+                "partnerType",
+                "partnerMatchedBy",
+                "partnerMatchConfidence",
+                "partnerSuggestions",
+            ],
+            action: "update",
+        },
+        {
+            entity: "workerRequest",
+            fields: ["workerType", "initialPrompt", "triggerContext"],
+            action: "create",
+        },
+    ],
+    config: {
+        autoMatchThreshold: 89,
+        maxSuggestions: 3,
+    },
+    icon: "Search",
+    category: "matching",
+};
+// =============================================================================
+// IMPLEMENTATION
+// =============================================================================
 const db = (0, firestore_1.getFirestore)();
 /**
  * Queue an agentic partner search worker when rule-based matching finds suggestions
@@ -191,6 +230,10 @@ exports.matchPartners = (0, https_1.onCall)({
         const existingPartnerId = txData.partnerId;
         if (existingPartnerId) {
             // Avoid overriding any existing assignment (manual/suggestion/auto/legacy).
+            continue;
+        }
+        // Skip transactions with no-receipt categories (already complete, don't need partner)
+        if (txData.noReceiptCategoryId) {
             continue;
         }
         const transaction = {

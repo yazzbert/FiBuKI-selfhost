@@ -137,6 +137,7 @@ import {
   SectionDivider,
   FileListItem,
 } from "@/components/ui/detail-panel-primitives";
+import { SettingsPageHeader } from "@/components/ui/settings-page-header";
 
 // Navigation sections - reorganized for clarity
 const sections = [
@@ -624,6 +625,28 @@ export default function DesignSystemPage() {
 
             {/* ===== CARDS & PANELS ===== */}
             <SectionHeader id="cards" title="Cards & Panels" />
+
+            <ComponentGroup title="Settings Page Header">
+              <p className="text-sm text-muted-foreground mb-4">
+                Standard header for all settings pages. Use consistently across /settings/* routes.
+              </p>
+              <div className="space-y-6 border rounded-lg p-4 bg-background">
+                <SettingsPageHeader
+                  title="Sign-in & Security"
+                  description="Manage how you sign in and protect your account"
+                />
+                <SettingsPageHeader
+                  title="AI Usage"
+                  description="Track your AI feature usage and estimated costs"
+                >
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm">Export</Button>
+                    <Button size="sm">Refresh</Button>
+                  </div>
+                </SettingsPageHeader>
+              </div>
+            </ComponentGroup>
+
             <ComponentGroup title="Card Variants">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Card>

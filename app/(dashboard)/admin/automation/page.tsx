@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import {
   ReactFlow,
   Background,
@@ -67,6 +67,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { callFunction } from "@/lib/firebase/callable";
+import { cn } from "@/lib/utils";
 import useSWR from "swr";
 
 // =============================================================================
@@ -201,6 +202,7 @@ const entityConfig: Record<string, EntityConfig> = {
   partners: { icon: Users, color: "#f59e0b", label: "Partners" },
   categories: { icon: Tag, color: "#8b5cf6", label: "Categories" },
   noReceiptCategories: { icon: Tag, color: "#6b7280", label: "No-Receipt Categories" },
+  callable: { icon: Zap, color: "#8b5cf6", label: "Manual / Agent" },
 };
 
 // =============================================================================
@@ -299,33 +301,49 @@ function isFirestoreTrigger(trigger: AutomationTrigger): trigger is FirestoreTri
 // GRAPH VIEW
 // =============================================================================
 
+type TriggerFilter = "all" | "files" | "transactions" | "partners" | "noReceiptCategories" | "callable";
+
+const triggerFilterConfig: Record<TriggerFilter, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
+  all: { label: "All", icon: Layers },
+  files: { label: "Files", icon: Files },
+  transactions: { label: "Transactions", icon: Receipt },
+  partners: { label: "Partners", icon: Users },
+  noReceiptCategories: { label: "Categories", icon: Tag },
+  callable: { label: "Callable", icon: Zap },
+};
+
 function AutomationGraphView({
   automations,
 }: {
   automations: AutomationData[];
 }) {
-  // Collect all unique entities from triggers and effects
-  const entities = useMemo(() => {
-    const entitySet = new Set<string>();
+  const [triggerFilter, setTriggerFilter] = useState<TriggerFilter>("all");
 
-    automations.forEach((a) => {
-      // Add trigger collection as entity
+  // Filter automations by trigger source
+  const filteredAutomations = useMemo(() => {
+    if (triggerFilter === "all") return automations;
+    if (triggerFilter === "callable") {
+      return automations.filter((a) => a.trigger.type === "callable");
+    }
+    return automations.filter((a) => {
       if (isFirestoreTrigger(a.trigger)) {
-        entitySet.add(a.trigger.collection);
+        return a.trigger.collection === triggerFilter;
       }
-      // Add effect entities
-      a.effects.forEach((e) => {
-        // Map entity names to collection names
-        const collectionName = e.entity === "transaction" ? "transactions"
-          : e.entity === "file" ? "files"
-          : e.entity === "partner" ? "partners"
-          : e.entity === "category" ? "categories"
-          : e.entity;
-        entitySet.add(collectionName);
-      });
+      return false;
     });
+  }, [automations, triggerFilter]);
 
-    return Array.from(entitySet);
+  // Get available trigger sources for tabs
+  const availableTriggers = useMemo(() => {
+    const triggers = new Set<TriggerFilter>(["all"]);
+    automations.forEach((a) => {
+      if (a.trigger.type === "callable") {
+        triggers.add("callable");
+      } else if (isFirestoreTrigger(a.trigger)) {
+        triggers.add(a.trigger.collection as TriggerFilter);
+      }
+    });
+    return Array.from(triggers);
   }, [automations]);
 
   // Build nodes: entities on left/right, automations in middle
@@ -333,17 +351,30 @@ function AutomationGraphView({
     const nodes: Node[] = [];
     const edges: Edge[] = [];
 
+    // Layout constants - more spacing
+    const ENTITY_SPACING_Y = 180;
+    const AUTOMATION_SPACING_Y = 110;
+    const GROUP_GAP = 50;
+    const LEFT_X = 0;
+    const MIDDLE_X = 320;
+    const RIGHT_X = 680;
+
     // Position entities as trigger sources (left column)
     const triggerEntities = new Set<string>();
-    automations.forEach((a) => {
+    filteredAutomations.forEach((a) => {
       if (isFirestoreTrigger(a.trigger)) {
         triggerEntities.add(a.trigger.collection);
       }
     });
+    // Add "callable" as pseudo-entity if there are callable automations
+    const hasCallables = filteredAutomations.some((a) => a.trigger.type === "callable");
+    if (hasCallables) {
+      triggerEntities.add("callable");
+    }
 
     // Position entities as effect targets (right column)
     const effectEntities = new Set<string>();
-    automations.forEach((a) => {
+    filteredAutomations.forEach((a) => {
       a.effects.forEach((e) => {
         const collectionName = e.entity === "transaction" ? "transactions"
           : e.entity === "file" ? "files"
@@ -360,7 +391,7 @@ function AutomationGraphView({
       nodes.push({
         id: `entity-trigger-${entityId}`,
         type: "entity",
-        position: { x: 0, y: index * 150 },
+        position: { x: LEFT_X, y: index * ENTITY_SPACING_Y },
         data: { entityId, label: entityId } as unknown as Record<string, unknown>,
       });
     });
@@ -368,8 +399,8 @@ function AutomationGraphView({
     // Create automation nodes (middle)
     // Group by trigger collection for better layout
     const automationsByTrigger = new Map<string, AutomationData[]>();
-    automations.forEach((a) => {
-      const key = isFirestoreTrigger(a.trigger) ? a.trigger.collection : "other";
+    filteredAutomations.forEach((a) => {
+      const key = isFirestoreTrigger(a.trigger) ? a.trigger.collection : "callable";
       if (!automationsByTrigger.has(key)) automationsByTrigger.set(key, []);
       automationsByTrigger.get(key)!.push(a);
     });
@@ -380,11 +411,11 @@ function AutomationGraphView({
         nodes.push({
           id: automation.id,
           type: "automation",
-          position: { x: 280, y: yOffset + index * 90 },
+          position: { x: MIDDLE_X, y: yOffset + index * AUTOMATION_SPACING_Y },
           data: automation as unknown as Record<string, unknown>,
         });
       });
-      yOffset += autos.length * 90 + 30;
+      yOffset += autos.length * AUTOMATION_SPACING_Y + GROUP_GAP;
     });
 
     // Create entity nodes (right side - effects)
@@ -393,14 +424,14 @@ function AutomationGraphView({
       nodes.push({
         id: `entity-effect-${entityId}`,
         type: "entity",
-        position: { x: 560, y: index * 150 },
+        position: { x: RIGHT_X, y: index * ENTITY_SPACING_Y },
         data: { entityId, label: entityId } as unknown as Record<string, unknown>,
       });
     });
 
     // Create edges: trigger entity -> automation
     let edgeIndex = 0;
-    automations.forEach((a) => {
+    filteredAutomations.forEach((a) => {
       if (isFirestoreTrigger(a.trigger)) {
         edges.push({
           id: `trigger-${edgeIndex++}`,
@@ -412,11 +443,22 @@ function AutomationGraphView({
           labelStyle: { fontSize: 10, fill: "#64748b" },
           labelBgStyle: { fill: "white" },
         });
+      } else if (a.trigger.type === "callable") {
+        edges.push({
+          id: `trigger-${edgeIndex++}`,
+          source: "entity-trigger-callable",
+          target: a.id,
+          animated: true,
+          style: { stroke: "#8b5cf6" },
+          label: "call",
+          labelStyle: { fontSize: 10, fill: "#7c3aed" },
+          labelBgStyle: { fill: "white" },
+        });
       }
     });
 
     // Create edges: automation -> effect entity
-    automations.forEach((a) => {
+    filteredAutomations.forEach((a) => {
       const seenEffects = new Set<string>();
       a.effects.forEach((e) => {
         const collectionName = e.entity === "transaction" ? "transactions"
@@ -442,41 +484,88 @@ function AutomationGraphView({
     });
 
     // Create edges: automation chains (automation -> automation)
-    automations.forEach((a) => {
+    filteredAutomations.forEach((a) => {
       if (a.chains) {
         a.chains.forEach((chainId) => {
-          edges.push({
-            id: `chain-${edgeIndex++}`,
-            source: a.id,
-            target: chainId,
-            animated: true,
-            style: { stroke: "#8b5cf6" },
-            label: "chains",
-            labelStyle: { fontSize: 10, fill: "#7c3aed" },
-            labelBgStyle: { fill: "white" },
-          });
+          // Only add chain edge if target is in filtered list
+          if (filteredAutomations.some((fa) => fa.id === chainId)) {
+            edges.push({
+              id: `chain-${edgeIndex++}`,
+              source: a.id,
+              target: chainId,
+              animated: true,
+              style: { stroke: "#8b5cf6" },
+              label: "chains",
+              labelStyle: { fontSize: 10, fill: "#7c3aed" },
+              labelBgStyle: { fill: "white" },
+            });
+          }
         });
       }
     });
 
     return { initialNodes: nodes, initialEdges: edges };
-  }, [automations, entities]);
+  }, [filteredAutomations]);
 
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Update nodes and edges when filter changes
+  useEffect(() => {
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+  }, [initialNodes, initialEdges, setNodes, setEdges]);
 
   return (
-    <Card className="h-[700px]">
+    <Card className="h-[750px]">
       <CardHeader className="pb-2">
-        <CardTitle className="text-lg flex items-center gap-2">
-          <Layers className="h-5 w-5" />
-          Automation Flow
-        </CardTitle>
-        <CardDescription>
-          Entities trigger automations which affect other entities. Drag to rearrange.
-        </CardDescription>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Layers className="h-5 w-5" />
+              Automation Flow
+            </CardTitle>
+            <CardDescription>
+              Filter by trigger source. Drag nodes to rearrange.
+            </CardDescription>
+          </div>
+          <div className="flex gap-1 flex-wrap">
+            {availableTriggers.map((trigger) => {
+              const config = triggerFilterConfig[trigger];
+              const Icon = config.icon;
+              const isActive = triggerFilter === trigger;
+              const count = trigger === "all"
+                ? automations.length
+                : trigger === "callable"
+                ? automations.filter((a) => a.trigger.type === "callable").length
+                : automations.filter((a) => isFirestoreTrigger(a.trigger) && a.trigger.collection === trigger).length;
+
+              return (
+                <button
+                  key={trigger}
+                  onClick={() => setTriggerFilter(trigger)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1.5 transition-colors",
+                    isActive
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted hover:bg-muted/80 text-muted-foreground"
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {config.label}
+                  <span className={cn(
+                    "text-xs px-1.5 py-0.5 rounded-full",
+                    isActive ? "bg-primary-foreground/20" : "bg-background"
+                  )}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </CardHeader>
-      <CardContent className="h-[600px]">
+      <CardContent className="h-[650px]">
         <ReactFlow
           nodes={nodes}
           edges={edges}

@@ -1,11 +1,23 @@
 "use client";
 
-import { TransactionSource, GoCardlessConnectorConfig } from "@/types/source";
+import { TransactionSource } from "@/types/source";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Upload, ChevronRight, CreditCard } from "lucide-react";
+import {
+  Building2,
+  Upload,
+  ChevronRight,
+  CreditCard,
+  RefreshCw,
+  Wallet,
+  TrendingUp,
+  Home,
+  Shield,
+  Landmark,
+} from "lucide-react";
 import { formatIban } from "@/lib/import/deduplication";
+import { format } from "date-fns";
 
 interface SourceCardProps {
   source: TransactionSource;
@@ -14,22 +26,50 @@ interface SourceCardProps {
 }
 
 export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) {
-  // Check API connection status
-  const isApiConnected = source.type === "api" && source.apiConfig?.provider === "gocardless";
-  const apiConfig = source.apiConfig as GoCardlessConnectorConfig | undefined;
+  // Check API connection status (GoCardless, TrueLayer, or finAPI)
+  const isApiConnected = source.type === "api" &&
+    (source.apiConfig?.provider === "gocardless" ||
+     source.apiConfig?.provider === "truelayer" ||
+     source.apiConfig?.provider === "finapi");
+
+  // Get expiry date and last sync from any provider (type-safe access to provider-specific fields)
+  const apiConfig = source.apiConfig as Record<string, unknown> | undefined;
+  const expiresAt = (() => {
+    if (!apiConfig) return null;
+    // GoCardless uses agreementExpiresAt
+    const agreementExpiry = apiConfig.agreementExpiresAt as { toDate?: () => Date } | undefined;
+    if (agreementExpiry?.toDate) return agreementExpiry.toDate();
+    // finAPI/TrueLayer use expiresAt
+    const expiry = apiConfig.expiresAt as { toDate?: () => Date } | string | undefined;
+    if (typeof expiry === "object" && expiry?.toDate) return expiry.toDate();
+    if (typeof expiry === "string") return new Date(expiry);
+    return null;
+  })();
+
+  // Get last sync date
+  const lastSyncAt = (() => {
+    if (!apiConfig) return null;
+    const syncAt = apiConfig.lastSyncAt as { toDate?: () => Date } | string | undefined;
+    if (typeof syncAt === "object" && syncAt?.toDate) return syncAt.toDate();
+    if (typeof syncAt === "string") return new Date(syncAt);
+    return null;
+  })();
+
+  // Get institution logo for API sources
+  const institutionLogo = apiConfig?.institutionLogo as string | undefined;
 
   // Check if re-auth is needed
-  const needsReauth = isApiConnected && apiConfig?.agreementExpiresAt
-    ? apiConfig.agreementExpiresAt.toDate() < new Date()
+  const needsReauth = isApiConnected && expiresAt
+    ? expiresAt < new Date()
     : false;
 
   // Days until expiry
-  const daysUntilExpiry = isApiConnected && apiConfig?.agreementExpiresAt
-    ? Math.max(0, Math.floor((apiConfig.agreementExpiresAt.toDate().getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+  const daysUntilExpiry = isApiConnected && expiresAt
+    ? Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     : null;
 
+  // Only show badge for warnings or CSV - not for normal connected state
   const getStatusBadge = () => {
-    // API-connected sources (Open Banking)
     if (source.type === "api") {
       if (needsReauth) {
         return <Badge variant="destructive" className="text-xs">Reconnect</Badge>;
@@ -37,11 +77,52 @@ export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) 
       if (isApiConnected && daysUntilExpiry !== null && daysUntilExpiry <= 7) {
         return <Badge variant="outline" className="text-xs border-yellow-500 text-yellow-600">Expires soon</Badge>;
       }
-      return <Badge variant="outline" className="text-xs border-green-500 text-green-600">Connected</Badge>;
+      // No badge for normal connected state
+      return null;
     }
     // CSV import sources
     return <Badge variant="secondary" className="text-xs">CSV</Badge>;
   };
+
+  // Get account type icon based on accountKind or finAPI accountType
+  const getAccountTypeIcon = () => {
+    // For credit cards
+    if (source.accountKind === "credit_card") {
+      return <CreditCard className="h-3 w-3" />;
+    }
+    // For API sources, we could store the finAPI accountType - for now use accountKind
+    return <Building2 className="h-3 w-3" />;
+  };
+
+  // Render account icon - use bank logo with overlay for API sources, otherwise default icons
+  const renderIcon = () => {
+    if (isApiConnected && institutionLogo) {
+      return (
+        <div className="relative shrink-0">
+          <img
+            src={institutionLogo}
+            alt=""
+            className="h-10 w-10 rounded-lg object-contain border border-border"
+          />
+          {/* Account type overlay */}
+          <div className="absolute -bottom-1 -right-1 p-1 rounded-full bg-background border border-border shadow-sm">
+            {getAccountTypeIcon()}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="p-2 rounded-lg bg-primary/10 border border-border shrink-0">
+        {source.accountKind === "credit_card" ? (
+          <CreditCard className="h-5 w-5 text-primary" />
+        ) : (
+          <Building2 className="h-5 w-5 text-primary" />
+        )}
+      </div>
+    );
+  };
+
+  const statusBadge = getStatusBadge();
 
   return (
     <Card
@@ -50,19 +131,13 @@ export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) 
     >
       <CardContent className="p-6">
         <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-primary/10">
-              {source.accountKind === "credit_card" ? (
-                <CreditCard className="h-5 w-5 text-primary" />
-              ) : (
-                <Building2 className="h-5 w-5 text-primary" />
-              )}
-            </div>
-            <div>
-              <h3 className="font-semibold">{source.name}</h3>
+          <div className="flex items-center gap-3 min-w-0">
+            {renderIcon()}
+            <div className="min-w-0">
+              <h3 className="font-semibold truncate">{source.name}</h3>
             </div>
           </div>
-          {getStatusBadge()}
+          {statusBadge}
         </div>
 
         <p className="text-sm font-mono text-muted-foreground mb-4">
@@ -72,18 +147,30 @@ export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) 
         </p>
 
         <div className="flex items-center justify-between">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={(e) => {
-              e.stopPropagation();
-              onImportClick();
-            }}
-            data-onboarding="import-transactions"
-          >
-            <Upload className="h-4 w-4 mr-2" />
-            Import
-          </Button>
+          {!isApiConnected && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onImportClick();
+              }}
+              data-onboarding="import-transactions"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Import
+            </Button>
+          )}
+          {isApiConnected && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <RefreshCw className="h-3 w-3" />
+              {lastSyncAt ? (
+                <span>Last sync: {format(lastSyncAt, "MMM d, HH:mm")}</span>
+              ) : (
+                <span>Not synced yet</span>
+              )}
+            </div>
+          )}
 
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
         </div>

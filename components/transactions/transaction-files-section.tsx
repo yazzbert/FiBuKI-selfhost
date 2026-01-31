@@ -33,11 +33,12 @@ import { useTransactionFiles, useFiles } from "@/hooks/use-files";
 import { convertCurrency } from "@/lib/currency";
 import { useNoReceiptCategories } from "@/hooks/use-no-receipt-categories";
 // Category suggestions now come from transaction.categorySuggestions (computed on backend)
-import { cn } from "@/lib/utils";
+import { cn, toDateSafe } from "@/lib/utils";
 import Link from "next/link";
 import { useState } from "react";
 
 // Consistent field row component (matches transaction-details.tsx)
+// Uses container queries to stack vertically when panel is narrow (<300px)
 function FieldRow({
   label,
   children,
@@ -50,14 +51,14 @@ function FieldRow({
   return (
     <div
       className={cn(
-        "flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4 min-w-0",
+        "flex items-baseline gap-4 min-w-0 field-row-responsive",
         className
       )}
     >
-      <span className="text-sm text-muted-foreground shrink-0 sm:w-32">
+      <span className="text-sm text-muted-foreground shrink-0 w-32 field-row-label">
         {label}
       </span>
-      <span className="text-sm flex-1 min-w-0">{children}</span>
+      <span className="text-sm flex-1 min-w-0 field-row-value">{children}</span>
     </div>
   );
 }
@@ -199,9 +200,11 @@ function FileRow({ file, transactionCurrency, transactionDate, onDisconnect, dis
       <div className="min-w-0 flex-1 overflow-hidden w-0">
         <p className="text-sm truncate">{file.fileName}</p>
         <p className="text-xs text-muted-foreground">
-          {file.extractedDate
-            ? format(file.extractedDate.toDate(), "MMM d, yyyy")
-            : format(file.uploadedAt.toDate(), "MMM d, yyyy")}
+          {toDateSafe(file.extractedDate)
+            ? format(toDateSafe(file.extractedDate)!, "MMM d, yyyy")
+            : toDateSafe(file.uploadedAt)
+              ? format(toDateSafe(file.uploadedAt)!, "MMM d, yyyy")
+              : "—"}
         </p>
       </div>
       <div className="flex items-center gap-2 shrink-0">
@@ -263,9 +266,11 @@ function SuggestedFileRow({
       <div className="min-w-0 flex-1 overflow-hidden w-0">
         <p className="text-sm truncate">{file.fileName}</p>
         <p className="text-xs text-muted-foreground">
-          {file.extractedDate
-            ? format(file.extractedDate.toDate(), "MMM d, yyyy")
-            : format(file.uploadedAt.toDate(), "MMM d, yyyy")}
+          {toDateSafe(file.extractedDate)
+            ? format(toDateSafe(file.extractedDate)!, "MMM d, yyyy")
+            : toDateSafe(file.uploadedAt)
+              ? format(toDateSafe(file.uploadedAt)!, "MMM d, yyyy")
+              : "—"}
         </p>
       </div>
       <div className="flex items-center gap-2 shrink-0">
@@ -568,7 +573,7 @@ export function TransactionFilesSection({
                     key={file.id}
                     file={file}
                     transactionCurrency={transaction.currency}
-                    transactionDate={transaction.date.toDate()}
+                    transactionDate={toDateSafe(transaction.date) || new Date()}
                     onDisconnect={() => handleDisconnectFile(file.id)}
                     disconnecting={disconnecting === file.id}
                   />
@@ -600,7 +605,7 @@ export function TransactionFilesSection({
                 <DifferenceLine
                   transactionAmount={transaction.amount}
                   transactionCurrency={transaction.currency}
-                  transactionDate={transaction.date.toDate()}
+                  transactionDate={toDateSafe(transaction.date) || new Date()}
                   files={files}
                 />
                 {/* Rejected files list */}
@@ -615,9 +620,11 @@ export function TransactionFilesSection({
                         <div className="min-w-0 flex-1">
                           <p className="text-sm truncate text-muted-foreground">{file.fileName}</p>
                           <p className="text-xs text-muted-foreground/70">
-                            {file.extractedDate
-                              ? format(file.extractedDate.toDate(), "MMM d, yyyy")
-                              : format(file.uploadedAt.toDate(), "MMM d, yyyy")}
+                            {toDateSafe(file.extractedDate)
+                              ? format(toDateSafe(file.extractedDate)!, "MMM d, yyyy")
+                              : toDateSafe(file.uploadedAt)
+                                ? format(toDateSafe(file.uploadedAt)!, "MMM d, yyyy")
+                                : "—"}
                           </p>
                         </div>
                         <div className="flex items-center gap-1">
@@ -697,9 +704,11 @@ export function TransactionFilesSection({
                       <div className="min-w-0 flex-1">
                         <p className="text-sm truncate text-muted-foreground">{file.fileName}</p>
                         <p className="text-xs text-muted-foreground/70">
-                          {file.extractedDate
-                            ? format(file.extractedDate.toDate(), "MMM d, yyyy")
-                            : format(file.uploadedAt.toDate(), "MMM d, yyyy")}
+                          {toDateSafe(file.extractedDate)
+                            ? format(toDateSafe(file.extractedDate)!, "MMM d, yyyy")
+                            : toDateSafe(file.uploadedAt)
+                              ? format(toDateSafe(file.uploadedAt)!, "MMM d, yyyy")
+                              : "—"}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">

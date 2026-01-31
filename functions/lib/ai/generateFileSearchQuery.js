@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateFileSearchQuery = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const vertexai_1 = require("@google-cloud/vertexai");
+const ai_usage_logger_1 = require("../utils/ai-usage-logger");
 // Get project ID from environment (Firebase sets this automatically)
 function getProjectId() {
     const projectId = process.env.GCLOUD_PROJECT ||
@@ -24,6 +25,8 @@ exports.generateFileSearchQuery = (0, https_1.onCall)({
     timeoutSeconds: 30,
     cors: true, // Allow CORS for local development
 }, async (request) => {
+    // Get userId for logging (optional - don't require auth for backward compatibility)
+    const userId = request.auth?.uid;
     const { transactionName, transactionPartner, transactionReference, partnerIban, partnerName, amount, currency, date, } = request.data;
     // Need at least some transaction info
     if (!transactionName && !transactionPartner && !partnerName && !transactionReference) {
@@ -81,6 +84,18 @@ ONE word:`;
             },
         });
         const response = result.response;
+        // Log AI usage
+        const usageMetadata = response.usageMetadata;
+        if (userId && usageMetadata) {
+            (0, ai_usage_logger_1.logAIUsage)(userId, {
+                function: "fileSearchQuery",
+                model: "gemini-2.0-flash-lite-001",
+                inputTokens: usageMetadata.promptTokenCount || 0,
+                outputTokens: usageMetadata.candidatesTokenCount || 0,
+            }).catch((err) => {
+                console.error("[generateFileSearchQuery] Failed to log AI usage:", err);
+            });
+        }
         let searchQuery = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase() || "";
         // Validate the result - should be short and not contain explanation
         if (searchQuery.length > 50 || searchQuery.includes("\n")) {

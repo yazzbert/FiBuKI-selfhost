@@ -1,6 +1,6 @@
 "use client";
 
-import { User, Wrench, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { Wrench, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { cn } from "@/lib/utils";
 import { RuntimeChatMessage, MessagePart, ToolCall } from "@/types/chat";
@@ -15,20 +15,12 @@ interface MessageBubbleProps {
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
 
-  // User messages: bubble with icon
+  // User messages: bubble without icon
   if (isUser) {
     return (
-      <div className="flex gap-3 flex-row-reverse">
-        {/* Avatar */}
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <User className="h-4 w-4" />
-        </div>
-
-        {/* Content */}
-        <div className="flex max-w-[85%] flex-col gap-2 items-end">
-          <div className="rounded-lg px-3 py-2 text-sm bg-primary text-primary-foreground">
-            <p className="whitespace-pre-wrap">{message.content}</p>
-          </div>
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-primary text-primary-foreground">
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
         </div>
       </div>
     );

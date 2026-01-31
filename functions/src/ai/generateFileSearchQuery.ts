@@ -1,5 +1,6 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { VertexAI } from "@google-cloud/vertexai";
+import { logAIUsage } from "../utils/ai-usage-logger";
 
 // Get project ID from environment (Firebase sets this automatically)
 function getProjectId(): string {
@@ -48,6 +49,9 @@ export const generateFileSearchQuery = onCall<GenerateFileSearchQueryRequest>(
     cors: true, // Allow CORS for local development
   },
   async (request): Promise<GenerateFileSearchQueryResponse> => {
+    // Get userId for logging (optional - don't require auth for backward compatibility)
+    const userId = request.auth?.uid;
+
     const {
       transactionName,
       transactionPartner,
@@ -120,6 +124,19 @@ ONE word:`;
       });
 
       const response = result.response;
+
+      // Log AI usage
+      const usageMetadata = response.usageMetadata;
+      if (userId && usageMetadata) {
+        logAIUsage(userId, {
+          function: "fileSearchQuery",
+          model: "gemini-2.0-flash-lite-001",
+          inputTokens: usageMetadata.promptTokenCount || 0,
+          outputTokens: usageMetadata.candidatesTokenCount || 0,
+        }).catch((err) => {
+          console.error("[generateFileSearchQuery] Failed to log AI usage:", err);
+        });
+      }
       let searchQuery =
         response.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase() || "";
 

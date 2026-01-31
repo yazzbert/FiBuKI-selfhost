@@ -79,8 +79,13 @@ export function ImportSection() {
     cancelImport();
   };
 
-  // Show import progress if active
-  if (activeImport && activeImport.status !== "completed") {
+  // Show import progress if actively importing (not pending, which awaits user confirmation)
+  const isActivelyImporting = activeImport &&
+    (activeImport.status === "validating" ||
+     activeImport.status === "wiping" ||
+     activeImport.status === "importing");
+
+  if (isActivelyImporting) {
     return (
       <Card>
         <CardHeader>
@@ -185,10 +190,10 @@ export function ImportSection() {
             </div>
           )}
 
-          {/* Validation results */}
-          {validation && (
+          {/* Validation results - use local state or fallback to activeImport for page refresh */}
+          {(validation || (activeImport?.status === "pending" && activeImport.validation)) && (
             <ValidationResults
-              validation={validation}
+              validation={validation || activeImport!.validation!}
               fileName={selectedFile?.name}
               onImport={() => setShowConfirmDialog(true)}
               onCancel={handleCancel}
@@ -213,19 +218,21 @@ export function ImportSection() {
             <DialogTitle className="text-destructive">
               Confirm Data Import
             </DialogTitle>
-            <DialogDescription className="space-y-2 pt-2">
-              <p>
-                <strong>This action will permanently DELETE all your current data:</strong>
-              </p>
-              <ul className="list-disc list-inside text-sm">
-                <li>All bank accounts and transactions</li>
-                <li>All receipts and files</li>
-                <li>All partners and categories</li>
-                <li>All settings and preferences</li>
-              </ul>
-              <p className="pt-2">
-                This cannot be undone. Are you sure you want to proceed?
-              </p>
+            <DialogDescription asChild>
+              <div className="space-y-2 pt-2 text-sm text-muted-foreground">
+                <p>
+                  <strong>This action will permanently DELETE all your current data:</strong>
+                </p>
+                <ul className="list-disc list-inside">
+                  <li>All bank accounts and transactions</li>
+                  <li>All receipts and files</li>
+                  <li>All partners and categories</li>
+                  <li>All settings and preferences</li>
+                </ul>
+                <p>
+                  This cannot be undone. Are you sure you want to proceed?
+                </p>
+              </div>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

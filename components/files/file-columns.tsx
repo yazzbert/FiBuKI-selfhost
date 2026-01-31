@@ -9,7 +9,7 @@ import { PipelineId } from "@/types/automation";
 import { SortableHeader, AutomationHeader } from "@/components/ui/data-table";
 import { PartnerPill } from "@/components/partners/partner-pill";
 import { AmountMatchDisplay } from "@/components/ui/amount-match-display";
-import { cn } from "@/lib/utils";
+import { cn, toDateSafe } from "@/lib/utils";
 import { convertCurrency } from "@/lib/currency";
 import {
   Tooltip,
@@ -58,8 +58,13 @@ export function getFileColumns(
         <SortableHeader column={column}>Upload Date</SortableHeader>
       ),
       cell: ({ row }) => {
-        const uploadedAt = row.getValue("uploadedAt") as { toDate: () => Date };
-        const dateObj = uploadedAt.toDate();
+        const uploadedAt = row.getValue("uploadedAt");
+        const dateObj = toDateSafe(uploadedAt);
+
+        if (!dateObj) {
+          return <span className="text-sm text-muted-foreground">—</span>;
+        }
+
         const timeStr = format(dateObj, "HH:mm");
         const showTime = timeStr !== "00:00";
 
@@ -117,12 +122,12 @@ export function getFileColumns(
       ),
       cell: ({ row }) => {
         const extractedDate = row.original.extractedDate;
+        const dateObj = toDateSafe(extractedDate);
 
-        if (!extractedDate) {
+        if (!dateObj) {
           return <span className="text-sm text-muted-foreground">—</span>;
         }
 
-        const dateObj = extractedDate.toDate();
         const timeStr = format(dateObj, "HH:mm");
         const showTime = timeStr !== "00:00";
 
@@ -168,7 +173,7 @@ export function getFileColumns(
         let conversionInfo: { original: string; converted: string; rate: number; rateCurrency: string } | null = null;
 
         if (currency !== "EUR") {
-          const dateForConversion = extractedDate?.toDate() || new Date();
+          const dateForConversion = toDateSafe(extractedDate) || new Date();
           const conversion = convertCurrency(Math.abs(amount), currency, "EUR", dateForConversion);
           if (conversion) {
             const signedConverted = invoiceDirection === "incoming" ? -(conversion.amount / 100) : conversion.amount / 100;
@@ -369,6 +374,15 @@ export function getFileColumns(
             <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Mail className="h-3.5 w-3.5" />
               <span>Gmail</span>
+            </div>
+          );
+        }
+
+        if (sourceType?.startsWith("email_inbound")) {
+          return (
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Mail className="h-3.5 w-3.5" />
+              <span>Email</span>
             </div>
           );
         }

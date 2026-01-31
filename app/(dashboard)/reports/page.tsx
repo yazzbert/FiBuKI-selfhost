@@ -50,9 +50,9 @@ import { PeriodTimeline } from "@/components/reports/period-timeline";
 import { usePageTitle } from "@/hooks/use-page-title";
 
 const TAX_COUNTRIES: { value: TaxCountryCode; label: string; flag: string }[] = [
-  { value: "AT", label: "Austria", flag: "AT" },
-  { value: "DE", label: "Germany", flag: "DE" },
-  { value: "CH", label: "Switzerland", flag: "CH" },
+  { value: "AT", label: "Austria", flag: "🇦🇹" },
+  { value: "DE", label: "Germany", flag: "🇩🇪" },
+  { value: "CH", label: "Switzerland", flag: "🇨🇭" },
 ];
 
 const MONTHS = [
@@ -88,7 +88,7 @@ function getAvailableYears(): number[] {
 }
 
 export default function ReportsPage() {
-  const { userId, user } = useAuth();
+  const { userId, user, isAdmin } = useAuth();
   const { userData, loading: userDataLoading } = useUserData();
 
   // Set page title
@@ -106,6 +106,8 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<"pdf" | "xml" | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Operations context
   const ctx: OperationsContext = useMemo(
@@ -269,6 +271,76 @@ export default function ReportsPage() {
       setExporting(null);
     }
   };
+
+  // Submit to FinanzOnline
+  const handleSubmitToFinanzOnline = async () => {
+    if (!report || !user) return;
+
+    // Check tax number
+    if (!userData?.taxNumber || userData.taxNumber.length !== 9) {
+      setSubmitResult({
+        success: false,
+        message: "Tax number (9 digits) is required for FinanzOnline submission",
+      });
+      return;
+    }
+
+    // Check FinanzOnline credentials
+    if (!userData?.finanzonline?.isConfigured) {
+      setSubmitResult({
+        success: false,
+        message: "FinanzOnline not configured. Set up your credentials in Settings > Integrations.",
+      });
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitResult(null);
+
+    try {
+      const token = await user.getIdToken();
+
+      const response = await fetch("/api/reports/submit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          report,
+          period: selectedPeriod,
+          taxNumber: userData.taxNumber,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Submission failed");
+      }
+
+      setSubmitResult({
+        success: true,
+        message: `UVA submitted successfully!${result.referenceNumber ? ` Reference: ${result.referenceNumber}` : ""}`,
+      });
+    } catch (error) {
+      console.error("Submit error:", error);
+      setSubmitResult({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to submit to FinanzOnline",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Check if FinanzOnline submission is available
+  const finanzonlineConfigured = userData?.finanzonline?.isConfigured;
+  const canSubmitToFinanzOnline =
+    readiness?.isReady &&
+    report &&
+    userData?.taxNumber?.length === 9 &&
+    finanzonlineConfigured;
 
   if (userDataLoading) {
     return (
@@ -597,18 +669,53 @@ export default function ReportsPage() {
                       </Button>
                     </div>
 
-                    <div className="pt-4 border-t">
-                      <Button
-                        className="w-full"
-                        disabled={!readiness?.isReady || !report}
-                      >
-                        <ExternalLink className="h-4 w-4 mr-2" />
-                        Submit to FinanzOnline
-                      </Button>
-                      <p className="text-xs text-muted-foreground text-center mt-2">
-                        Opens FinanzOnline in a new tab with pre-filled data
-                      </p>
-                    </div>
+                    {/* FinanzOnline submit - admin only for now */}
+                    {isAdmin && (
+                      <div className="pt-4 border-t space-y-2">
+                        {submitResult && (
+                          <div
+                            className={`text-sm p-2 rounded ${
+                              submitResult.success
+                                ? "bg-green-50 text-green-700 border border-green-200"
+                                : "bg-red-50 text-red-700 border border-red-200"
+                            }`}
+                          >
+                            {submitResult.message}
+                          </div>
+                        )}
+                        <Button
+                          className="w-full"
+                          disabled={!canSubmitToFinanzOnline || submitting}
+                          onClick={handleSubmitToFinanzOnline}
+                        >
+                          {submitting ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          ) : (
+                            <ExternalLink className="h-4 w-4 mr-2" />
+                          )}
+                          {submitting ? "Submitting..." : "Submit to FinanzOnline"}
+                        </Button>
+                        {!finanzonlineConfigured ? (
+                          <p className="text-xs text-muted-foreground text-center mt-2">
+                            <Link href="/settings/integrations" className="text-primary underline">
+                              Configure FinanzOnline
+                            </Link>{" "}
+                            to enable direct submission
+                          </p>
+                        ) : !userData?.taxNumber ? (
+                          <p className="text-xs text-muted-foreground text-center mt-2">
+                            <Link href="/settings/identity" className="text-primary underline">
+                              Add your tax number
+                            </Link>{" "}
+                            to enable submission
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground text-center mt-2">
+                            Submits directly to Austrian tax authority (test mode)
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>

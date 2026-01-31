@@ -23,11 +23,13 @@ import {
   ReceiptLostEntry,
 } from "@/types/no-receipt-category";
 import { Transaction } from "@/types/transaction";
+import { PartnerCategoryManualRemoval } from "@/types/partner";
 import { NO_RECEIPT_CATEGORY_TEMPLATES } from "@/lib/data/no-receipt-category-templates";
 import { OperationsContext } from "./types";
 
 const CATEGORIES_COLLECTION = "noReceiptCategories";
 const TRANSACTIONS_COLLECTION = "transactions";
+const PARTNERS_COLLECTION = "partners";
 
 // ============ Category Management ============
 
@@ -231,11 +233,26 @@ export async function assignCategoryToTransaction(
     console.log(`[Category] Cleared manual removal for tx ${transactionId} from category ${categoryId}`);
   }
 
+  // Clear partner-level category manual removal if exists (user is re-adding to this category)
+  if (txData.partnerId && (matchedBy === "manual" || matchedBy === "suggestion")) {
+    clearPartnerCategoryRemoval(ctx, txData.partnerId, categoryId, transactionId).catch((error) => {
+      console.error("Failed to clear partner category removal:", error);
+    });
+  }
+
   // Learn patterns from this assignment (non-blocking)
   if (matchedBy === "manual" || matchedBy === "suggestion") {
+    // Local pattern learning (existing)
     learnCategoryPatternFromTransaction(ctx, categoryId, txData).catch((error) => {
       console.error("Failed to learn category pattern:", error);
     });
+
+    // Partner-level category pattern learning (new)
+    if (txData.partnerId) {
+      triggerPartnerCategoryLearning(txData.partnerId, categoryId, transactionId).catch((error) => {
+        console.error("Failed to trigger partner category learning:", error);
+      });
+    }
   }
 }
 
@@ -395,6 +412,17 @@ export async function removeCategoryFromTransaction(
       unlearnCategoryPatternFromTransaction(ctx, categoryId, transactionId, transactionText).catch((error) => {
         console.error("Failed to unlearn category pattern:", error);
       });
+
+      // Store partner-level category removal and trigger re-learning (new)
+      if (txData.partnerId) {
+        storePartnerCategoryRemoval(ctx, txData.partnerId, categoryId, transactionId, txData).catch((error) => {
+          console.error("Failed to store partner category removal:", error);
+        });
+
+        triggerPartnerCategoryLearning(txData.partnerId, categoryId, transactionId).catch((error) => {
+          console.error("Failed to trigger partner category re-learning:", error);
+        });
+      }
     } catch (error) {
       console.error("Failed to store category manual removal:", error);
       // Don't throw - manual removal tracking is non-critical
@@ -406,6 +434,17 @@ export async function removeCategoryFromTransaction(
     unlearnCategoryPatternFromTransaction(ctx, categoryId, transactionId, transactionText).catch((error) => {
       console.error("Failed to unlearn category pattern on manual removal:", error);
     });
+
+    // For manual removals, also trigger partner re-learning if there's a partner
+    if (txData.partnerId) {
+      storePartnerCategoryRemoval(ctx, txData.partnerId, categoryId, transactionId, txData).catch((error) => {
+        console.error("Failed to store partner category removal:", error);
+      });
+
+      triggerPartnerCategoryLearning(txData.partnerId, categoryId, transactionId).catch((error) => {
+        console.error("Failed to trigger partner category re-learning:", error);
+      });
+    }
   }
 
   // Trigger re-matching to find a new category for this transaction
@@ -688,6 +727,125 @@ export async function clearManualRemoval(
   triggerCategoryMatching([transactionId]).catch((error) => {
     console.error("Failed to trigger category re-matching after clearing removal:", error);
   });
+}
+
+// ============ Partner Category Learning ============
+
+/**
+ * Store a category removal on the partner for category pattern learning.
+ * This serves as a negative training signal for the partner's category rules.
+ */
+async function storePartnerCategoryRemoval(
+  ctx: OperationsContext,
+  partnerId: string,
+  categoryId: string,
+  transactionId: string,
+  txData: Record<string, unknown>
+): Promise<void> {
+  const partnerRef = doc(ctx.db, PARTNERS_COLLECTION, partnerId);
+  const partnerSnapshot = await getDoc(partnerRef);
+
+  if (!partnerSnapshot.exists() || partnerSnapshot.data().userId !== ctx.userId) {
+    console.log(`[Partner Category Removal] Partner ${partnerId} not found or access denied`);
+    return;
+  }
+
+  const partnerData = partnerSnapshot.data();
+  const existingRemovals: PartnerCategoryManualRemoval[] = partnerData.categoryManualRemovals || [];
+
+  // Check if already stored
+  const alreadyStored = existingRemovals.some(
+    (r) => r.transactionId === transactionId && r.categoryId === categoryId
+  );
+
+  if (alreadyStored) {
+    console.log(`[Partner Category Removal] Already stored for partner ${partnerId}, category ${categoryId}`);
+    return;
+  }
+
+  // Store the removal
+  const removal: PartnerCategoryManualRemoval = {
+    transactionId,
+    categoryId,
+    removedAt: Timestamp.now(),
+    partner: (txData.partner as string) || null,
+    name: (txData.name as string) || "",
+    reference: (txData.reference as string) || null,
+  };
+
+  // Cap at 50 entries per category to prevent unbounded growth
+  const otherRemovals = existingRemovals.filter((r) => r.categoryId !== categoryId);
+  const sameCategoryRemovals = existingRemovals.filter((r) => r.categoryId === categoryId);
+  const cappedSameCategoryRemovals = sameCategoryRemovals.slice(-49); // Keep last 49, add 1 new
+
+  await updateDoc(partnerRef, {
+    categoryManualRemovals: [...otherRemovals, ...cappedSameCategoryRemovals, removal],
+    updatedAt: Timestamp.now(),
+  });
+
+  console.log(`[Partner Category Removal] Stored removal for partner ${partnerId}, category ${categoryId}, tx ${transactionId}`);
+}
+
+/**
+ * Clear a category removal from the partner when user re-assigns the transaction to the category.
+ */
+async function clearPartnerCategoryRemoval(
+  ctx: OperationsContext,
+  partnerId: string,
+  categoryId: string,
+  transactionId: string
+): Promise<void> {
+  const partnerRef = doc(ctx.db, PARTNERS_COLLECTION, partnerId);
+  const partnerSnapshot = await getDoc(partnerRef);
+
+  if (!partnerSnapshot.exists() || partnerSnapshot.data().userId !== ctx.userId) {
+    return;
+  }
+
+  const partnerData = partnerSnapshot.data();
+  const existingRemovals: PartnerCategoryManualRemoval[] = partnerData.categoryManualRemovals || [];
+
+  // Remove the entry for this transaction and category
+  const updatedRemovals = existingRemovals.filter(
+    (r) => !(r.transactionId === transactionId && r.categoryId === categoryId)
+  );
+
+  if (updatedRemovals.length !== existingRemovals.length) {
+    await updateDoc(partnerRef, {
+      categoryManualRemovals: updatedRemovals,
+      updatedAt: Timestamp.now(),
+    });
+    console.log(`[Partner Category Removal] Cleared removal for partner ${partnerId}, category ${categoryId}, tx ${transactionId}`);
+  }
+}
+
+/**
+ * Trigger partner category pattern learning via Cloud Function.
+ * Non-blocking - runs in background.
+ */
+async function triggerPartnerCategoryLearning(
+  partnerId: string,
+  categoryId: string,
+  transactionId?: string
+): Promise<void> {
+  const learnPartnerCategoryPatterns = httpsCallable<
+    { partnerId: string; categoryId: string; transactionId?: string },
+    { patternsLearned: number; patterns: string[]; transactionsMatched: number }
+  >(functions, "learnPartnerCategoryPatterns");
+
+  try {
+    const result = await learnPartnerCategoryPatterns({
+      partnerId,
+      categoryId,
+      transactionId,
+    });
+    console.log(
+      `[Partner Category Learning] Learned ${result.data.patternsLearned} patterns, matched ${result.data.transactionsMatched} transactions`
+    );
+  } catch (error) {
+    console.error("[Partner Category Learning] Failed:", error);
+    throw error;
+  }
 }
 
 // ============ Admin Functions ============

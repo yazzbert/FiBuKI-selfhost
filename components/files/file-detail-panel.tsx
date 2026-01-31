@@ -57,7 +57,7 @@ import { InvoiceDirection } from "@/types/user-data";
 import { useFilePartnerSuggestions, PartnerSuggestionWithDetails } from "@/hooks/use-partner-suggestions";
 import { shouldAutoApply } from "@/lib/matching/partner-matcher";
 import { db } from "@/lib/firebase/config";
-import { cn } from "@/lib/utils";
+import { cn, toDateSafe } from "@/lib/utils";
 import { useAuth } from "@/components/auth";
 import { useChat } from "@/components/chat/chat-provider";
 
@@ -157,6 +157,7 @@ export function FileDetailPanel({
   const suggestions = useFilePartnerSuggestions(file, userPartners, globalPartners);
 
   const isGmailSource = file.sourceType?.startsWith("gmail");
+  const isEmailInboundSource = file.sourceType?.startsWith("email_inbound");
   const sourceResultLabel = useMemo(() => {
     switch (file.sourceResultType) {
       case "gmail_attachment":
@@ -373,8 +374,8 @@ export function FileDetailPanel({
         <ScrollArea className="flex-1">
           <div className="p-4 space-y-6">
             {/* Preview thumbnail - 25% width, click to toggle viewer */}
-            <div className="flex gap-4">
-              <div className="w-1/4 flex-shrink-0">
+            <div className="flex gap-4 file-preview-section">
+              <div className="w-1/4 flex-shrink-0 file-preview-thumb">
                 <FilePreview
                   downloadUrl={file.downloadUrl}
                   fileType={file.fileType}
@@ -390,9 +391,9 @@ export function FileDetailPanel({
                 {/* Quick file info - fixed label width for alignment */}
                 <div className="text-sm space-y-1">
                   {/* Source & From at top */}
-                  <div className="flex items-start gap-3">
-                    <span className="text-muted-foreground w-16 shrink-0">Source</span>
-                    <div className="flex-1 text-right">
+                  <div className="flex items-start gap-3 file-meta-row">
+                    <span className="text-muted-foreground w-16 shrink-0 file-meta-label">Source</span>
+                    <div className="flex-1 text-right file-meta-value">
                       {isGmailSource ? (
                         file.gmailIntegrationId ? (
                           <Link
@@ -409,6 +410,15 @@ export function FileDetailPanel({
                             {file.gmailIntegrationEmail || "Gmail"}
                           </span>
                         )
+                      ) : isEmailInboundSource ? (
+                        <Link
+                          href="/integrations/email-inbound"
+                          className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+                        >
+                          <Mail className="h-3 w-3" />
+                          Email Forwarding
+                          <ExternalLink className="h-3 w-3" />
+                        </Link>
                       ) : (
                         <span className="inline-flex items-center gap-1">
                           <Upload className="h-3 w-3" />
@@ -418,40 +428,58 @@ export function FileDetailPanel({
                     </div>
                   </div>
                   {isGmailSource && file.gmailSenderEmail && (
-                    <div className="flex items-start gap-3">
-                      <span className="text-muted-foreground w-16 shrink-0">From</span>
-                      <span className="flex-1 text-right break-all">
+                    <div className="flex items-start gap-3 file-meta-row">
+                      <span className="text-muted-foreground w-16 shrink-0 file-meta-label">From</span>
+                      <span className="flex-1 text-right break-all file-meta-value">
                         {file.gmailSenderEmail}
                       </span>
                     </div>
                   )}
+                  {isEmailInboundSource && file.inboundFrom && (
+                    <div className="flex items-start gap-3 file-meta-row">
+                      <span className="text-muted-foreground w-16 shrink-0 file-meta-label">From</span>
+                      <span className="flex-1 text-right break-all file-meta-value">
+                        {file.inboundFromName ? `${file.inboundFromName} <${file.inboundFrom}>` : file.inboundFrom}
+                      </span>
+                    </div>
+                  )}
+                  {isEmailInboundSource && file.inboundSubject && (
+                    <div className="flex items-start gap-3 file-meta-row">
+                      <span className="text-muted-foreground w-16 shrink-0 file-meta-label">Subject</span>
+                      <span className="flex-1 text-right break-all file-meta-value">
+                        {file.inboundSubject}
+                      </span>
+                    </div>
+                  )}
                   {file.sourceSearchPattern && (
-                    <div className="flex items-start gap-3">
-                      <span className="text-muted-foreground w-16 shrink-0">Search</span>
-                      <span className="flex-1 text-right break-all">
+                    <div className="flex items-start gap-3 file-meta-row">
+                      <span className="text-muted-foreground w-16 shrink-0 file-meta-label">Search</span>
+                      <span className="flex-1 text-right break-all file-meta-value">
                         {file.sourceSearchPattern}
                       </span>
                     </div>
                   )}
                   {sourceResultLabel && (
-                    <div className="flex items-start gap-3">
-                      <span className="text-muted-foreground w-16 shrink-0">Result</span>
-                      <span className="flex-1 text-right">{sourceResultLabel}</span>
+                    <div className="flex items-start gap-3 file-meta-row">
+                      <span className="text-muted-foreground w-16 shrink-0 file-meta-label">Result</span>
+                      <span className="flex-1 text-right file-meta-value">{sourceResultLabel}</span>
                     </div>
                   )}
                   {/* File metadata */}
-                  <div className="flex items-start gap-3">
-                    <span className="text-muted-foreground w-16 shrink-0">Uploaded</span>
-                    <span className="flex-1 text-right">{format(file.uploadedAt.toDate(), "MMM d, yyyy")}</span>
+                  <div className="flex items-start gap-3 file-meta-row">
+                    <span className="text-muted-foreground w-16 shrink-0 file-meta-label">Uploaded</span>
+                    <span className="flex-1 text-right file-meta-value">
+                      {toDateSafe(file.uploadedAt) ? format(toDateSafe(file.uploadedAt)!, "MMM d, yyyy") : "—"}
+                    </span>
                   </div>
-                  <div className="flex items-start gap-3">
-                    <span className="text-muted-foreground w-16 shrink-0">Size</span>
-                    <span className="flex-1 text-right">{formatFileSize(file.fileSize)}</span>
+                  <div className="flex items-start gap-3 file-meta-row">
+                    <span className="text-muted-foreground w-16 shrink-0 file-meta-label">Size</span>
+                    <span className="flex-1 text-right file-meta-value">{formatFileSize(file.fileSize)}</span>
                   </div>
                   {/* Invoice Type Classification */}
-                  <div className="flex items-center gap-3">
-                    <span className="text-muted-foreground w-16 shrink-0">Type</span>
-                    <div className="flex-1 flex justify-end">
+                  <div className="flex items-center gap-3 file-meta-row">
+                    <span className="text-muted-foreground w-16 shrink-0 file-meta-label">Type</span>
+                    <div className="flex-1 flex justify-end file-meta-value">
                       {(() => {
                         const status = getInvoiceTypeStatus(file);
                         // Show "Analyzing..." only during classification phase

@@ -11,6 +11,7 @@ exports.cancelFileWorkersForTransaction = cancelFileWorkersForTransaction;
 exports.cancelPartnerWorkersForTransaction = cancelPartnerWorkersForTransaction;
 exports.cancelPartnerWorkersForFile = cancelPartnerWorkersForFile;
 exports.cancelTransactionWorkersForFile = cancelTransactionWorkersForFile;
+exports.cancelPrecisionSearchForTransaction = cancelPrecisionSearchForTransaction;
 const firestore_1 = require("firebase-admin/firestore");
 const db = (0, firestore_1.getFirestore)();
 /**
@@ -108,5 +109,42 @@ async function cancelPartnerWorkersForFile(userId, fileId) {
  */
 async function cancelTransactionWorkersForFile(userId, fileId) {
     return cancelWorkersForEntity(userId, "file", fileId, ["file_matching"]);
+}
+/**
+ * Cancel precision search queue for a specific transaction
+ *
+ * When a user manually connects a file or sets a no-receipt category,
+ * any running precision search for that transaction should stop.
+ */
+async function cancelPrecisionSearchForTransaction(userId, transactionId) {
+    let cancelledQueueItems = 0;
+    // Find queue items that are processing this specific transaction
+    // (single_transaction scope with matching transactionId)
+    const singleTxQuery = await db
+        .collection("precisionSearchQueue")
+        .where("userId", "==", userId)
+        .where("scope", "==", "single_transaction")
+        .where("transactionId", "==", transactionId)
+        .where("status", "in", ["pending", "processing"])
+        .get();
+    if (!singleTxQuery.empty) {
+        const batch = db.batch();
+        for (const doc of singleTxQuery.docs) {
+            batch.update(doc.ref, {
+                status: "completed",
+                completedAt: firestore_1.Timestamp.now(),
+                completionReason: "manual_override",
+            });
+            cancelledQueueItems++;
+        }
+        await batch.commit();
+    }
+    // For all_incomplete scope, we can't cancel the whole queue
+    // but we mark the transaction so it gets skipped during processing
+    // This is handled by the isComplete check in the queue processor
+    if (cancelledQueueItems > 0) {
+        console.log(`[cancelPrecisionSearchForTransaction] Cancelled ${cancelledQueueItems} queue items for transaction ${transactionId}`);
+    }
+    return { cancelledQueueItems };
 }
 //# sourceMappingURL=cancelWorkers.js.map

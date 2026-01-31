@@ -44,7 +44,7 @@ const ACCEPTED_TYPES = {
 
 const PANEL_WIDTH_KEY = "fileDetailPanelWidth";
 const DEFAULT_PANEL_WIDTH = 600; // Larger for file preview
-const MIN_PANEL_WIDTH = 480;
+const MIN_PANEL_WIDTH = 280;
 const MAX_PANEL_WIDTH = 900;
 function FileTableFallback() {
   return (
@@ -787,7 +787,7 @@ function FilesContent() {
             onMouseDown={handleResizeStart}
           />
           {/* Panel content */}
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden detail-panel-container">
             <FileDetailPanel
               file={selectedFile}
               onClose={handleCloseDetail}

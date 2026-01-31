@@ -98,6 +98,20 @@ async function shouldPauseForGmailReauth(userId) {
     }
     return { shouldPause: false };
 }
+/**
+ * Check if user has ANY active email integration (connected and not needing reauth).
+ * If no email integration exists, email strategies should be skipped entirely.
+ */
+async function hasActiveEmailIntegration(userId) {
+    const activeIntegrationSnapshot = await db
+        .collection("emailIntegrations")
+        .where("userId", "==", userId)
+        .where("isActive", "==", true)
+        .where("needsReauth", "==", false)
+        .limit(1)
+        .get();
+    return !activeIntegrationSnapshot.empty;
+}
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -876,7 +890,7 @@ async function executeEmailAttachmentStrategy(transaction, userId) {
             description: transaction.description,
             reference: transaction.reference,
             amount: transaction.amount,
-        }, partnerInfo);
+        }, partnerInfo, 8, userId);
         // Take first 3 queries
         const queries = allQueries.slice(0, 3);
         console.log(`[PrecisionSearch] email_attachment: Using ${queries.length} Gemini queries for tx "${transaction.name}":`, queries);
@@ -1205,7 +1219,7 @@ async function executeEmailInvoiceStrategy(transaction, userId) {
             vatId: partnerInfo.vatId,
             aliases: partnerInfo.aliases,
             fileSourcePatterns: partnerInfo.fileSourcePatterns,
-        } : undefined);
+        } : undefined, 8, userId);
         // Take first 3 queries (same as clicking suggestions in UI)
         const queries = allQueries.slice(0, 3);
         console.log(`[PrecisionSearch] email_invoice: Using ${queries.length} queries for tx "${transaction.name}":`, queries);
@@ -1270,7 +1284,7 @@ async function executeEmailInvoiceStrategy(transaction, userId) {
                                 name: transaction.name,
                                 partner: transaction.partner,
                                 amount: transaction.amount,
-                            });
+                            }, userId);
                             attempt.geminiCalls = (attempt.geminiCalls || 0) + 1;
                             attempt.geminiTokensUsed =
                                 (attempt.geminiTokensUsed || 0) + analysis.usage.inputTokens + analysis.usage.outputTokens;
@@ -1484,6 +1498,16 @@ async function processQueueItem(queueItem) {
         });
         return { paused: true, pauseReason: gmailStatus.reason };
     }
+    // Check if user has any active email integration - if not, skip email strategies entirely
+    // This avoids wasting Gemini API calls generating search queries when there's no Gmail to search
+    const hasEmailIntegration = await hasActiveEmailIntegration(queueItem.userId);
+    if (!hasEmailIntegration) {
+        const originalStrategies = queueItem.strategies;
+        queueItem.strategies = queueItem.strategies.filter((s) => !["email_attachment", "email_invoice"].includes(s));
+        if (queueItem.strategies.length !== originalStrategies.length) {
+            console.log(`[PrecisionSearch] No active email integration - filtering strategies from [${originalStrategies.join(", ")}] to [${queueItem.strategies.join(", ")}]`);
+        }
+    }
     let transactionsProcessed = queueItem.transactionsProcessed;
     let transactionsWithMatches = queueItem.transactionsWithMatches;
     let totalFilesConnected = queueItem.totalFilesConnected;
@@ -1567,6 +1591,22 @@ async function processQueueItem(queueItem) {
                 timedOut = true;
                 break;
             }
+            // Re-fetch transaction to check if it was completed while we were processing
+            // This handles the case where user manually connects a file during batch processing
+            const freshTxDoc = await db.collection("transactions").doc(tx.id).get();
+            if (!freshTxDoc.exists) {
+                console.log(`[PrecisionSearch] Transaction ${tx.id} no longer exists, skipping`);
+                transactionsProcessed++;
+                lastProcessedTransactionId = tx.id;
+                continue;
+            }
+            const freshTx = freshTxDoc.data();
+            if (freshTx?.isComplete) {
+                console.log(`[PrecisionSearch] Transaction ${tx.id} already complete (resolved during processing), skipping`);
+                transactionsProcessed++;
+                lastProcessedTransactionId = tx.id;
+                continue;
+            }
             try {
                 let foundMatch = false;
                 // Run strategies in order until one finds a match
@@ -1574,7 +1614,7 @@ async function processQueueItem(queueItem) {
                 // Set high because attachment scoring and transaction scoring can diverge
                 const STRONG_MATCH_THRESHOLD = 85;
                 for (const strategy of queueItem.strategies) {
-                    // Skip if transaction already completed
+                    // Skip if transaction already completed (from initial data)
                     if (tx.isComplete)
                         break;
                     const attempt = await executeStrategy(strategy, tx, queueItem.userId);

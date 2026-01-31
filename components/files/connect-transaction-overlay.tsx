@@ -18,7 +18,7 @@ import { Transaction } from "@/types/transaction";
 import { TaxFile, TransactionSuggestion } from "@/types/file";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useTransactionMatching } from "@/hooks/use-transaction-matching";
-import { cn } from "@/lib/utils";
+import { cn, toDateSafe } from "@/lib/utils";
 import {
   TransactionMatchResult,
   getMatchSourceLabel,
@@ -55,11 +55,12 @@ export function ConnectTransactionOverlay({
   const { transactions, loading: transactionsLoading } = useTransactions();
 
   // Memoize the fileInfo object to prevent unnecessary re-renders
+  const extractedDateValue = toDateSafe(file?.extractedDate);
   const memoizedFileInfo = useMemo(() => {
     if (!file) return undefined;
     return {
       extractedAmount: file.extractedAmount ?? undefined,
-      extractedDate: file.extractedDate?.toDate().toISOString() ?? undefined,
+      extractedDate: extractedDateValue?.toISOString() ?? undefined,
       extractedPartner: file.extractedPartner ?? undefined,
       extractedIban: file.extractedIban ?? undefined,
       extractedText: file.extractedText ?? undefined,
@@ -67,7 +68,7 @@ export function ConnectTransactionOverlay({
     };
   }, [
     file?.extractedAmount,
-    file?.extractedDate?.toMillis(),
+    extractedDateValue?.getTime(),
     file?.extractedPartner,
     file?.extractedIban,
     file?.extractedText,
@@ -157,7 +158,7 @@ export function ConnectTransactionOverlay({
           matchSources: s.matchSources,
           breakdown: { amount: 0, date: 0, partner: 0, iban: 0, reference: 0, hint: 0 },
           preview: {
-            date: s.preview.date.toDate().toISOString(),
+            date: toDateSafe(s.preview.date)?.toISOString() ?? new Date().toISOString(),
             amount: s.preview.amount,
             currency: s.preview.currency,
             name: s.preview.name,
@@ -256,8 +257,8 @@ export function ConnectTransactionOverlay({
   const subtitle = file ? (
     <>
       {file.fileName}
-      {file.extractedDate && (
-        <> &middot; {format(file.extractedDate.toDate(), "MMM d, yyyy")}</>
+      {extractedDateValue && (
+        <> &middot; {format(extractedDateValue, "MMM d, yyyy")}</>
       )}
       {file.extractedAmount != null && (
         <>

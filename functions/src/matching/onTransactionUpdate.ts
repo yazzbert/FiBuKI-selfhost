@@ -6,6 +6,8 @@ import {
   isEligibleForCategoryMatching,
   CategoryData,
   TransactionData,
+  CategoryMatchOptions,
+  CategoryMatchRule,
 } from "../utils/category-matcher";
 import { AutomationMeta } from "../automation/types";
 
@@ -254,11 +256,29 @@ export const onTransactionUpdate = onDocumentUpdated(
         return;
       }
 
+      // Fetch partner's category match rules if partner is assigned
+      const options: CategoryMatchOptions = {};
+      if (after.partnerId) {
+        try {
+          const partnerDoc = await db.collection("partners").doc(after.partnerId).get();
+          if (partnerDoc.exists) {
+            const partnerData = partnerDoc.data();
+            if (partnerData?.categoryMatchRules && partnerData.categoryMatchRules.length > 0) {
+              options.partnerCategoryRules = partnerData.categoryMatchRules as CategoryMatchRule[];
+              console.log(`Loaded ${options.partnerCategoryRules.length} category rules for partner ${after.partnerId}`);
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to fetch partner category rules:`, err);
+        }
+      }
+
       // Match transaction to categories
       const matches = matchTransactionToCategories(
         transaction,
         categories,
-        categoryManualRemovals
+        categoryManualRemovals,
+        options
       );
 
       if (matches.length > 0) {

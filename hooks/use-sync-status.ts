@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { onSnapshot, doc } from "firebase/firestore";
 import { db } from "@/lib/firebase/config";
 import { TransactionSource, GoCardlessConnectorConfig } from "@/types/source";
 import { TrueLayerApiConfig } from "@/types/truelayer";
+import { FinapiBankingConfig } from "@/lib/banking/types";
+import { useAuth } from "@/components/auth/auth-provider";
 
 interface SyncStatus {
   lastSyncAt: Date | null;
@@ -14,24 +16,27 @@ interface SyncStatus {
   reauthDaysRemaining: number | null;
 }
 
+type BankingProvider = "gocardless" | "truelayer" | "finapi" | null;
+
 interface UseSyncStatusReturn {
   status: SyncStatus | null;
   isSyncing: boolean;
   syncError: string | null;
   triggerSync: () => Promise<void>;
   isApiSource: boolean;
-  provider: "gocardless" | "truelayer" | null;
+  provider: BankingProvider;
 }
 
 /**
  * Hook to monitor sync status for an API-connected source
  */
 export function useSyncStatus(sourceId: string | null): UseSyncStatusReturn {
+  const { user } = useAuth();
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [isApiSource, setIsApiSource] = useState(false);
-  const [provider, setProvider] = useState<"gocardless" | "truelayer" | null>(null);
+  const [provider, setProvider] = useState<BankingProvider>(null);
 
   // Subscribe to source document for real-time updates
   useEffect(() => {
@@ -63,10 +68,25 @@ export function useSyncStatus(sourceId: string | null): UseSyncStatusReturn {
 
         setIsApiSource(true);
 
-        const sourceProvider = source.apiConfig.provider as "gocardless" | "truelayer";
+        const sourceProvider = source.apiConfig.provider as BankingProvider;
         setProvider(sourceProvider);
 
-        if (sourceProvider === "gocardless") {
+        if (sourceProvider === "finapi") {
+          const config = source.apiConfig as unknown as FinapiBankingConfig;
+          const expiresAt = config.expiresAt?.toDate() || null;
+          const now = new Date();
+          const daysRemaining = expiresAt
+            ? Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+            : null;
+
+          setStatus({
+            lastSyncAt: config.lastSyncAt?.toDate() || null,
+            lastSyncError: config.lastSyncError || null,
+            needsReauth: expiresAt ? expiresAt < now : false,
+            reauthExpiresAt: expiresAt,
+            reauthDaysRemaining: daysRemaining,
+          });
+        } else if (sourceProvider === "gocardless") {
           const config = source.apiConfig as GoCardlessConnectorConfig;
           const expiresAt = config.agreementExpiresAt?.toDate() || null;
           const now = new Date();
@@ -112,13 +132,30 @@ export function useSyncStatus(sourceId: string | null): UseSyncStatusReturn {
 
     try {
       // Use the right endpoint based on provider
-      const endpoint = provider === "truelayer"
-        ? "/api/truelayer/sync"
-        : "/api/gocardless/sync";
+      let endpoint: string;
+      switch (provider) {
+        case "finapi":
+          endpoint = "/api/banking/sync";
+          break;
+        case "truelayer":
+          endpoint = "/api/truelayer/sync";
+          break;
+        case "gocardless":
+        default:
+          endpoint = "/api/gocardless/sync";
+          break;
+      }
+
+      // Get auth token for finAPI endpoint
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (provider === "finapi" && user) {
+        const token = await user.getIdToken();
+        headers.Authorization = `Bearer ${token}`;
+      }
 
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ sourceId }),
       });
 
@@ -134,7 +171,7 @@ export function useSyncStatus(sourceId: string | null): UseSyncStatusReturn {
     } finally {
       setIsSyncing(false);
     }
-  }, [sourceId, provider]);
+  }, [sourceId, provider, user]);
 
   return {
     status,

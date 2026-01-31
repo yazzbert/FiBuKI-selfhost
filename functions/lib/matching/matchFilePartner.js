@@ -20,6 +20,7 @@ const companyNameValidator_1 = require("../utils/companyNameValidator");
 const filePartnerMatcher_1 = require("../utils/filePartnerMatcher");
 const lookupCompany_1 = require("../ai/lookupCompany");
 const validateDomainOwnership_1 = require("../ai/validateDomainOwnership");
+const ai_usage_logger_1 = require("../utils/ai-usage-logger");
 // =============================================================================
 // AUTOMATION METADATA
 // =============================================================================
@@ -528,6 +529,18 @@ Rules:
 - Different subsidiaries (Google LLC vs Alphabet Inc) = NO match
 - Similar names but different companies = NO match`;
         const result = await model.generateContent({ contents: [{ role: "user", parts: [{ text: prompt }] }] });
+        // Log AI usage for partner deduplication
+        const usageMetadata = result.response.usageMetadata;
+        if (usageMetadata) {
+            (0, ai_usage_logger_1.logAIUsage)(userId, {
+                function: "partnerDedup",
+                model: "gemini-2.0-flash-lite-001",
+                inputTokens: usageMetadata.promptTokenCount || 0,
+                outputTokens: usageMetadata.candidatesTokenCount || 0,
+            }).catch((err) => {
+                console.error("[PartnerDedup] Failed to log AI usage:", err);
+            });
+        }
         const responseText = result.response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
         // Parse response
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);

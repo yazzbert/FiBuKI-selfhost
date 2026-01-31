@@ -413,6 +413,16 @@ export interface UserPartner {
   /** Active status (soft delete) */
   isActive: boolean;
 
+  /**
+   * If set, this partner is derived from identity settings and auto-syncs.
+   * Value indicates which identity entity this partner comes from:
+   * - "personalEntity": The user's personal identity
+   * - "company:{entityId}": A company entity with the given ID
+   * - Legacy: "name" | "companyName" (for backward compatibility)
+   * Partners with this field should show "Edit in Identity" instead of edit/delete.
+   */
+  identitySourceField?: string;
+
   createdAt: Timestamp;
   updatedAt: Timestamp;
 
@@ -423,6 +433,26 @@ export interface UserPartner {
    * Learned automatically when transactions are marked complete.
    */
   resolutionPreference?: PartnerResolutionPreference;
+
+  // === CATEGORY MATCH RULES ===
+
+  /**
+   * Rules for matching this partner's transactions to specific no-receipt categories.
+   * Allows conditional category matching based on transaction text patterns.
+   * E.g., "Google Ireland" -> "Private" only when "*youtubepremium*" matches
+   */
+  categoryMatchRules?: CategoryMatchRule[];
+
+  /** When category match rules were last updated */
+  categoryMatchRulesUpdatedAt?: Timestamp;
+
+  /**
+   * Transactions manually removed from category assignments for this partner.
+   * Used as negative training signal for category pattern learning.
+   * Different from manualRemovals (which is for partner matching).
+   * Capped at 50 entries per category.
+   */
+  categoryManualRemovals?: PartnerCategoryManualRemoval[];
 }
 
 /**
@@ -549,4 +579,69 @@ export interface PartnerResolutionPreference {
   preferredNoReceiptCategoryTemplateId?: NoReceiptCategoryId | null;
   /** Resolution statistics */
   stats: PartnerResolutionStats;
+}
+
+// ============================================================================
+// Partner Category Match Rules
+// ============================================================================
+
+/**
+ * Rule for matching a partner's transactions to a specific no-receipt category.
+ * Stored on the partner, allows conditional category matching based on transaction text.
+ *
+ * Example: Google Ireland Limited partner can have a rule that matches "Private" category
+ * only when transaction text contains "*youtubepremium*", but not for Google Cloud or Ads.
+ */
+export interface CategoryMatchRule {
+  /** Category ID this rule matches to */
+  categoryId: string;
+
+  /** Category template ID for quick lookup */
+  categoryTemplateId: NoReceiptCategoryId;
+
+  /** Glob patterns that must match for this category (e.g., "*youtubepremium*") */
+  patterns: string[];
+
+  /** Patterns that exclude this category (e.g., "*business*", "*cloud*") */
+  excludePatterns?: string[];
+
+  /** Confidence score (0-100) based on training data */
+  confidence: number;
+
+  /** When this rule was created */
+  createdAt: Timestamp;
+
+  /** When this rule was last updated */
+  updatedAt: Timestamp;
+
+  /** Transaction IDs that contributed to learning this rule (positive examples) */
+  sourceTransactionIds: string[];
+
+  /** Transaction IDs that were manually removed (negative examples) */
+  negativeTransactionIds?: string[];
+}
+
+/**
+ * Record of a transaction that was manually removed from a category assignment.
+ * Stored on the partner, used as negative training signal for category pattern learning.
+ * Different from ManualRemoval (which is for partner matching, not category matching).
+ */
+export interface PartnerCategoryManualRemoval {
+  /** ID of the transaction that was removed */
+  transactionId: string;
+
+  /** Category ID it was removed from */
+  categoryId: string;
+
+  /** When the removal happened */
+  removedAt: Timestamp;
+
+  /** Snapshot of transaction's partner field (for pattern learning) */
+  partner: string | null;
+
+  /** Snapshot of transaction's name field (for pattern learning) */
+  name: string;
+
+  /** Snapshot of transaction's reference field (for pattern learning) */
+  reference: string | null;
 }

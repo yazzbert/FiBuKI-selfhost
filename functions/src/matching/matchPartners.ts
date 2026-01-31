@@ -8,6 +8,50 @@ import {
 } from "../utils/partner-matcher";
 import { matchCategoriesForTransactions } from "./matchCategories";
 import { createLocalPartnerFromGlobal } from "./createLocalPartnerFromGlobal";
+import { AutomationMeta } from "../automation/types";
+
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+
+export const AUTOMATION_META: AutomationMeta = {
+  id: "matchPartners",
+  name: "Match Partners (Manual)",
+  description:
+    "Manually triggered partner matching for transactions. Matches by IBAN, name, and aliases; queues agentic search for uncertain matches.",
+  trigger: {
+    type: "callable",
+    regions: ["europe-west1"],
+  },
+  effects: [
+    {
+      entity: "transaction",
+      fields: [
+        "partnerId",
+        "partnerType",
+        "partnerMatchedBy",
+        "partnerMatchConfidence",
+        "partnerSuggestions",
+      ],
+      action: "update",
+    },
+    {
+      entity: "workerRequest",
+      fields: ["workerType", "initialPrompt", "triggerContext"],
+      action: "create",
+    },
+  ],
+  config: {
+    autoMatchThreshold: 89,
+    maxSuggestions: 3,
+  },
+  icon: "Search",
+  category: "matching",
+};
+
+// =============================================================================
+// IMPLEMENTATION
+// =============================================================================
 
 const db = getFirestore();
 
@@ -211,6 +255,11 @@ export const matchPartners = onCall<MatchPartnersRequest>(
 
       if (existingPartnerId) {
         // Avoid overriding any existing assignment (manual/suggestion/auto/legacy).
+        continue;
+      }
+
+      // Skip transactions with no-receipt categories (already complete, don't need partner)
+      if (txData.noReceiptCategoryId) {
         continue;
       }
 

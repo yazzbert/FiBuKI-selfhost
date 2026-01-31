@@ -98,13 +98,14 @@ async function extractWithVisionClaude(
   }
 
   // Step 2: Parse with Claude Haiku
-  const extracted = await parseWithClaude(ocrResult.text, config.anthropicApiKey);
+  const parseResult = await parseWithClaude(ocrResult.text, config.anthropicApiKey);
 
   return {
     text: ocrResult.text,
     blocks: ocrResult.blocks,
-    extracted,
+    extracted: parseResult.extracted,
     provider: "vision-claude",
+    usage: parseResult.usage,
   };
 }
 

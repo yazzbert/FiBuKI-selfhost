@@ -6,6 +6,8 @@ import {
   isEligibleForCategoryMatching,
   CategoryData,
   TransactionData,
+  CategoryMatchRule,
+  CategoryMatchOptions,
 } from "../utils/category-matcher";
 
 const db = getFirestore();
@@ -131,6 +133,36 @@ export async function matchCategoriesForUser(
     ? transactionsSnapshot
     : transactionsSnapshot;
 
+  // Collect unique partner IDs from transactions
+  const partnerIds = new Set<string>();
+  for (const txDoc of transactions) {
+    if (!txDoc.exists) continue;
+    const partnerId = txDoc.data()?.partnerId;
+    if (partnerId) {
+      partnerIds.add(partnerId);
+    }
+  }
+
+  // Fetch partner data to get categoryMatchRules
+  const partnerRulesMap = new Map<string, CategoryMatchRule[]>();
+  if (partnerIds.size > 0) {
+    const partnerDocs = await Promise.all(
+      Array.from(partnerIds).slice(0, 100).map((id) =>
+        db.collection("partners").doc(id).get()
+      )
+    );
+
+    for (const partnerDoc of partnerDocs) {
+      if (partnerDoc.exists) {
+        const partnerData = partnerDoc.data();
+        if (partnerData?.categoryMatchRules && partnerData.categoryMatchRules.length > 0) {
+          partnerRulesMap.set(partnerDoc.id, partnerData.categoryMatchRules);
+        }
+      }
+    }
+    console.log(`Loaded category rules for ${partnerRulesMap.size} partners`);
+  }
+
   let processed = 0;
   let autoMatched = 0;
   let withSuggestions = 0;
@@ -157,10 +189,20 @@ export async function matchCategoriesForUser(
       continue;
     }
 
+    // Build options with partner-specific category rules
+    const options: CategoryMatchOptions = {};
+    if (transaction.partnerId) {
+      const partnerRules = partnerRulesMap.get(transaction.partnerId);
+      if (partnerRules) {
+        options.partnerCategoryRules = partnerRules;
+      }
+    }
+
     const matches = matchTransactionToCategories(
       transaction,
       categories,
-      categoryManualRemovals
+      categoryManualRemovals,
+      options
     );
     processed++;
 
@@ -210,6 +252,20 @@ export async function matchCategoriesForUser(
       }
 
       batch.update(txDoc.ref, updates);
+      batchCount++;
+
+      if (batchCount >= 500) {
+        await batch.commit();
+        batch = db.batch();
+        batchCount = 0;
+      }
+    } else {
+      // No matches found - clear any stale suggestions
+      // This handles cases where rules now exclude previously suggested categories
+      batch.update(txDoc.ref, {
+        categorySuggestions: [],
+        updatedAt: FieldValue.serverTimestamp(),
+      });
       batchCount++;
 
       if (batchCount >= 500) {

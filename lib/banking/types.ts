@@ -14,7 +14,7 @@ import { Timestamp } from "firebase/firestore";
 /**
  * Supported banking data providers
  */
-export type BankingProviderId = "gocardless" | "truelayer" | "plaid";
+export type BankingProviderId = "gocardless" | "truelayer" | "plaid" | "finapi";
 
 /**
  * Provider metadata for UI display
@@ -217,7 +217,7 @@ export interface TrueLayerBankingConfig extends BaseBankingConfig {
 }
 
 /**
- * Plaid-specific configuration (future)
+ * Plaid-specific configuration
  */
 export interface PlaidBankingConfig extends BaseBankingConfig {
   provider: "plaid";
@@ -225,6 +225,25 @@ export interface PlaidBankingConfig extends BaseBankingConfig {
   accessToken: string;
   /** Plaid item ID */
   itemId: string;
+  /** Cursor for /transactions/sync incremental updates */
+  syncCursor?: string;
+}
+
+/**
+ * finAPI-specific configuration
+ */
+export interface FinapiBankingConfig extends BaseBankingConfig {
+  provider: "finapi";
+  /** finAPI bank connection ID */
+  bankConnectionId: number;
+  /** finAPI user access token */
+  userAccessToken: string;
+  /** finAPI user refresh token */
+  userRefreshToken: string;
+  /** When user access token expires */
+  tokenExpiresAt: Timestamp;
+  /** finAPI user ID (auto-created per our user) */
+  finapiUserId: string;
 }
 
 /**
@@ -233,7 +252,8 @@ export interface PlaidBankingConfig extends BaseBankingConfig {
 export type BankingConfig =
   | GoCardlessBankingConfig
   | TrueLayerBankingConfig
-  | PlaidBankingConfig;
+  | PlaidBankingConfig
+  | FinapiBankingConfig;
 
 // =========================================
 // SYNC RESULTS

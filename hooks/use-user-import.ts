@@ -140,7 +140,10 @@ export function useUserImport() {
 
   // Execute the import
   const executeImport = useCallback(async (): Promise<boolean> => {
-    if (!currentImportId && !uploadPath) {
+    // Use currentImportId from local state, or fall back to activeImport's id (for page refresh)
+    const importId = currentImportId || activeImport?.id;
+
+    if (!importId && !uploadPath) {
       setError(new Error("No import to execute"));
       return false;
     }
@@ -152,7 +155,7 @@ export function useUserImport() {
       const result = await callFunction<ExecuteUserImportRequest, ExecuteUserImportResponse>(
         "executeUserImport",
         {
-          importId: currentImportId || "",
+          importId: importId || "",
           confirmWipe: true,
         }
       );
@@ -174,7 +177,7 @@ export function useUserImport() {
     } finally {
       setImporting(false);
     }
-  }, [currentImportId, uploadPath]);
+  }, [currentImportId, uploadPath, activeImport]);
 
   // Cancel/reset the import process
   const cancelImport = useCallback(() => {

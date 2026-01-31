@@ -92,6 +92,30 @@ async function matchCategoriesForUser(userId, transactionIds, matchAll) {
     const transactions = Array.isArray(transactionsSnapshot)
         ? transactionsSnapshot
         : transactionsSnapshot;
+    // Collect unique partner IDs from transactions
+    const partnerIds = new Set();
+    for (const txDoc of transactions) {
+        if (!txDoc.exists)
+            continue;
+        const partnerId = txDoc.data()?.partnerId;
+        if (partnerId) {
+            partnerIds.add(partnerId);
+        }
+    }
+    // Fetch partner data to get categoryMatchRules
+    const partnerRulesMap = new Map();
+    if (partnerIds.size > 0) {
+        const partnerDocs = await Promise.all(Array.from(partnerIds).slice(0, 100).map((id) => db.collection("partners").doc(id).get()));
+        for (const partnerDoc of partnerDocs) {
+            if (partnerDoc.exists) {
+                const partnerData = partnerDoc.data();
+                if (partnerData?.categoryMatchRules && partnerData.categoryMatchRules.length > 0) {
+                    partnerRulesMap.set(partnerDoc.id, partnerData.categoryMatchRules);
+                }
+            }
+        }
+        console.log(`Loaded category rules for ${partnerRulesMap.size} partners`);
+    }
     let processed = 0;
     let autoMatched = 0;
     let withSuggestions = 0;
@@ -114,7 +138,15 @@ async function matchCategoriesForUser(userId, transactionIds, matchAll) {
         if (!(0, category_matcher_1.isEligibleForCategoryMatching)(transaction)) {
             continue;
         }
-        const matches = (0, category_matcher_1.matchTransactionToCategories)(transaction, categories, categoryManualRemovals);
+        // Build options with partner-specific category rules
+        const options = {};
+        if (transaction.partnerId) {
+            const partnerRules = partnerRulesMap.get(transaction.partnerId);
+            if (partnerRules) {
+                options.partnerCategoryRules = partnerRules;
+            }
+        }
+        const matches = (0, category_matcher_1.matchTransactionToCategories)(transaction, categories, categoryManualRemovals, options);
         processed++;
         if (matches.length > 0) {
             const topMatch = matches[0];
@@ -155,6 +187,20 @@ async function matchCategoriesForUser(userId, transactionIds, matchAll) {
                 withSuggestions++;
             }
             batch.update(txDoc.ref, updates);
+            batchCount++;
+            if (batchCount >= 500) {
+                await batch.commit();
+                batch = db.batch();
+                batchCount = 0;
+            }
+        }
+        else {
+            // No matches found - clear any stale suggestions
+            // This handles cases where rules now exclude previously suggested categories
+            batch.update(txDoc.ref, {
+                categorySuggestions: [],
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
             batchCount++;
             if (batchCount >= 500) {
                 await batch.commit();

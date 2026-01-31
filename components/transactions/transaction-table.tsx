@@ -9,13 +9,11 @@ import { useSources } from "@/hooks/use-sources";
 import { useNoReceiptCategories } from "@/hooks/use-no-receipt-categories";
 import { useFiles } from "@/hooks/use-files";
 import { useFilteredTransactions } from "@/hooks/use-filtered-transactions";
-import { useAutomations } from "@/hooks/use-automations";
 import { parseFiltersFromUrl, buildFilterUrl } from "@/lib/filters/url-params";
 // Category suggestions come from transaction.categorySuggestions (computed on backend)
 import { DataTable, DataTableHandle } from "./data-table";
 import { getTransactionColumns } from "./transaction-columns";
 import { TransactionToolbar } from "./transaction-toolbar";
-import { AutomationDialog } from "@/components/automations";
 import { TableEmptyState, emptyStatePresets } from "@/components/ui/table-empty-state";
 import { Transaction, TransactionFilters } from "@/types/transaction";
 import { UserPartner, GlobalPartner } from "@/types/partner";
@@ -49,12 +47,6 @@ export function TransactionTable({
   const { sources } = useSources();
   const { categories } = useNoReceiptCategories();
   const { files } = useFiles();
-  const {
-    openPipelineId,
-    openAutomationDialog,
-    closeAutomationDialog,
-    integrationStatuses,
-  } = useAutomations();
   const { searchingTransactions } = usePrecisionSearchContext();
 
   // Internal ref for DataTable, use external if provided
@@ -85,13 +77,14 @@ export function TransactionTable({
     searchValue
   );
 
-  // Calculate assigned count (transactions with files or no-receipt category)
-  const { assignedCount, totalCount } = useMemo(() => {
+  // Calculate assigned count and sum of amounts
+  const { assignedCount, totalCount, filteredSum } = useMemo(() => {
     const total = filteredTransactions.length;
     const assigned = filteredTransactions.filter(
       (tx) => (tx.fileIds && tx.fileIds.length > 0) || tx.noReceiptCategoryId
     ).length;
-    return { assignedCount: assigned, totalCount: total };
+    const sum = filteredTransactions.reduce((acc, tx) => acc + (tx.amount || 0), 0);
+    return { assignedCount: assigned, totalCount: total, filteredSum: sum };
   }, [filteredTransactions]);
 
   // Scroll to and highlight a transaction by ID (uses virtualizer for off-screen items)
@@ -249,10 +242,9 @@ export function TransactionTable({
       categories,
       categorySuggestions,
       fileAmountsMap,
-      openAutomationDialog,
       searchingTransactions
     ),
-    [sources, userPartners, globalPartners, categories, categorySuggestions, fileAmountsMap, openAutomationDialog, searchingTransactions]
+    [sources, userPartners, globalPartners, categories, categorySuggestions, fileAmountsMap, searchingTransactions]
   );
 
   const handleRowClick = (transaction: Transaction) => {
@@ -318,6 +310,7 @@ export function TransactionTable({
         userPartners={userPartners}
         assignedCount={assignedCount}
         totalCount={totalCount}
+        filteredSum={filteredSum}
       />
 
       {/* Scrollable table area */}
@@ -335,15 +328,6 @@ export function TransactionTable({
         </TooltipProvider>
       </div>
 
-      {/* Automation Dialog */}
-      {openPipelineId && (
-        <AutomationDialog
-          open={true}
-          onClose={closeAutomationDialog}
-          pipelineId={openPipelineId}
-          integrationStatuses={integrationStatuses}
-        />
-      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.lookupByVatId = exports.lookupCompany = void 0;
+exports.lookupByVatId = exports.lookupCompany = exports.AUTOMATION_META_VAT = exports.AUTOMATION_META_LOOKUP = void 0;
 exports.createVertexAI = createVertexAI;
 exports.searchByName = searchByName;
 exports.parseVatId = parseVatId;
@@ -10,6 +10,37 @@ const https_1 = require("firebase-functions/v2/https");
 const vertexai_1 = require("@google-cloud/vertexai");
 const firestore_1 = require("firebase-admin/firestore");
 const ai_usage_logger_1 = require("../utils/ai-usage-logger");
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+exports.AUTOMATION_META_LOOKUP = {
+    id: "lookupCompany",
+    name: "AI Company Lookup",
+    description: "Uses Gemini AI to search the web for company information by URL or name, extracting VAT IDs, addresses, and aliases",
+    trigger: {
+        type: "callable",
+        regions: ["europe-west1"],
+    },
+    effects: [], // Read-only - returns lookup results
+    icon: "Sparkles",
+    category: "search",
+    aiPowered: true,
+};
+exports.AUTOMATION_META_VAT = {
+    id: "lookupByVatId",
+    name: "VAT Registry Lookup",
+    description: "Validates VAT IDs via VIES (EU VAT registry) and returns company details with caching",
+    trigger: {
+        type: "callable",
+        regions: ["europe-west1"],
+    },
+    effects: [], // Read-only with caching
+    icon: "Globe",
+    category: "search",
+};
+// =============================================================================
+// IMPLEMENTATION
+// =============================================================================
 const db = (0, firestore_1.getFirestore)();
 // VIES cache settings
 const VIES_CACHE_COLLECTION = "viesCache";

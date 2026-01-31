@@ -29,6 +29,9 @@ import {
 import { useBrowserExtensionStatus } from "@/hooks/use-browser-extension";
 import { useEmailInbound } from "@/hooks/use-email-inbound";
 import { EmailIntegration } from "@/types/email-integration";
+import { SettingsPageHeader } from "@/components/ui/settings-page-header";
+import { BmdExportSection } from "@/components/settings/bmd-export-section";
+import { FinanzOnlineIntegrationCard } from "@/components/settings/finanzonline-integration-card";
 
 function IntegrationsContent() {
   const router = useRouter();
@@ -87,12 +90,11 @@ function IntegrationsContent() {
   return (
     <div className="h-full overflow-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Integrations</h1>
-          <p className="text-muted-foreground mt-1">
-            Connect external services to automatically find and match invoices
-          </p>
-        </div>
+        <SettingsPageHeader
+          title="Integrations"
+          description="Connect external services to automatically find and match invoices"
+          className="mb-0"
+        />
 
         {error && (
           <Alert variant="destructive">
@@ -317,6 +319,12 @@ function IntegrationsContent() {
             )}
           </CardContent>
         </Card>
+
+        {/* BMD NTCS Export Section */}
+        <BmdExportSection />
+
+        {/* FinanzOnline WebService Section */}
+        <FinanzOnlineIntegrationCard />
 
         {/* Coming Soon Section */}
         <Card className="opacity-60">

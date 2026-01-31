@@ -108,6 +108,7 @@ interface FieldRowProps {
 /**
  * Consistent field row layout - left label, right value.
  * Provides uniform styling for field displays across detail panels.
+ * Uses container queries to stack vertically when panel is narrow (<340px).
  */
 export function FieldRow({
   label,
@@ -117,17 +118,17 @@ export function FieldRow({
   labelWidth = "w-24",
 }: FieldRowProps) {
   return (
-    <div className={cn("flex items-baseline gap-3 py-1.5", className)}>
+    <div className={cn("flex items-baseline gap-3 py-1.5 field-row-responsive", className)}>
       <span
         className={cn(
-          "text-sm text-muted-foreground shrink-0 flex items-center gap-1.5",
+          "text-sm text-muted-foreground shrink-0 flex items-center gap-1.5 field-row-label",
           labelWidth
         )}
       >
         {icon}
         {label}
       </span>
-      <span className="text-sm flex-1 min-w-0">{children}</span>
+      <span className="text-sm flex-1 min-w-0 field-row-value">{children}</span>
     </div>
   );
 }

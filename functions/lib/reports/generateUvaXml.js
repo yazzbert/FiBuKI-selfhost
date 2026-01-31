@@ -7,6 +7,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateUvaXmlCallable = void 0;
+exports.generateUvaXml = generateUvaXml;
 const createCallable_1 = require("../utils/createCallable");
 /**
  * Format amount for XML (cents to euros with 2 decimal places)
@@ -51,6 +52,7 @@ function xmlElement(tag, value) {
 }
 /**
  * Generate UVA XML in FinanzOnline format
+ * Exported for use by submitUvaToFinanzOnline callable
  */
 function generateUvaXml(report, period, taxNumber) {
     const now = new Date();

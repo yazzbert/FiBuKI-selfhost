@@ -14,35 +14,12 @@ import {
 import { Building2, Search, Loader2, ArrowLeft } from "lucide-react";
 import { useInstitutions, filterInstitutions, Institution, BankingProvider } from "@/hooks/use-institutions";
 
-// Common European countries for bank connections
-// Note: TrueLayer uses "uk" not "GB" for United Kingdom
+// Countries supported by finAPI (DACH region)
+// Sandbox test banks are available under Germany
 const COUNTRIES = [
-  { code: "uk", name: "United Kingdom (Sandbox)" },
+  { code: "DE", name: "Germany", description: "Includes finAPI test banks for sandbox" },
   { code: "AT", name: "Austria" },
-  { code: "DE", name: "Germany" },
   { code: "CH", name: "Switzerland" },
-  { code: "NL", name: "Netherlands" },
-  { code: "BE", name: "Belgium" },
-  { code: "FR", name: "France" },
-  { code: "IT", name: "Italy" },
-  { code: "ES", name: "Spain" },
-  { code: "IE", name: "Ireland" },
-  { code: "PT", name: "Portugal" },
-  { code: "PL", name: "Poland" },
-  { code: "CZ", name: "Czech Republic" },
-  { code: "SK", name: "Slovakia" },
-  { code: "HU", name: "Hungary" },
-  { code: "RO", name: "Romania" },
-  { code: "BG", name: "Bulgaria" },
-  { code: "HR", name: "Croatia" },
-  { code: "SI", name: "Slovenia" },
-  { code: "SE", name: "Sweden" },
-  { code: "NO", name: "Norway" },
-  { code: "DK", name: "Denmark" },
-  { code: "FI", name: "Finland" },
-  { code: "EE", name: "Estonia" },
-  { code: "LV", name: "Latvia" },
-  { code: "LT", name: "Lithuania" },
 ];
 
 interface BankSelectorProps {
@@ -92,7 +69,14 @@ export function BankSelector({
           <SelectContent>
             {COUNTRIES.map((country) => (
               <SelectItem key={country.code} value={country.code}>
-                {country.name}
+                <div>
+                  <span>{country.name}</span>
+                  {country.description && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      ({country.description})
+                    </span>
+                  )}
+                </div>
               </SelectItem>
             ))}
           </SelectContent>
@@ -215,10 +199,11 @@ function BankCard({ institution, onClick, disabled }: BankCardProps) {
 }
 
 function ProviderBadge({ providerId }: { providerId: string }) {
-  const providerInfo: Record<string, { name: string; color: string }> = {
-    gocardless: { name: "GC", color: "bg-emerald-100 text-emerald-700" },
-    truelayer: { name: "TL", color: "bg-blue-100 text-blue-700" },
-    plaid: { name: "PL", color: "bg-purple-100 text-purple-700" },
+  const providerInfo: Record<string, { name: string; color: string; fullName: string }> = {
+    finapi: { name: "fA", color: "bg-orange-100 text-orange-700", fullName: "finAPI" },
+    gocardless: { name: "GC", color: "bg-emerald-100 text-emerald-700", fullName: "GoCardless" },
+    truelayer: { name: "TL", color: "bg-blue-100 text-blue-700", fullName: "TrueLayer" },
+    plaid: { name: "PL", color: "bg-purple-100 text-purple-700", fullName: "Plaid" },
   };
 
   const info = providerInfo[providerId];
@@ -227,7 +212,7 @@ function ProviderBadge({ providerId }: { providerId: string }) {
   return (
     <span
       className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${info.color}`}
-      title={`via ${providerId === "gocardless" ? "GoCardless" : providerId === "truelayer" ? "TrueLayer" : "Plaid"}`}
+      title={`via ${info.fullName}`}
     >
       {info.name}
     </span>

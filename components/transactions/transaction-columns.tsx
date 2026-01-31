@@ -3,7 +3,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { format } from "date-fns";
 import {
-  FileText,
   Tag,
   Loader2,
 } from "lucide-react";
@@ -11,18 +10,17 @@ import { Transaction } from "@/types/transaction";
 import { TransactionSource } from "@/types/source";
 import { UserPartner, GlobalPartner } from "@/types/partner";
 import { UserNoReceiptCategory, CategorySuggestion } from "@/types/no-receipt-category";
-import { PipelineId } from "@/types/automation";
 import { getCategoryTemplate } from "@/lib/data/no-receipt-category-templates";
 import { Pill } from "@/components/ui/pill";
 import { AmountMatchDisplay } from "@/components/ui/amount-match-display";
-import { SortableHeader, AutomationHeader } from "@/components/ui/data-table";
+import { SortableHeader } from "@/components/ui/data-table";
 import { PartnerPill } from "@/components/partners/partner-pill";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, toDateSafe } from "@/lib/utils";
 
 export interface FileAmountData {
   totalAmount: number;
@@ -39,7 +37,6 @@ export interface TransactionColumnOptions {
   categorySuggestions?: Map<string, CategorySuggestion>;
   fileAmountsMap?: Map<string, FileAmountData>;
   searchingTransactionIds?: Set<string>;
-  onAutomationClick?: (pipelineId: PipelineId) => void;
 }
 
 export function getTransactionColumns(
@@ -49,7 +46,6 @@ export function getTransactionColumns(
   categories: UserNoReceiptCategory[] = [],
   categorySuggestions?: Map<string, CategorySuggestion>,
   fileAmountsMap?: Map<string, FileAmountData>,
-  onAutomationClick?: (pipelineId: PipelineId) => void,
   searchingTransactionIds?: Set<string>
 ): ColumnDef<Transaction>[] {
   const sourceMap = new Map(sources.map((s) => [s.id, s]));
@@ -65,8 +61,13 @@ export function getTransactionColumns(
         <SortableHeader column={column}>Date</SortableHeader>
       ),
       cell: ({ row }) => {
-        const date = row.getValue("date") as { toDate: () => Date };
-        const dateObj = date.toDate();
+        const date = row.getValue("date");
+        const dateObj = toDateSafe(date);
+
+        if (!dateObj) {
+          return <span className="text-sm text-muted-foreground">—</span>;
+        }
+
         const timeStr = format(dateObj, "HH:mm");
         const showTime = timeStr !== "00:00";
         return (
@@ -122,16 +123,7 @@ export function getTransactionColumns(
     },
     {
       id: "assignedPartner",
-      header: () =>
-        onAutomationClick ? (
-          <AutomationHeader
-            label="Partner"
-            pipelineId="find-partner"
-            onAutomationClick={onAutomationClick}
-          />
-        ) : (
-          "Partner"
-        ),
+      header: "Partner",
       cell: ({ row }) => {
         const { partnerId, partnerType, partnerMatchConfidence, id: txId } = row.original;
 
@@ -184,16 +176,7 @@ export function getTransactionColumns(
     },
     {
       id: "file",
-      header: () =>
-        onAutomationClick ? (
-          <AutomationHeader
-            label="File"
-            pipelineId="find-file"
-            onAutomationClick={onAutomationClick}
-          />
-        ) : (
-          "File"
-        ),
+      header: "File",
       cell: ({ row }) => {
         const fileCount = row.original.fileIds?.length || 0;
         const hasFile = fileCount > 0;

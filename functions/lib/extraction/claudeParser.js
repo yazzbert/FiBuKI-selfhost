@@ -64,6 +64,11 @@ Example response:
             },
         ],
     });
+    const usage = {
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        model: "claude-3-haiku-20240307",
+    };
     // Extract text content from response
     const textContent = response.content.find((c) => c.type === "text");
     if (!textContent || textContent.type !== "text") {
@@ -83,21 +88,24 @@ Example response:
     jsonStr = jsonStr.trim();
     const parsed = JSON.parse(jsonStr);
     return {
-        date: parsed.date || null,
-        amount: typeof parsed.amount === "number" ? parsed.amount : null,
-        currency: parsed.currency || null,
-        vatPercent: typeof parsed.vatPercent === "number" ? parsed.vatPercent : null,
-        partner: parsed.partner || null,
-        vatId: parsed.vatId || null,
-        iban: parsed.iban || null,
-        address: parsed.address || null,
-        website: null, // Claude parser doesn't extract website (legacy)
-        confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
-        fieldSpans: parsed.fieldSpans || {},
-        // Legacy Claude parser doesn't extract entities - set to null
-        // The extractionCore will handle these as null and fall back to legacy partner field
-        issuer: null,
-        recipient: null,
+        extracted: {
+            date: parsed.date || null,
+            amount: typeof parsed.amount === "number" ? parsed.amount : null,
+            currency: parsed.currency || null,
+            vatPercent: typeof parsed.vatPercent === "number" ? parsed.vatPercent : null,
+            partner: parsed.partner || null,
+            vatId: parsed.vatId || null,
+            iban: parsed.iban || null,
+            address: parsed.address || null,
+            website: null, // Claude parser doesn't extract website (legacy)
+            confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
+            fieldSpans: parsed.fieldSpans || {},
+            // Legacy Claude parser doesn't extract entities - set to null
+            // The extractionCore will handle these as null and fall back to legacy partner field
+            issuer: null,
+            recipient: null,
+        },
+        usage,
     };
 }
 //# sourceMappingURL=claudeParser.js.map

@@ -8,6 +8,7 @@ export { onPartnerCreate } from "./matching/onPartnerCreate";
 export { onPartnerUpdate } from "./matching/onPartnerUpdate";
 export { matchPartners } from "./matching/matchPartners";
 export { learnPartnerPatterns } from "./matching/learnPartnerPatterns";
+export { learnPartnerCategoryPatterns } from "./matching/learnPartnerCategoryPatterns";
 export { searchExternalPartners } from "./matching/searchExternalPartners";
 
 // Export category matching functions
@@ -16,8 +17,8 @@ export { onCategoryCreate } from "./matching/onCategoryCreate";
 export { onCategoryUpdate } from "./matching/onCategoryUpdate";
 export { onTransactionUpdate } from "./matching/onTransactionUpdate";
 
-// Export user data update trigger (re-calculates file counterparties)
-export { onUserDataUpdate } from "./matching/onUserDataUpdate";
+// Export user data update/create triggers (re-calculates file counterparties & syncs identity partners)
+export { onUserDataUpdate, onUserDataCreated } from "./matching/onUserDataUpdate";
 
 // Export learning queue functions
 export {
@@ -65,8 +66,9 @@ export {
   onSyncQueueCreated,
 } from "./gmail/gmailSyncQueue";
 export { scheduledGmailSync } from "./gmail/scheduledGmailSync";
-export { onGmailConnected, onGmailReconnected } from "./gmail/onGmailConnected";
+export { onMailServiceConnected, onMailServiceReconnected } from "./gmail/onMailServiceConnected";
 export { onTransactionsImported } from "./gmail/onTransactionsImported";
+export { onTransactionsImportedCompanyCheck } from "./matching/onTransactionsImportedCompanyCheck";
 export { searchGmailCallable } from "./gmail/searchGmailCallable";
 
 // Export precision search functions
@@ -187,3 +189,31 @@ export {
   executeUserImportCallable as executeUserImport,
   processUserImportOnUpdate,
 } from "./user-import";
+
+// BMD NTCS export operations
+export {
+  requestBmdExportCallable as requestBmdExport,
+  processBmdExportOnCreate,
+} from "./bmd-export";
+
+// FinanzOnline WebService operations
+export {
+  saveFinanzOnlineCredentialsCallable as saveFinanzOnlineCredentials,
+  testFinanzOnlineConnectionCallable as testFinanzOnlineConnection,
+  deleteFinanzOnlineCredentialsCallable as deleteFinanzOnlineCredentials,
+} from "./finanzonline/credentialCallables";
+export { submitUvaToFinanzOnlineCallable as submitUvaToFinanzOnline } from "./finanzonline/submitUvaCallable";
+
+// finAPI banking integration (legacy - use syncBankTransactions instead)
+export { syncFinapiTransactions } from "./finapi/syncCallable";
+
+// Banking operations (new - with orphan handling and full deduplication)
+export {
+  syncBankTransactionsCallable as syncBankTransactions,
+  cleanupOrphanedTransactionsCallable as cleanupOrphanedTransactions,
+  createBankingConnectionCallable as createBankingConnection,
+  updateBankingConnectionCallable as updateBankingConnection,
+  deleteBankingConnectionCallable as deleteBankingConnection,
+  createApiSourceCallable as createApiSource,
+  updateSourceApiConfigCallable as updateSourceApiConfig,
+} from "./banking";

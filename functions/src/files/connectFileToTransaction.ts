@@ -7,6 +7,7 @@ import { createCallable, HttpsError } from "../utils/createCallable";
 import {
   cancelFileWorkersForTransaction,
   cancelTransactionWorkersForFile,
+  cancelPrecisionSearchForTransaction,
 } from "../utils/cancelWorkers";
 
 interface FileConnectionSourceInfo {
@@ -104,6 +105,10 @@ export const connectFileToTransactionCallable = createCallable<
       // Cancel transaction matching workers for this file
       cancelTransactionWorkersForFile(ctx.userId, fileId).catch((err) => {
         console.error("[connectFileToTransaction] Failed to cancel file workers:", err);
+      });
+      // Cancel precision search queue for this transaction
+      cancelPrecisionSearchForTransaction(ctx.userId, transactionId).catch((err) => {
+        console.error("[connectFileToTransaction] Failed to cancel precision search:", err);
       });
     }
 

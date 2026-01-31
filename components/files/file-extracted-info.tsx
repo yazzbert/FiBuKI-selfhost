@@ -10,7 +10,7 @@ import { EditableExtractedFields, EditableAdditionalField } from "@/lib/operatio
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { cn, toDateSafe } from "@/lib/utils";
 import { convertCurrency } from "@/lib/currency";
 import {
   Tooltip,
@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/tooltip";
 
 // Consistent field row component (matching transaction-details.tsx)
+// Uses container queries to stack vertically when panel is narrow (<340px)
 function FieldRow({
   label,
   children,
@@ -45,26 +46,26 @@ function FieldRow({
   const isClickable = onClick && searchText && !isEditing;
 
   return (
-    <div className={cn("flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4", className)}>
-      <span className="text-sm text-muted-foreground shrink-0 sm:w-28">{label}</span>
+    <div className={cn("flex items-baseline gap-4 field-row-responsive", className)}>
+      <span className="text-sm text-muted-foreground shrink-0 w-28 field-row-label">{label}</span>
       {isEditing && onEditChange ? (
         <Input
           type={inputType}
           value={editValue ?? ""}
           onChange={(e) => onEditChange(e.target.value)}
-          className="h-8 text-sm flex-1"
+          className="h-8 text-sm flex-1 field-row-value"
           placeholder={placeholder}
         />
       ) : isClickable ? (
         <button
           onClick={() => onClick(searchText)}
-          className="text-sm text-left hover:text-primary hover:underline underline-offset-2 flex items-center gap-1 group"
+          className="text-sm text-left hover:text-primary hover:underline underline-offset-2 flex items-center gap-1 group field-row-value"
         >
           {children}
           <Search className="h-3 w-3 opacity-0 group-hover:opacity-50 transition-opacity" />
         </button>
       ) : (
-        <span className="text-sm">{children}</span>
+        <span className="text-sm field-row-value">{children}</span>
       )}
     </div>
   );
@@ -107,8 +108,9 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
       value: f.value,
     }));
 
+    const extractedDate = toDateSafe(file.extractedDate);
     setEditedFields({
-      date: file.extractedDate ? format(file.extractedDate.toDate(), "yyyy-MM-dd") : "",
+      date: extractedDate ? format(extractedDate, "yyyy-MM-dd") : "",
       amount: file.extractedAmount != null ? (file.extractedAmount / 100).toString() : "",
       vatPercent: file.extractedVatPercent != null ? file.extractedVatPercent.toString() : "",
       partner: file.extractedPartner || "",
@@ -319,8 +321,8 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
             onEditChange={updateField("date")}
             inputType="date"
           >
-            {file.extractedDate
-              ? format(file.extractedDate.toDate(), "MMM d, yyyy")
+            {toDateSafe(file.extractedDate)
+              ? format(toDateSafe(file.extractedDate)!, "MMM d, yyyy")
               : "—"}
           </FieldRow>
 
@@ -340,7 +342,7 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
                 file.extractedAmount,
                 file.extractedCurrency,
                 file.invoiceDirection,
-                file.extractedDate?.toDate()
+                toDateSafe(file.extractedDate) ?? undefined
               );
 
               const amountDisplay = (

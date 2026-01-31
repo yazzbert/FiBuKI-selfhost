@@ -57,6 +57,10 @@ exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)(
         (0, cancelWorkers_1.cancelTransactionWorkersForFile)(ctx.userId, fileId).catch((err) => {
             console.error("[connectFileToTransaction] Failed to cancel file workers:", err);
         });
+        // Cancel precision search queue for this transaction
+        (0, cancelWorkers_1.cancelPrecisionSearchForTransaction)(ctx.userId, transactionId).catch((err) => {
+            console.error("[connectFileToTransaction] Failed to cancel precision search:", err);
+        });
     }
     const now = firestore_1.Timestamp.now();
     const batch = ctx.db.batch();

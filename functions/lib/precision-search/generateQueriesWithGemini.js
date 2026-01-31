@@ -8,6 +8,7 @@ exports.generateTypedQueriesWithGemini = generateTypedQueriesWithGemini;
 exports.generateQueriesWithGemini = generateQueriesWithGemini;
 const vertexai_1 = require("@google-cloud/vertexai");
 const generateSearchQueries_1 = require("./generateSearchQueries");
+const ai_usage_logger_1 = require("../utils/ai-usage-logger");
 // Using Flash-Lite for speed and low cost
 const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || "europe-west1";
@@ -70,7 +71,7 @@ function isValidQuery(query) {
  * Generate typed search queries using Gemini
  * Returns suggestions in Gemini's recommended order (best first)
  */
-async function generateTypedQueriesWithGemini(transaction, partnerData, maxQueries = 5) {
+async function generateTypedQueriesWithGemini(transaction, partnerData, maxQueries = 5, userId) {
     // Get deterministic suggestions as fallback
     const txData = {
         name: transaction.name,
@@ -120,6 +121,18 @@ Return ONLY valid JSON:
         const result = await model.generateContent({
             contents: [{ role: "user", parts: [{ text: prompt }] }],
         });
+        // Log AI usage for search query generation
+        const usageMetadata = result.response.usageMetadata;
+        if (userId && usageMetadata) {
+            (0, ai_usage_logger_1.logAIUsage)(userId, {
+                function: "searchQueryGeneration",
+                model: GEMINI_MODEL,
+                inputTokens: usageMetadata.promptTokenCount || 0,
+                outputTokens: usageMetadata.candidatesTokenCount || 0,
+            }).catch((err) => {
+                console.error("[generateTypedQueriesWithGemini] Failed to log AI usage:", err);
+            });
+        }
         const text = result.response.candidates?.[0]?.content?.parts?.[0]?.text || "";
         const cleanedText = fixLlmJson(text);
         const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
@@ -177,8 +190,8 @@ Return ONLY valid JSON:
 /**
  * Legacy function - returns just query strings for backward compatibility
  */
-async function generateQueriesWithGemini(transaction, partnerData, maxQueries = 8) {
-    const typed = await generateTypedQueriesWithGemini(transaction, partnerData, maxQueries);
+async function generateQueriesWithGemini(transaction, partnerData, maxQueries = 8, userId) {
+    const typed = await generateTypedQueriesWithGemini(transaction, partnerData, maxQueries, userId);
     return typed.map((s) => s.query);
 }
 //# sourceMappingURL=generateQueriesWithGemini.js.map

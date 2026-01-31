@@ -2,15 +2,19 @@
 /**
  * Server-side no-receipt category matching utilities
  *
- * Categories match ONLY by partner - patterns are learned on partners, not categories.
- * When a transaction has a partnerId that's in the category's matchedPartnerIds,
- * the category is suggested.
+ * Category matching priority:
+ * 1. Partner category rules (pattern-based): Check if partner has specific rules for this category
+ * 2. Legacy partner match: Fall back to matchedPartnerIds if no rules exist
+ *
+ * Partner category rules allow conditional matching based on transaction text patterns.
+ * E.g., "Google Ireland" -> "Private" only when "*youtubepremium*" matches.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CATEGORY_MATCH_CONFIG = void 0;
 exports.matchTransactionToCategories = matchTransactionToCategories;
 exports.shouldAutoApplyCategory = shouldAutoApplyCategory;
 exports.isEligibleForCategoryMatching = isEligibleForCategoryMatching;
+const pattern_utils_1 = require("./pattern-utils");
 // ============ Thresholds ============
 exports.CATEGORY_MATCH_CONFIG = {
     /** Minimum confidence to show as suggestion */
@@ -92,20 +96,66 @@ function partnerHasNoFilePatterns(partnerId, partnerFilePatternCounts) {
  * Match a transaction against a single category.
  * Returns null if no match found above threshold.
  *
- * Categories match ONLY by partner. Confidence boosting:
- * 1. Base confidence: 89% for partner match
- * 2. Usage boost: +0-10 based on category's transactionCount (logarithmic)
- * 3. No-file-patterns boost: +8 if partner has no file source patterns
- * 4. Resolution preference boost: +0-9 if partner typically resolves with no-receipt
+ * Matching priority:
+ * 1. Partner category rules (pattern-based) - if partner has rules for this category
+ * 2. Legacy partner match (matchedPartnerIds) - fallback if no rules exist
+ *
+ * Confidence boosting (applied to both methods):
+ * - Base confidence: 89% for partner match, or rule confidence for pattern match
+ * - Usage boost: +0-10 based on category's transactionCount (logarithmic)
+ * - No-file-patterns boost: +8 if partner has no file source patterns
+ * - Resolution preference boost: +0-9 if partner typically resolves with no-receipt
  */
 function matchSingleCategory(transaction, category, options) {
-    // Categories only match by partner
-    const partnerMatch = transaction.partnerId &&
-        category.matchedPartnerIds.includes(transaction.partnerId);
-    if (!partnerMatch) {
+    if (!transaction.partnerId) {
         return null;
     }
-    let confidence = exports.CATEGORY_MATCH_CONFIG.PARTNER_MATCH_CONFIDENCE;
+    let baseConfidence = null;
+    let matchSource = "partner";
+    // === PRIORITY 1: Check partner category rules ===
+    if (options?.partnerCategoryRules && options.partnerCategoryRules.length > 0) {
+        const rule = options.partnerCategoryRules.find((r) => r.categoryId === category.id);
+        if (rule) {
+            // Partner has explicit rules for this category
+            const txName = transaction.name || null;
+            const txPartner = transaction.partner || null;
+            const txReference = transaction.reference || null;
+            // Check exclude patterns first
+            if (rule.excludePatterns && rule.excludePatterns.length > 0) {
+                const excluded = rule.excludePatterns.some((p) => (0, pattern_utils_1.matchPatternFlexible)(p.toLowerCase(), txName, txPartner, txReference));
+                if (excluded) {
+                    // Transaction explicitly excluded by rule
+                    return null;
+                }
+            }
+            // Check positive patterns
+            if (rule.patterns && rule.patterns.length > 0) {
+                const matched = rule.patterns.some((p) => (0, pattern_utils_1.matchPatternFlexible)(p.toLowerCase(), txName, txPartner, txReference));
+                if (matched) {
+                    baseConfidence = rule.confidence;
+                    matchSource = "partner_rule";
+                }
+                else {
+                    // Has rules for this category but none matched - DO NOT fall back to legacy
+                    // This is intentional: rules are explicit, absence of match means no match
+                    return null;
+                }
+            }
+        }
+    }
+    // === PRIORITY 2: Legacy partner match (only if no rules matched) ===
+    if (baseConfidence === null) {
+        const legacyMatch = category.matchedPartnerIds.includes(transaction.partnerId);
+        if (legacyMatch) {
+            baseConfidence = exports.CATEGORY_MATCH_CONFIG.PARTNER_MATCH_CONFIDENCE;
+            matchSource = "partner";
+        }
+        else {
+            return null;
+        }
+    }
+    // === Apply confidence boosts ===
+    let confidence = baseConfidence;
     // Usage boost: categories used more often rank higher
     const usageBoost = calculateUsageBoost(category.transactionCount);
     confidence += usageBoost;
@@ -130,7 +180,7 @@ function matchSingleCategory(transaction, category, options) {
             categoryId: category.id,
             templateId: category.templateId,
             confidence,
-            source: "partner",
+            source: matchSource,
         };
     }
     return null;

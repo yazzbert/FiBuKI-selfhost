@@ -1,7 +1,22 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.searchExternalPartners = void 0;
+exports.searchExternalPartners = exports.AUTOMATION_META = void 0;
 const https_1 = require("firebase-functions/v2/https");
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+exports.AUTOMATION_META = {
+    id: "searchExternalPartners",
+    name: "Search External Registries",
+    description: "Searches external company registries (Austrian Firmenbuch, EU BRIS) for partner information",
+    trigger: {
+        type: "callable",
+        regions: ["europe-west1"],
+    },
+    effects: [], // Read-only - returns search results
+    icon: "Globe",
+    category: "search",
+};
 /**
  * Search external registries for company information
  *

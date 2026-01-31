@@ -9,8 +9,69 @@
 
 import { createCallable, HttpsError } from "../utils/createCallable";
 import { getFirestore, Timestamp, FieldValue } from "firebase-admin/firestore";
+import { AutomationMeta } from "../automation/types";
+
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+
+export const AUTOMATION_META: AutomationMeta = {
+  id: "runReceiptSearchForTransaction",
+  name: "Precision Receipt Search",
+  description:
+    "Agentic search that finds receipts in Gmail for a transaction using AI-generated queries, file analysis, and smart matching",
+  trigger: {
+    type: "callable",
+    regions: ["europe-west1"],
+  },
+  effects: [
+    {
+      entity: "file",
+      fields: ["transactionIds", "transactionMatchComplete"],
+      action: "update",
+    },
+    {
+      entity: "transaction",
+      fields: ["fileIds"],
+      action: "update",
+    },
+    {
+      entity: "fileConnection",
+      fields: ["fileId", "transactionId", "connectionType", "matchConfidence"],
+      action: "create",
+    },
+    {
+      entity: "workerRequest",
+      fields: ["status", "result", "completedAt"],
+      action: "update",
+    },
+  ],
+  icon: "Bot",
+  category: "search",
+  aiPowered: true,
+};
+
+// =============================================================================
+// IMPLEMENTATION
+// =============================================================================
 
 const db = getFirestore();
+
+/**
+ * Check if user has any active email integration (connected and not needing reauth).
+ * If no email integration exists, receipt search should be skipped entirely.
+ */
+async function hasActiveEmailIntegration(userId: string): Promise<boolean> {
+  const activeIntegrationSnapshot = await db
+    .collection("emailIntegrations")
+    .where("userId", "==", userId)
+    .where("isActive", "==", true)
+    .where("needsReauth", "==", false)
+    .limit(1)
+    .get();
+
+  return !activeIntegrationSnapshot.empty;
+}
 
 // Get the app URL for server-to-server calls
 function getAppUrl(): string {
@@ -242,6 +303,19 @@ export async function queueReceiptSearchForTransaction(
       message: `Receipt search already ran for partner ${partnerId}`,
       skipped: true,
       skipReason: "already_ran",
+    };
+  }
+
+  // Check if user has an active email integration
+  // Skip receipt search if no Gmail is connected - avoids wasting resources
+  const hasEmailIntegration = await hasActiveEmailIntegration(userId);
+  if (!hasEmailIntegration) {
+    console.log(`[QueueReceiptSearch] No active email integration for user ${userId}, skipping receipt search`);
+    return {
+      success: true,
+      message: "No email service connected - receipt search skipped",
+      skipped: true,
+      skipReason: "no_email_integration",
     };
   }
 

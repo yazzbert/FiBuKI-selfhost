@@ -40,8 +40,11 @@ export {
 
 // Import providers for registration
 import { bankingRegistry } from "./registry";
-import { getGoCardlessProvider } from "./providers/gocardless";
-import { getTrueLayerProvider } from "./providers/truelayer";
+import { getFinapiProvider } from "./providers/finapi";
+// Disabled providers:
+// import { getGoCardlessProvider } from "./providers/gocardless";
+// import { getTrueLayerProvider } from "./providers/truelayer";
+// import { getPlaidProvider } from "./providers/plaid";
 
 /**
  * Initialize and register all banking providers
@@ -49,21 +52,18 @@ import { getTrueLayerProvider } from "./providers/truelayer";
  * This should be called once at app startup
  */
 export function initializeBankingProviders(): void {
-  // Register GoCardless
+  // Register finAPI (primary provider for DACH region)
   try {
-    const goCardless = getGoCardlessProvider();
-    bankingRegistry.register(goCardless);
+    const finapi = getFinapiProvider();
+    bankingRegistry.register(finapi);
   } catch (error) {
-    console.warn("[Banking] Failed to initialize GoCardless provider:", error);
+    console.warn("[Banking] Failed to initialize finAPI provider:", error);
   }
 
-  // Register TrueLayer
-  try {
-    const trueLayer = getTrueLayerProvider();
-    bankingRegistry.register(trueLayer);
-  } catch (error) {
-    console.warn("[Banking] Failed to initialize TrueLayer provider:", error);
-  }
+  // Other providers disabled for now:
+  // - GoCardless: signups closed
+  // - TrueLayer: not needed
+  // - Plaid: too expensive
 
   // Log registered providers
   const providers = bankingRegistry.listIds();

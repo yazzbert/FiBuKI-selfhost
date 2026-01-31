@@ -29,6 +29,7 @@ import {
 } from "../ai/lookupCompany";
 import { geminiValidateDomainOwnership } from "../ai/validateDomainOwnership";
 import { AutomationMeta } from "../automation/types";
+import { logAIUsage } from "../utils/ai-usage-logger";
 
 // =============================================================================
 // AUTOMATION METADATA
@@ -719,6 +720,20 @@ Rules:
 - Similar names but different companies = NO match`;
 
     const result = await model.generateContent({ contents: [{ role: "user", parts: [{ text: prompt }] }] });
+
+    // Log AI usage for partner deduplication
+    const usageMetadata = result.response.usageMetadata;
+    if (usageMetadata) {
+      logAIUsage(userId, {
+        function: "partnerDedup",
+        model: "gemini-2.0-flash-lite-001",
+        inputTokens: usageMetadata.promptTokenCount || 0,
+        outputTokens: usageMetadata.candidatesTokenCount || 0,
+      }).catch((err) => {
+        console.error("[PartnerDedup] Failed to log AI usage:", err);
+      });
+    }
+
     const responseText = result.response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
 
     // Parse response

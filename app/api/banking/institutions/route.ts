@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "No banking providers configured. Set GOCARDLESS_* or TRUELAYER_* environment variables.",
+            "No banking providers configured. Set FINAPI_CLIENT_ID and FINAPI_CLIENT_SECRET environment variables.",
         },
         { status: 500 }
       );

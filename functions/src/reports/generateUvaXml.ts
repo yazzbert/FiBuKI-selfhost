@@ -7,13 +7,13 @@
 
 import { createCallable, HttpsError } from "../utils/createCallable";
 
-interface ReportPeriod {
+export interface ReportPeriod {
   year: number;
   period: number;
   type: "monthly" | "quarterly";
 }
 
-interface UVAReportData {
+export interface UVAReportData {
   taxableRevenue: {
     rate20Net: number;
     rate20Vat: number;
@@ -97,8 +97,9 @@ function xmlElement(tag: string, value: string | number): string {
 
 /**
  * Generate UVA XML in FinanzOnline format
+ * Exported for use by submitUvaToFinanzOnline callable
  */
-function generateUvaXml(
+export function generateUvaXml(
   report: UVAReportData,
   period: ReportPeriod,
   taxNumber: string

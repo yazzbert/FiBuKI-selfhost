@@ -6,6 +6,7 @@
  */
 
 import { VertexAI } from "@google-cloud/vertexai";
+import { logAIUsage } from "../utils/ai-usage-logger";
 
 // Using Flash-Lite for maximum speed and lowest cost
 const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
@@ -89,7 +90,8 @@ export async function generateSearchQueries(
     name: string;
     emailDomains?: string[];
     website?: string;
-  }
+  },
+  userId?: string
 ): Promise<SearchQueryResult> {
   const projectId = getProjectId();
   const vertexAI = new VertexAI({ project: projectId, location: VERTEX_LOCATION });
@@ -137,6 +139,18 @@ Return JSON only:
     model: GEMINI_MODEL,
   };
 
+  // Log AI usage
+  if (userId) {
+    logAIUsage(userId, {
+      function: "searchQueryGeneration",
+      model: GEMINI_MODEL,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    }).catch((err) => {
+      console.error("[GeminiSearch] Failed to log AI usage:", err);
+    });
+  }
+
   try {
     // Extract JSON from response and fix common LLM issues
     const cleanedText = fixLlmJson(text);
@@ -171,7 +185,8 @@ export async function analyzeEmailForInvoice(
     name: string;
     partner?: string | null;
     amount: number;
-  }
+  },
+  userId?: string
 ): Promise<EmailAnalysisResult> {
   const projectId = getProjectId();
   const vertexAI = new VertexAI({ project: projectId, location: VERTEX_LOCATION });
@@ -230,6 +245,18 @@ Return JSON only:
     model: GEMINI_MODEL,
   };
 
+  // Log AI usage
+  if (userId) {
+    logAIUsage(userId, {
+      function: "emailAnalysis",
+      model: GEMINI_MODEL,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    }).catch((err) => {
+      console.error("[GeminiSearch] Failed to log AI usage:", err);
+    });
+  }
+
   try {
     const cleanedText = fixLlmJson(text);
     const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
@@ -284,7 +311,8 @@ export async function batchMatchTransactionsToFiles(
     extractedDate?: string;
     extractedPartner?: string;
     fileName: string;
-  }>
+  }>,
+  userId?: string
 ): Promise<BatchMatchResult> {
   const projectId = getProjectId();
   const vertexAI = new VertexAI({ project: projectId, location: VERTEX_LOCATION });
@@ -345,6 +373,18 @@ Return JSON only:
     outputTokens: response.usageMetadata?.candidatesTokenCount || 0,
     model: GEMINI_MODEL,
   };
+
+  // Log AI usage
+  if (userId) {
+    logAIUsage(userId, {
+      function: "batchMatching",
+      model: GEMINI_MODEL,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    }).catch((err) => {
+      console.error("[GeminiSearch] Failed to log AI usage:", err);
+    });
+  }
 
   try {
     const cleanedText = fixLlmJson(text);

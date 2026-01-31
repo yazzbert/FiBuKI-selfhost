@@ -8,11 +8,65 @@
  * This is triggered after a partner is assigned to find matching receipts.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.runReceiptSearchForTransactionCallable = void 0;
+exports.runReceiptSearchForTransactionCallable = exports.AUTOMATION_META = void 0;
 exports.queueReceiptSearchForTransaction = queueReceiptSearchForTransaction;
 const createCallable_1 = require("../utils/createCallable");
 const firestore_1 = require("firebase-admin/firestore");
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+exports.AUTOMATION_META = {
+    id: "runReceiptSearchForTransaction",
+    name: "Precision Receipt Search",
+    description: "Agentic search that finds receipts in Gmail for a transaction using AI-generated queries, file analysis, and smart matching",
+    trigger: {
+        type: "callable",
+        regions: ["europe-west1"],
+    },
+    effects: [
+        {
+            entity: "file",
+            fields: ["transactionIds", "transactionMatchComplete"],
+            action: "update",
+        },
+        {
+            entity: "transaction",
+            fields: ["fileIds"],
+            action: "update",
+        },
+        {
+            entity: "fileConnection",
+            fields: ["fileId", "transactionId", "connectionType", "matchConfidence"],
+            action: "create",
+        },
+        {
+            entity: "workerRequest",
+            fields: ["status", "result", "completedAt"],
+            action: "update",
+        },
+    ],
+    icon: "Bot",
+    category: "search",
+    aiPowered: true,
+};
+// =============================================================================
+// IMPLEMENTATION
+// =============================================================================
 const db = (0, firestore_1.getFirestore)();
+/**
+ * Check if user has any active email integration (connected and not needing reauth).
+ * If no email integration exists, receipt search should be skipped entirely.
+ */
+async function hasActiveEmailIntegration(userId) {
+    const activeIntegrationSnapshot = await db
+        .collection("emailIntegrations")
+        .where("userId", "==", userId)
+        .where("isActive", "==", true)
+        .where("needsReauth", "==", false)
+        .limit(1)
+        .get();
+    return !activeIntegrationSnapshot.empty;
+}
 // Get the app URL for server-to-server calls
 function getAppUrl() {
     // Development: http://localhost:3000
@@ -181,6 +235,18 @@ async function queueReceiptSearchForTransaction(options) {
             message: `Receipt search already ran for partner ${partnerId}`,
             skipped: true,
             skipReason: "already_ran",
+        };
+    }
+    // Check if user has an active email integration
+    // Skip receipt search if no Gmail is connected - avoids wasting resources
+    const hasEmailIntegration = await hasActiveEmailIntegration(userId);
+    if (!hasEmailIntegration) {
+        console.log(`[QueueReceiptSearch] No active email integration for user ${userId}, skipping receipt search`);
+        return {
+            success: true,
+            message: "No email service connected - receipt search skipped",
+            skipped: true,
+            skipReason: "no_email_integration",
         };
     }
     // Build prompt from transaction data

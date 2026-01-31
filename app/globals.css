@@ -183,3 +183,50 @@
   animation: wiggle 0.18s ease-in-out infinite;
   will-change: transform;
 }
+
+/* Container queries for detail panel responsive layout */
+.detail-panel-container {
+  container-type: inline-size;
+}
+
+/* FieldRow vertical layout when panel is narrow (<300px) */
+@container (max-width: 300px) {
+  .field-row-responsive {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 0.25rem !important;
+  }
+
+  .field-row-responsive .field-row-label {
+    width: auto !important;
+  }
+
+  .field-row-responsive .field-row-value {
+    width: 100% !important;
+  }
+
+  /* File detail panel: stack preview above metadata */
+  .file-preview-section {
+    flex-direction: column !important;
+  }
+
+  .file-preview-section .file-preview-thumb {
+    width: 50% !important;
+    margin: 0 auto !important;
+  }
+
+  /* File metadata rows: stack label above value */
+  .file-meta-row {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 0.125rem !important;
+  }
+
+  .file-meta-row .file-meta-label {
+    width: auto !important;
+  }
+
+  .file-meta-row .file-meta-value {
+    text-align: left !important;
+  }
+}

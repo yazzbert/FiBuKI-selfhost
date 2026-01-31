@@ -1,4 +1,27 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { AutomationMeta } from "../automation/types";
+
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+
+export const AUTOMATION_META: AutomationMeta = {
+  id: "searchExternalPartners",
+  name: "Search External Registries",
+  description:
+    "Searches external company registries (Austrian Firmenbuch, EU BRIS) for partner information",
+  trigger: {
+    type: "callable",
+    regions: ["europe-west1"],
+  },
+  effects: [], // Read-only - returns search results
+  icon: "Globe",
+  category: "search",
+};
+
+// =============================================================================
+// TYPES
+// =============================================================================
 
 interface SearchExternalRequest {
   query: string;

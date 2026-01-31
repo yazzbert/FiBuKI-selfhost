@@ -2,6 +2,44 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { VertexAI } from "@google-cloud/vertexai";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { AutomationMeta } from "../automation/types";
+
+// =============================================================================
+// AUTOMATION METADATA
+// =============================================================================
+
+export const AUTOMATION_META_LOOKUP: AutomationMeta = {
+  id: "lookupCompany",
+  name: "AI Company Lookup",
+  description:
+    "Uses Gemini AI to search the web for company information by URL or name, extracting VAT IDs, addresses, and aliases",
+  trigger: {
+    type: "callable",
+    regions: ["europe-west1"],
+  },
+  effects: [], // Read-only - returns lookup results
+  icon: "Sparkles",
+  category: "search",
+  aiPowered: true,
+};
+
+export const AUTOMATION_META_VAT: AutomationMeta = {
+  id: "lookupByVatId",
+  name: "VAT Registry Lookup",
+  description:
+    "Validates VAT IDs via VIES (EU VAT registry) and returns company details with caching",
+  trigger: {
+    type: "callable",
+    regions: ["europe-west1"],
+  },
+  effects: [], // Read-only with caching
+  icon: "Globe",
+  category: "search",
+};
+
+// =============================================================================
+// IMPLEMENTATION
+// =============================================================================
 
 const db = getFirestore();
 

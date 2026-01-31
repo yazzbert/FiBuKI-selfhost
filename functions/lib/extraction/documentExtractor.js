@@ -87,12 +87,13 @@ async function extractWithVisionClaude(fileBuffer, fileType, config) {
         throw new Error("No text extracted from document");
     }
     // Step 2: Parse with Claude Haiku
-    const extracted = await parseWithClaude(ocrResult.text, config.anthropicApiKey);
+    const parseResult = await parseWithClaude(ocrResult.text, config.anthropicApiKey);
     return {
         text: ocrResult.text,
         blocks: ocrResult.blocks,
-        extracted,
+        extracted: parseResult.extracted,
         provider: "vision-claude",
+        usage: parseResult.usage,
     };
 }
 /**

@@ -48,12 +48,7 @@ import {
 import { db } from "@/lib/firebase/config";
 import { format } from "date-fns";
 import Link from "next/link";
-import {
-  removeEmailPatternFromPartner,
-  mergePartnerIntoUserData,
-  reextractFilesForPartner,
-  unmarkPartnerAsMe,
-} from "@/lib/operations";
+import { removeEmailPatternFromPartner } from "@/lib/operations";
 import { useUserData } from "@/hooks/use-user-data";
 import { useInvoiceSources } from "@/hooks/use-invoice-sources";
 import { InvoiceSourcesSection } from "./invoice-sources-section";
@@ -63,8 +58,15 @@ import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { FieldRow, SectionHeader, CollapsibleListSection, ListItem } from "@/components/ui/detail-panel-primitives";
 import { useAuth } from "@/components/auth";
-import { Bot, Hand, Sparkles, MousePointerClick } from "lucide-react";
+import { Bot, Hand, Sparkles, MousePointerClick, Settings, User, Building } from "lucide-react";
 import { useNoReceiptCategories } from "@/hooks/use-no-receipt-categories";
+import { useRouter } from "next/navigation";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // ============================================================================
 // Match Source Badge
@@ -126,10 +128,11 @@ export function PartnerDetailPanel({
   partner,
   onClose,
 }: PartnerDetailPanelProps) {
+  const router = useRouter();
   const { userId } = useAuth();
   const { updatePartner, deletePartner } = usePartners();
   const { integrations } = useEmailIntegrations();
-  const { isPartnerMarkedAsMe } = useUserData();
+  const { isPartnerMarkedAsMe, userData, save: saveUserData } = useUserData();
   const { categories: allCategories } = useNoReceiptCategories();
   const invoiceSourcesHook = useInvoiceSources({ partnerId: partner.id });
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -137,6 +140,9 @@ export function PartnerDetailPanel({
   const [feedback, setFeedback] = useState<FeedbackMessage | null>(null);
 
   const isMarkedAsMe = isPartnerMarkedAsMe(partner.id);
+
+  // Check if this partner is linked to identity settings
+  const isIdentityLinked = !!partner.identitySourceField;
   const ctx = useMemo(() => ({ db, userId: userId ?? "" }), [userId]);
 
   const integrationLabels = useMemo(() => {
@@ -321,53 +327,94 @@ export function PartnerDetailPanel({
     await removeEmailPatternFromPartner(ctx, partner.id, patternIndex);
   };
 
-  const handleMarkAsMe = async () => {
+  /**
+   * Set this partner as user's personal identity.
+   * Updates the personalEntity with the partner's data.
+   */
+  const handleSetAsPersonalIdentity = async () => {
     setIsMarkingAsMe(true);
     setFeedback(null);
     try {
-      const result = await mergePartnerIntoUserData(ctx, {
-        partnerId: partner.id,
+      // Build updated personal entity with partner data
+      const personalEntity = {
+        id: userData?.personalEntity?.id || `entity_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        type: "person" as const,
         name: partner.name,
-        vatId: partner.vatId,
-        ibans: partner.ibans,
+        aliases: partner.aliases || [],
+        vatId: partner.vatId || userData?.personalEntity?.vatId || "",
+        ibans: [...new Set([
+          ...(partner.ibans || []),
+          ...(userData?.personalEntity?.ibans || []),
+        ])],
+        partnerId: partner.id, // Link to this partner
+      };
+
+      await saveUserData({
+        country: userData?.country,
+        taxNumber: userData?.taxNumber,
+        ownEmails: userData?.ownEmails,
+        personalEntity,
+        companies: userData?.companies?.map(c => ({
+          ...c,
+          type: "company" as const,
+        })),
       });
-      const reextractResult = await reextractFilesForPartner(ctx, partner.id);
 
-      const added: string[] = [];
-      if (result.aliasAdded) added.push("name");
-      if (result.vatIdAdded) added.push("VAT ID");
-      if (result.ibansAdded > 0)
-        added.push(`${result.ibansAdded} IBAN${result.ibansAdded > 1 ? "s" : ""}`);
-
-      if (added.length > 0 || reextractResult.queuedCount > 0) {
-        const parts: string[] = [];
-        if (added.length > 0) parts.push(`Added ${added.join(", ")} to your identity.`);
-        if (reextractResult.queuedCount > 0)
-          parts.push(`Re-extracting ${reextractResult.queuedCount} file${reextractResult.queuedCount > 1 ? "s" : ""}.`);
-        setFeedback({ type: "success", text: parts.join(" ") });
-      } else {
-        setFeedback({
-          type: "info",
-          text: "This partner's info is already in your user data.",
-        });
-      }
+      setFeedback({
+        type: "success",
+        text: `Set "${partner.name}" as your personal identity.`
+      });
     } catch (error) {
-      console.error("Failed to mark partner as me:", error);
-      setFeedback({ type: "error", text: "Failed to add partner to your identity." });
+      console.error("Failed to set as personal identity:", error);
+      setFeedback({ type: "error", text: "Failed to update identity settings." });
     } finally {
       setIsMarkingAsMe(false);
     }
   };
 
-  const handleUnmarkAsMe = async () => {
+  /**
+   * Add this partner as a company to user's identity.
+   * Creates a new company entity linked to this partner.
+   */
+  const handleAddAsCompany = async () => {
     setIsMarkingAsMe(true);
     setFeedback(null);
     try {
-      const removed = await unmarkPartnerAsMe(ctx, partner.id);
-      if (removed) setFeedback({ type: "success", text: "Removed from your companies." });
+      // Create new company entity from partner data
+      const newCompany = {
+        id: `entity_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        type: "company" as const,
+        name: partner.name,
+        aliases: partner.aliases || [],
+        vatId: partner.vatId || "",
+        ibans: partner.ibans || [],
+        partnerId: partner.id, // Link to this partner
+      };
+
+      // Get existing companies or empty array
+      const existingCompanies = (userData?.companies || []).map(c => ({
+        ...c,
+        type: "company" as const,
+      }));
+
+      await saveUserData({
+        country: userData?.country,
+        taxNumber: userData?.taxNumber,
+        ownEmails: userData?.ownEmails,
+        personalEntity: userData?.personalEntity ? {
+          ...userData.personalEntity,
+          type: "person" as const,
+        } : undefined,
+        companies: [...existingCompanies, newCompany],
+      });
+
+      setFeedback({
+        type: "success",
+        text: `Added "${partner.name}" as a company to your identity.`
+      });
     } catch (error) {
-      console.error("Failed to unmark partner:", error);
-      setFeedback({ type: "error", text: "Failed to remove from your companies." });
+      console.error("Failed to add as company:", error);
+      setFeedback({ type: "error", text: "Failed to update identity settings." });
     } finally {
       setIsMarkingAsMe(false);
     }
@@ -379,6 +426,7 @@ export function PartnerDetailPanel({
     partner.vatId ||
     partner.website ||
     partner.learnedPatterns?.length ||
+    partner.categoryMatchRules?.length ||
     partner.aliases.some((a) => a.includes("*")) ||
     partner.emailDomains?.length ||
     gmailFilePatterns.length > 0;
@@ -393,14 +441,22 @@ export function PartnerDetailPanel({
           </div>
           <div className="min-w-0">
             <h2 className="font-semibold truncate">{partner.name}</h2>
-            {isMarkedAsMe && (
+            {isIdentityLinked ? (
+              <span className="text-xs text-primary flex items-center gap-1">
+                <Settings className="h-3 w-3" />
+                From Identity ({
+                  partner.identitySourceField === "personalEntity" || partner.identitySourceField === "name"
+                    ? "Personal"
+                    : "Company"
+                })
+              </span>
+            ) : isMarkedAsMe ? (
               <span className="text-xs text-primary">My Company</span>
-            )}
-            {partner.globalPartnerId && !isMarkedAsMe && (
+            ) : partner.globalPartnerId ? (
               <span className="text-xs text-muted-foreground">
                 Global Partner
               </span>
-            )}
+            ) : null}
           </div>
         </div>
         <Button variant="ghost" size="icon" onClick={onClose}>
@@ -587,6 +643,42 @@ export function PartnerDetailPanel({
                   </RuleCard>
                 )}
 
+                {/* Category Match Rules */}
+                {partner.categoryMatchRules && partner.categoryMatchRules.length > 0 && (
+                  partner.categoryMatchRules.map((rule, idx) => {
+                    const category = allCategories.find((c) => c.id === rule.categoryId);
+                    const categoryName = category?.name || "Unknown Category";
+                    return (
+                      <RuleCard
+                        key={idx}
+                        icon={<Tag className="h-4 w-4" />}
+                        title={categoryName}
+                        confidence={rule.confidence}
+                        variant="learned"
+                      >
+                        <div className="flex flex-wrap gap-1">
+                          {rule.patterns.map((pattern, pIdx) => (
+                            <code
+                              key={pIdx}
+                              className="text-xs bg-green-100/50 dark:bg-green-900/30 px-1.5 py-0.5 rounded font-mono"
+                            >
+                              {pattern}
+                            </code>
+                          ))}
+                          {rule.excludePatterns && rule.excludePatterns.map((pattern, pIdx) => (
+                            <code
+                              key={`ex-${pIdx}`}
+                              className="text-xs bg-red-100/50 dark:bg-red-900/30 px-1.5 py-0.5 rounded font-mono line-through"
+                            >
+                              {pattern}
+                            </code>
+                          ))}
+                        </div>
+                      </RuleCard>
+                    );
+                  })
+                )}
+
                 {/* Email Domains */}
                 {partner.emailDomains && partner.emailDomains.length > 0 && (
                   <RuleCard
@@ -700,20 +792,16 @@ export function PartnerDetailPanel({
               ) : (
                 <>
                   {transactions.slice(0, 5).map((tx) => (
-                    <ListItem
-                      key={tx.id}
-                      href={`/transactions?id=${tx.id}`}
-                      title={tx.name}
-                      subtitle={
-                        tx.date?.toDate
-                          ? format(tx.date.toDate(), "MMM d, yyyy")
-                          : ""
-                      }
-                      amount={tx.amount}
-                      currency={tx.currency}
-                      isNegative={tx.amount < 0}
-                      badge={<MatchSourceBadge matchedBy={tx.partnerMatchedBy} />}
-                    />
+                      <ListItem
+                        key={tx.id}
+                        href={`/transactions?id=${tx.id}`}
+                        title={tx.name}
+                        subtitle={tx.date?.toDate ? format(tx.date.toDate(), "MMM d, yyyy") : ""}
+                        amount={tx.amount}
+                        currency={tx.currency}
+                        isNegative={tx.amount < 0}
+                        badge={<MatchSourceBadge matchedBy={tx.partnerMatchedBy} />}
+                      />
                   ))}
                   {/* Manual Rejects */}
                   {partner.manualRemovals && partner.manualRemovals.length > 0 && (
@@ -810,17 +898,64 @@ export function PartnerDetailPanel({
                 count={connectedCategories.length}
                 isLoading={isLoadingTransactions}
               >
-                {connectedCategories.map((cat) => (
-                  <div
-                    key={cat.categoryId}
-                    className="flex items-center justify-between py-1.5 px-2 -mx-2 rounded hover:bg-muted/50"
-                  >
-                    <span className="text-sm truncate">{cat.name}</span>
-                    <Badge variant="secondary" className="text-xs shrink-0 ml-2">
-                      {cat.count} tx
-                    </Badge>
-                  </div>
-                ))}
+                {connectedCategories.map((cat) => {
+                  // Get transactions for this category
+                  const categoryTransactions = transactions.filter(
+                    (tx) => tx.noReceiptCategoryId === cat.categoryId
+                  );
+                  // Get rejected transactions for this category
+                  const categoryRejections = (partner.categoryManualRemovals || [])
+                    .filter((r) => r.categoryId === cat.categoryId);
+
+                  return (
+                    <div key={cat.categoryId} className="space-y-1">
+                      {/* Category header */}
+                      <div className="flex items-center justify-between py-1.5 px-2 -mx-2">
+                        <span className="text-sm font-medium truncate">{cat.name}</span>
+                        <Badge variant="secondary" className="text-xs shrink-0 ml-2">
+                          {cat.count} tx
+                        </Badge>
+                      </div>
+                      {/* Category transactions */}
+                      {categoryTransactions.slice(0, 5).map((tx) => (
+                        <ListItem
+                          key={tx.id}
+                          href={`/transactions?id=${tx.id}`}
+                          title={tx.name}
+                          subtitle={tx.date?.toDate ? format(tx.date.toDate(), "MMM d, yyyy") : ""}
+                          amount={tx.amount}
+                          currency={tx.currency}
+                          isNegative={tx.amount < 0}
+                          badge={<MatchSourceBadge matchedBy={tx.noReceiptCategoryMatchedBy} />}
+                        />
+                      ))}
+                      {categoryTransactions.length > 5 && (
+                        <p className="text-xs text-muted-foreground pl-2">
+                          +{categoryTransactions.length - 5} more
+                        </p>
+                      )}
+                      {/* Rejected transactions */}
+                      {categoryRejections.length > 0 && (
+                        <div className="pt-1 border-t mt-1">
+                          <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1 px-2">
+                            <Ban className="h-3 w-3" />
+                            Rejected ({categoryRejections.length})
+                          </p>
+                          {categoryRejections.slice(0, 3).map((removal) => (
+                            <div
+                              key={removal.transactionId}
+                              className="flex items-center gap-2 py-1.5 px-2 text-muted-foreground line-through opacity-60"
+                            >
+                              <span className="text-sm truncate flex-1">
+                                {removal.name || removal.partner || "Unknown"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </CollapsibleListSection>
             )}
           </div>
@@ -850,38 +985,66 @@ export function PartnerDetailPanel({
           </div>
         )}
 
-        <Button
-          variant={isMarkedAsMe ? "secondary" : "outline"}
-          className="w-full"
-          onClick={isMarkedAsMe ? handleUnmarkAsMe : handleMarkAsMe}
-          disabled={isMarkingAsMe}
-        >
-          {isMarkingAsMe ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <UserCheck className="h-4 w-4 mr-2" />
-          )}
-          {isMarkedAsMe ? "Remove from my companies" : "This is my company"}
-        </Button>
+        {isIdentityLinked ? (
+          // Identity-linked partner: show "Edit in Identity" button only
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => router.push("/settings/identity")}
+          >
+            <Settings className="h-4 w-4 mr-2" />
+            Edit in Identity
+          </Button>
+        ) : (
+          // Regular partner: show normal buttons
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  disabled={isMarkingAsMe}
+                >
+                  {isMarkingAsMe ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <UserCheck className="h-4 w-4 mr-2" />
+                  )}
+                  This is me
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" className="w-56">
+                <DropdownMenuItem onClick={handleSetAsPersonalIdentity}>
+                  <User className="h-4 w-4 mr-2" />
+                  Set as my personal name
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleAddAsCompany}>
+                  <Building className="h-4 w-4 mr-2" />
+                  Add as my company
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            className="flex-1 text-destructive hover:text-destructive hover:bg-destructive/10"
-            onClick={handleDelete}
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            Delete
-          </Button>
-          <Button
-            variant="outline"
-            className="flex-1"
-            onClick={() => setIsEditDialogOpen(true)}
-          >
-            <Pencil className="h-4 w-4 mr-2" />
-            Edit
-          </Button>
-        </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                onClick={handleDelete}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setIsEditDialogOpen(true)}
+              >
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit
+              </Button>
+            </div>
+          </>
+        )}
       </div>
 
       <AddPartnerDialog

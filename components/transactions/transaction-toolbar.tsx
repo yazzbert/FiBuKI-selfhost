@@ -21,7 +21,7 @@ import {
 import { SearchButton } from "@/components/ui/search-button";
 import { SearchInput } from "@/components/ui/search-input";
 import { TransactionFilters } from "@/types/transaction";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { UserPartner } from "@/types/partner";
 
 interface TransactionToolbarProps {
@@ -35,6 +35,8 @@ interface TransactionToolbarProps {
   assignedCount?: number;
   /** Total number of transactions in current filter view */
   totalCount?: number;
+  /** Sum of amounts for filtered transactions (in cents) */
+  filteredSum?: number;
 }
 
 export function TransactionToolbar({
@@ -46,6 +48,7 @@ export function TransactionToolbar({
   userPartners = [],
   assignedCount,
   totalCount,
+  filteredSum,
 }: TransactionToolbarProps) {
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [statusPopoverOpen, setStatusPopoverOpen] = useState(false);
@@ -174,10 +177,9 @@ export function TransactionToolbar({
   const showCounter = totalCount !== undefined && totalCount > 0;
 
   return (
-    <div className="flex items-center gap-2 px-4 py-2 border-b bg-background">
-      {/* Left side: filters */}
-      <div className="flex items-center gap-2 flex-wrap flex-1">
-        {/* Search button */}
+    <div className="grid grid-cols-[1fr_minmax(0,auto)] gap-2 px-4 py-2 border-b bg-background items-start">
+      {/* Filters - takes available space */}
+      <div className="flex items-center gap-2 flex-wrap min-w-0">
         <SearchButton
           value={searchValue}
           onSearch={onSearchChange}
@@ -527,12 +529,24 @@ export function TransactionToolbar({
         )}
       </div>
 
-      {/* Right side: counter */}
+      {/* Counter and sum - always stacked vertically */}
       {showCounter && (
-        <div className="flex items-center gap-1.5 text-sm text-muted-foreground shrink-0">
-          <span className="tabular-nums font-medium text-foreground">{assignedCount ?? 0}</span>
-          <span>/</span>
-          <span className="tabular-nums">{totalCount}</span>
+        <div className="flex flex-col items-end justify-center text-sm">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <span className="tabular-nums font-medium text-foreground">{assignedCount ?? 0}</span>
+            <span>/</span>
+            <span className="tabular-nums">{totalCount}</span>
+          </span>
+          {filteredSum !== undefined && (
+            <span
+              className={cn(
+                "tabular-nums",
+                filteredSum < 0 ? "text-amount-negative" : "text-amount-positive"
+              )}
+            >
+              ({formatCurrency(filteredSum)})
+            </span>
+          )}
         </div>
       )}
     </div>

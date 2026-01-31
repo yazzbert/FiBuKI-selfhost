@@ -6,10 +6,18 @@ type AIFunction =
   | "companyLookupSearch"
   | "patternLearning"
   | "patternVerification"
+  | "categoryPatternLearning"
+  | "categoryPatternVerification"
   | "columnMatching"
   | "extraction"
   | "classification"
-  | "domainValidation";
+  | "domainValidation"
+  | "ocrParsing"
+  | "partnerDedup"
+  | "searchQueryGeneration"
+  | "emailAnalysis"
+  | "batchMatching"
+  | "fileSearchQuery";
 
 // Pricing per million tokens (USD)
 const AI_MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -32,6 +40,7 @@ export interface AIUsageParams {
     partnerId?: string;
     sourceId?: string;
     fileId?: string;
+    categoryId?: string;
     webSearchUsed?: boolean;
   } | null;
 }

@@ -11,6 +11,7 @@ import {
   TypedSuggestion,
   SuggestionType,
 } from "./generateSearchQueries";
+import { logAIUsage } from "../utils/ai-usage-logger";
 
 // Using Flash-Lite for speed and low cost
 const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
@@ -94,7 +95,8 @@ function isValidQuery(query: string): boolean {
 export async function generateTypedQueriesWithGemini(
   transaction: GeminiQueryInput,
   partnerData?: QueryGenerationPartner | null,
-  maxQueries: number = 5
+  maxQueries: number = 5,
+  userId?: string
 ): Promise<TypedSuggestion[]> {
   // Get deterministic suggestions as fallback
   const txData: QueryGenerationTransaction = {
@@ -149,6 +151,19 @@ Return ONLY valid JSON:
     const result = await model.generateContent({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     });
+
+    // Log AI usage for search query generation
+    const usageMetadata = result.response.usageMetadata;
+    if (userId && usageMetadata) {
+      logAIUsage(userId, {
+        function: "searchQueryGeneration",
+        model: GEMINI_MODEL,
+        inputTokens: usageMetadata.promptTokenCount || 0,
+        outputTokens: usageMetadata.candidatesTokenCount || 0,
+      }).catch((err) => {
+        console.error("[generateTypedQueriesWithGemini] Failed to log AI usage:", err);
+      });
+    }
 
     const text = result.response.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const cleanedText = fixLlmJson(text);
@@ -216,8 +231,9 @@ Return ONLY valid JSON:
 export async function generateQueriesWithGemini(
   transaction: GeminiQueryInput,
   partnerData?: QueryGenerationPartner | null,
-  maxQueries: number = 8
+  maxQueries: number = 8,
+  userId?: string
 ): Promise<string[]> {
-  const typed = await generateTypedQueriesWithGemini(transaction, partnerData, maxQueries);
+  const typed = await generateTypedQueriesWithGemini(transaction, partnerData, maxQueries, userId);
   return typed.map((s) => s.query);
 }

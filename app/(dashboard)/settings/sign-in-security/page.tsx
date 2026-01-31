@@ -41,6 +41,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase/config";
 import { MfaStatusCard } from "@/components/mfa";
+import { SettingsPageHeader } from "@/components/ui/settings-page-header";
 
 export default function SignInSecurityPage() {
   const { user } = useAuth();
@@ -149,12 +150,10 @@ export default function SignInSecurityPage() {
 
   return (
     <>
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold">Sign-in & Security</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Manage how you sign in and protect your account
-        </p>
-      </div>
+      <SettingsPageHeader
+        title="Sign-in & Security"
+        description="Manage how you sign in and protect your account"
+      />
 
       {authError && (
         <Alert variant="destructive" className="mb-6">

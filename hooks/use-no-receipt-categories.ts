@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, startTransition } from "react";
-import { collection, query, orderBy, onSnapshot, where } from "firebase/firestore";
+import { useState, useEffect, useCallback, useMemo, startTransition, useRef } from "react";
+import { collection, query, orderBy, onSnapshot, where, limit, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase/config";
 import {
   UserNoReceiptCategory,
@@ -86,22 +86,52 @@ export function useNoReceiptCategories() {
     return () => unsubscribe();
   }, [userId]);
 
-  // Auto-initialize categories if none exist
+  // Track if we've already attempted initialization to avoid repeated checks
+  const initAttemptedRef = useRef(false);
+
+  // Auto-initialize categories if none exist (but not during active imports)
   useEffect(() => {
-    if (!loading && categories.length === 0 && !initializing) {
-      setInitializing(true);
-      initializeUserCategories(ctx)
-        .then(() => {
+    if (!loading && categories.length === 0 && !initializing && userId && !initAttemptedRef.current) {
+      // Mark that we've attempted to avoid repeated queries
+      initAttemptedRef.current = true;
+
+      // First check if there's an active import - don't auto-initialize during import
+      const checkAndInitialize = async () => {
+        try {
+          const activeImportQuery = query(
+            collection(db, "userImports"),
+            where("userId", "==", userId),
+            where("status", "in", ["pending", "validating", "wiping", "importing"]),
+            limit(1)
+          );
+          const activeImportSnap = await getDocs(activeImportQuery);
+
+          if (!activeImportSnap.empty) {
+            console.log("[Categories] Skipping auto-init - active import in progress");
+            initAttemptedRef.current = false; // Allow retry after import completes
+            return;
+          }
+
+          // No active import, proceed with initialization
+          setInitializing(true);
+          await initializeUserCategories(ctx);
           console.log("[Categories] Auto-initialized user categories");
-        })
-        .catch((err) => {
+        } catch (err) {
           console.error("[Categories] Failed to auto-initialize:", err);
-        })
-        .finally(() => {
+          initAttemptedRef.current = false; // Allow retry on error
+        } finally {
           setInitializing(false);
-        });
+        }
+      };
+
+      checkAndInitialize();
     }
-  }, [loading, categories.length, ctx, initializing]);
+  }, [loading, categories.length, ctx, initializing, userId]);
+
+  // Reset init attempted flag when userId changes
+  useEffect(() => {
+    initAttemptedRef.current = false;
+  }, [userId]);
 
   /**
    * Initialize categories from templates (manual trigger)

@@ -37,6 +37,38 @@ const SUPPORTED_MIME_TYPES = [
   "image/gif",
 ];
 
+/** Map file extension to proper MIME type */
+function getMimeTypeFromExtension(filename: string): string | null {
+  const ext = filename.toLowerCase().split(".").pop();
+  const mimeMap: Record<string, string> = {
+    pdf: "application/pdf",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+  };
+  return ext ? mimeMap[ext] || null : null;
+}
+
+/** Check if attachment is supported (by MIME type or extension) */
+function isSupportedAttachment(contentType: string | undefined, filename: string | undefined): { supported: boolean; mimeType: string } {
+  // Check by MIME type first
+  if (contentType && SUPPORTED_MIME_TYPES.includes(contentType)) {
+    return { supported: true, mimeType: contentType };
+  }
+
+  // If MIME type is generic/unknown, check by extension
+  if (filename && (contentType === "application/octet-stream" || !contentType)) {
+    const inferredMime = getMimeTypeFromExtension(filename);
+    if (inferredMime) {
+      return { supported: true, mimeType: inferredMime };
+    }
+  }
+
+  return { supported: false, mimeType: contentType || "unknown" };
+}
+
 /** Maximum attachment size (10MB) */
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 
@@ -64,12 +96,13 @@ interface InboundEmailAddress {
 
 /**
  * Extract email prefix from recipient address
- * e.g., "invoices-abc123@taxstudio.app" -> "abc123"
+ * e.g., "invoices-abc123@fibuki.com" -> "abc123"
+ * Preserves original case since Firestore queries are case-sensitive
  */
 function extractEmailPrefix(email: string): string | null {
-  const match = email
-    .toLowerCase()
-    .match(new RegExp(`invoices-([a-z0-9_-]+)@${INBOUND_EMAIL_DOMAIN}`, "i"));
+  const pattern = `invoices-([a-zA-Z0-9_-]+)@${INBOUND_EMAIL_DOMAIN}`;
+  const match = email.match(new RegExp(pattern, "i"));
+  console.log(`[receiveEmail] extractEmailPrefix: email="${email}", pattern="${pattern}", match=${match ? match[1] : "null"}`);
   return match ? match[1] : null;
 }
 
@@ -321,13 +354,20 @@ async function processAttachment(
   subject: string,
   receivedAt: Timestamp
 ): Promise<string | null> {
-  // Skip unsupported types
-  if (!SUPPORTED_MIME_TYPES.includes(attachment.contentType || "")) {
+  // Check if attachment is supported (by MIME type or extension)
+  const { supported, mimeType } = isSupportedAttachment(
+    attachment.contentType,
+    attachment.filename
+  );
+
+  if (!supported) {
     console.log(
-      `[receiveEmail] Skipping unsupported type: ${attachment.contentType}`
+      `[receiveEmail] Skipping unsupported type: ${attachment.contentType} (filename: ${attachment.filename})`
     );
     return null;
   }
+
+  console.log(`[receiveEmail] Processing attachment: ${attachment.filename}, type: ${mimeType}, size: ${attachment.content?.length || 0} bytes`);
 
   // Skip oversized attachments
   if (attachment.size && attachment.size > MAX_ATTACHMENT_SIZE) {
@@ -351,20 +391,20 @@ async function processAttachment(
     return null;
   }
 
-  // Upload to storage
+  // Upload to storage - use inferred MIME type
   const filename = attachment.filename || `attachment_${Date.now()}.pdf`;
   const { storagePath, downloadUrl } = await uploadToStorage(
     userId,
     filename,
     buffer,
-    attachment.contentType || "application/octet-stream"
+    mimeType
   );
 
-  // Create file document
+  // Create file document - use inferred mimeType, not original contentType
   const fileId = await createFileDocument({
     userId,
     fileName: filename,
-    fileType: attachment.contentType || "application/octet-stream",
+    fileType: mimeType,
     fileSize: buffer.length,
     storagePath,
     downloadUrl,
@@ -464,56 +504,170 @@ async function processEmailBody(
 }
 
 /**
+ * Parsed fields from SendGrid when "Send Raw" is disabled
+ */
+interface SendGridParsedFields {
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  text?: string;
+  html?: string;
+  headers?: string;
+  envelope?: string;
+  sender_ip?: string;
+  SPF?: string;
+  charsets?: string;
+  attachmentCount?: string;
+}
+
+/**
  * Parse SendGrid webhook payload
- * SendGrid sends multipart/form-data with the email in 'email' field
+ * Handles both raw email mode (email field) and parsed mode (individual fields)
  */
 async function parseSendGridWebhook(
   req: { headers: Record<string, string | string[] | undefined>; rawBody?: Buffer; body?: Buffer }
 ): Promise<ParsedMail | null> {
   return new Promise((resolve, reject) => {
     const contentType = req.headers["content-type"] || "";
+    console.log(`[receiveEmail] Content-Type: ${contentType}`);
 
     // If it's multipart form data (SendGrid's format)
     if (typeof contentType === "string" && contentType.includes("multipart/form-data")) {
       const busboy = Busboy({ headers: req.headers as Record<string, string> });
       let emailData: string | null = null;
+      const parsedFields: SendGridParsedFields = {};
+      const attachments: Array<{ filename: string; contentType: string; content: Buffer }> = [];
 
       busboy.on("field", (fieldname: string, val: string) => {
-        // SendGrid sends the raw email in the 'email' field
+        console.log(`[receiveEmail] Field: ${fieldname} (${val.length} chars)`);
+        // SendGrid sends the raw email in 'email' field when "Send Raw" is enabled
         if (fieldname === "email") {
           emailData = val;
+        } else {
+          // Store parsed fields for non-raw mode
+          (parsedFields as Record<string, string>)[fieldname] = val;
         }
       });
 
+      busboy.on("file", (fieldname: string, file: NodeJS.ReadableStream, info: { filename: string; encoding: string; mimeType: string }) => {
+        console.log(`[receiveEmail] File: ${fieldname}, filename: ${info.filename}, type: ${info.mimeType}`);
+        const chunks: Buffer[] = [];
+        file.on("data", (chunk: Buffer) => chunks.push(chunk));
+        file.on("end", () => {
+          attachments.push({
+            filename: info.filename,
+            contentType: info.mimeType,
+            content: Buffer.concat(chunks),
+          });
+        });
+      });
+
       busboy.on("finish", async () => {
+        console.log(`[receiveEmail] Busboy finish. Raw email: ${!!emailData}, Fields: ${Object.keys(parsedFields).join(", ")}, Attachments: ${attachments.length}`);
+
         if (emailData) {
+          // Raw mode - parse the complete email
           try {
             const parsed = await simpleParser(emailData);
             resolve(parsed);
           } catch (err) {
+            console.error("[receiveEmail] Failed to parse raw email:", err);
             reject(err);
           }
+        } else if (parsedFields.from || parsedFields.to) {
+          // Parsed mode - construct a ParsedMail-like object from fields
+          console.log("[receiveEmail] Using parsed fields mode");
+          console.log(`[receiveEmail] Raw 'to' field: "${parsedFields.to}"`);
+
+          // Parse the 'from' field - extract email and name from "Name <email>" format
+          let fromAddress = parsedFields.from?.trim();
+          let fromName: string | undefined;
+          if (fromAddress) {
+            const angleMatch = fromAddress.match(/^(.+?)\s*<([^>]+)>$/);
+            if (angleMatch) {
+              fromName = angleMatch[1].replace(/^["']|["']$/g, "").trim();
+              fromAddress = angleMatch[2];
+            }
+          }
+
+          // Parse the 'to' field - extract email from "Name <email>" format or use as-is
+          let toAddress = parsedFields.to?.trim();
+          if (toAddress) {
+            // If it's in "Name <email>" format, extract just the email
+            const angleMatch = toAddress.match(/<([^>]+)>/);
+            if (angleMatch) {
+              toAddress = angleMatch[1];
+            }
+          }
+          console.log(`[receiveEmail] Parsed toAddress: "${toAddress}"`);
+
+          // Create a ParsedMail-compatible object
+          const parsed: ParsedMail = {
+            from: fromAddress ? {
+              value: [{ address: fromAddress, name: fromName || "" }],
+              text: parsedFields.from || "",
+              html: "",
+            } : undefined,
+            to: toAddress ? {
+              value: [{ address: toAddress, name: "" }],
+              text: parsedFields.to || "",
+              html: "",
+            } : undefined,
+            subject: parsedFields.subject,
+            text: parsedFields.text,
+            html: parsedFields.html || false,
+            date: new Date(),
+            messageId: `sendgrid-${Date.now()}`,
+            attachments: attachments.map((att, i) => ({
+              filename: att.filename,
+              contentType: att.contentType,
+              content: att.content,
+              size: att.content.length,
+              contentDisposition: "attachment" as const,
+              type: att.contentType,
+              partId: String(i),
+              release: () => {},
+              related: false,
+              headers: new Map(),
+              headerLines: [],
+              checksum: "",
+            })) as Attachment[],
+            headers: new Map(),
+            headerLines: [],
+          };
+
+          resolve(parsed);
         } else {
+          console.log("[receiveEmail] No email data or parsed fields found");
           resolve(null);
         }
       });
 
-      busboy.on("error", reject);
+      busboy.on("error", (err) => {
+        console.error("[receiveEmail] Busboy error:", err);
+        reject(err);
+      });
 
       // Write the raw body to busboy
       const body = req.rawBody || req.body;
       if (body) {
+        console.log(`[receiveEmail] Processing body: ${body.length} bytes`);
         busboy.end(body);
       } else {
         reject(new Error("No request body"));
       }
     } else {
-      // Raw email format
+      // Raw email format (not multipart)
+      console.log("[receiveEmail] Non-multipart content type");
       const body = req.rawBody || req.body;
       if (body) {
         simpleParser(body)
           .then(resolve)
-          .catch(reject);
+          .catch((err) => {
+            console.error("[receiveEmail] Failed to parse non-multipart email:", err);
+            reject(err);
+          });
       } else {
         resolve(null);
       }
@@ -784,7 +938,7 @@ export const testInboundEmail = onRequest(
 export const receiveInboundEmail = onRequest(
   {
     region: "europe-west1",
-    memory: "512MiB",
+    memory: "1GiB",
     timeoutSeconds: 120,
     maxInstances: 10,
   },
