@@ -22,6 +22,8 @@ export interface CallableConfig {
   secrets?: SecretParam[];
   /** Skip usage logging (for internal/utility functions) */
   skipUsageLogging?: boolean;
+  /** Allow unauthenticated access (for public endpoints like listing banks) */
+  allowUnauthenticated?: boolean;
 }
 
 export interface FunctionCallLog {
@@ -125,12 +127,12 @@ export function createCallable<TRequest, TResponse>(
       cors: CORS_ORIGINS,
     },
     async (request) => {
-      // 1. Auth check
-      if (!request.auth) {
+      // 1. Auth check (skip if allowUnauthenticated)
+      if (!config.allowUnauthenticated && !request.auth) {
         throw new HttpsError("unauthenticated", "Must be authenticated");
       }
 
-      const userId = request.auth.uid;
+      const userId = request.auth?.uid || "anonymous";
       const startTime = Date.now();
       const db = getFirestore();
 

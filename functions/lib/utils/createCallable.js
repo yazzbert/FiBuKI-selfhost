@@ -56,11 +56,11 @@ function createCallable(config, handler) {
         secrets: config.secrets || [],
         cors: CORS_ORIGINS,
     }, async (request) => {
-        // 1. Auth check
-        if (!request.auth) {
+        // 1. Auth check (skip if allowUnauthenticated)
+        if (!config.allowUnauthenticated && !request.auth) {
             throw new https_1.HttpsError("unauthenticated", "Must be authenticated");
         }
-        const userId = request.auth.uid;
+        const userId = request.auth?.uid || "anonymous";
         const startTime = Date.now();
         const db = (0, firestore_1.getFirestore)();
         // AI usage accumulator for this call

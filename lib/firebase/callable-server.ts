@@ -113,14 +113,11 @@ export async function callCloudFunction<TRequest, TResponse>(
     } else {
       console.warn(`[callCloudFunction] No auth token set - call setAuthToken() first`);
     }
-  } else {
-    // Production: Use Google Auth for service-to-service authentication
-    const { GoogleAuth } = await import("google-auth-library");
-    const auth = new GoogleAuth();
-    const client = await auth.getIdTokenClient(functionUrl);
-    const authHeaders = await client.getRequestHeaders();
-    headers = { ...headers, ...authHeaders };
+  } else if (currentAuthToken) {
+    // Production with user auth: Forward the Firebase ID token
+    headers["Authorization"] = `Bearer ${currentAuthToken}`;
   }
+  // If no auth token is set, don't add any auth header (for public endpoints)
 
   const response = await fetch(functionUrl, {
     method: "POST",

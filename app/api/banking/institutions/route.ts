@@ -30,8 +30,9 @@ interface ListInstitutionsResponse {
 }
 
 export async function GET(request: NextRequest) {
-  // Set auth token for Cloud Function calls
-  setAuthToken(request.headers.get("Authorization"));
+  // No auth needed - listing banks is public
+  // Clear any auth token to avoid sending wrong credentials
+  setAuthToken(null);
 
   try {
     const { searchParams } = new URL(request.url);

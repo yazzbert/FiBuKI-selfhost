@@ -37,6 +37,7 @@ export const listBankInstitutionsCallable = createCallable<
   {
     name: "listBankInstitutions",
     secrets: [FINAPI_CLIENT_ID, FINAPI_CLIENT_SECRET],
+    allowUnauthenticated: true, // Public endpoint - listing banks doesn't need auth
   },
   async (ctx, request) => {
     const { country } = request;

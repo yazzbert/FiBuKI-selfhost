@@ -14,6 +14,7 @@ const FINAPI_CLIENT_SECRET = (0, params_1.defineSecret)("FINAPI_CLIENT_SECRET");
 exports.listBankInstitutionsCallable = (0, createCallable_1.createCallable)({
     name: "listBankInstitutions",
     secrets: [FINAPI_CLIENT_ID, FINAPI_CLIENT_SECRET],
+    allowUnauthenticated: true, // Public endpoint - listing banks doesn't need auth
 }, async (ctx, request) => {
     const { country } = request;
     if (!country) {
