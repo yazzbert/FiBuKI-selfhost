@@ -151,16 +151,26 @@ export const assignPartnerToTransactionCallable = createCallable<
     if ((matchedBy === "manual" || matchedBy === "suggestion" || matchedBy === "ai") && effectivePartnerType === "user") {
       try {
         const { learnPatternsForPartnersBatch } = await import("../matching/learnPartnerPatterns");
-        // Run pattern learning in background (don't await)
-        learnPatternsForPartnersBatch(ctx.userId, [effectivePartnerId])
-          .then((results) => {
-            console.log(`[assignPartnerToTransaction] Pattern learning completed:`, results);
-          })
-          .catch((err) => {
-            console.error(`[assignPartnerToTransaction] Pattern learning failed:`, err);
-          });
+
+        // For manual/suggestion assignments, await pattern learning for immediate feedback
+        // For AI assignments, run in background to not slow down batch operations
+        if (matchedBy === "manual" || matchedBy === "suggestion") {
+          console.log(`[assignPartnerToTransaction] Running pattern learning synchronously for ${matchedBy} assignment`);
+          await learnPatternsForPartnersBatch(ctx.userId, [effectivePartnerId]);
+          console.log(`[assignPartnerToTransaction] Pattern learning completed for partner ${effectivePartnerId}`);
+        } else {
+          // Run pattern learning in background for AI assignments
+          learnPatternsForPartnersBatch(ctx.userId, [effectivePartnerId])
+            .then(() => {
+              console.log(`[assignPartnerToTransaction] Pattern learning completed (background)`);
+            })
+            .catch((err) => {
+              console.error(`[assignPartnerToTransaction] Pattern learning failed:`, err);
+            });
+        }
       } catch (err) {
-        console.error(`[assignPartnerToTransaction] Failed to start pattern learning:`, err);
+        console.error(`[assignPartnerToTransaction] Pattern learning failed:`, err);
+        // Don't throw - assignment succeeded, just pattern learning failed
       }
     }
 
