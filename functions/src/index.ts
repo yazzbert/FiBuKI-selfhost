@@ -190,6 +190,12 @@ export {
   processUserImportOnUpdate,
 } from "./user-import";
 
+// User account operations
+export { deleteUserAccountCallable as deleteUserAccount } from "./user/deleteUserAccountCallable";
+export { scheduleAccountDeletionCallable as scheduleAccountDeletion } from "./user/scheduleAccountDeletionCallable";
+export { cancelAccountDeletionCallable as cancelAccountDeletion } from "./user/cancelAccountDeletionCallable";
+export { processPendingDeletions } from "./user/processPendingDeletions";
+
 // BMD NTCS export operations
 export {
   requestBmdExportCallable as requestBmdExport,

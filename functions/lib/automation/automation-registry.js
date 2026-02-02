@@ -39,6 +39,7 @@ const onCategoryCreate_1 = require("../matching/onCategoryCreate");
 const onCategoryUpdate_1 = require("../matching/onCategoryUpdate");
 // Callable - Matching (manual triggers)
 const matchPartners_1 = require("../matching/matchPartners");
+const matchCategories_1 = require("../matching/matchCategories");
 const searchExternalPartners_1 = require("../matching/searchExternalPartners");
 // Callable - Agentic search
 const runReceiptSearchForTransaction_1 = require("../workers/runReceiptSearchForTransaction");
@@ -70,6 +71,7 @@ exports.AUTOMATION_REGISTRY = {
     // =========================================================================
     // Manual matching
     matchPartners: matchPartners_1.AUTOMATION_META,
+    matchCategories: matchCategories_1.AUTOMATION_META,
     searchExternalPartners: searchExternalPartners_1.AUTOMATION_META,
     // Agentic search
     runReceiptSearchForTransaction: runReceiptSearchForTransaction_1.AUTOMATION_META,

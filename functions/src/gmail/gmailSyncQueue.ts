@@ -4,12 +4,15 @@ import { defineSecret } from "firebase-functions/params";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import * as crypto from "crypto";
+import { encrypt, decrypt } from "../utils/encryption";
 
 // Define secrets for Google OAuth - set via Firebase CLI:
 // firebase functions:secrets:set GOOGLE_CLIENT_ID
 // firebase functions:secrets:set GOOGLE_CLIENT_SECRET
+// firebase functions:secrets:set GMAIL_TOKEN_ENCRYPTION_KEY
 const googleClientId = defineSecret("GOOGLE_CLIENT_ID");
 const googleClientSecret = defineSecret("GOOGLE_CLIENT_SECRET");
+const tokenEncryptionKey = defineSecret("GMAIL_TOKEN_ENCRYPTION_KEY");
 
 const db = getFirestore();
 const storage = getStorage();
@@ -78,6 +81,7 @@ interface GmailSyncQueueItem {
 interface EmailTokenDocument {
   accessToken: string;
   refreshToken: string;
+  refreshTokenIv?: string;
   expiresAt: Timestamp;
 }
 
@@ -183,19 +187,46 @@ async function sha256(data: Buffer): Promise<string> {
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 /**
+ * Decrypt refresh token if it was encrypted
+ * Handles both encrypted (with IV) and legacy plaintext tokens
+ */
+function decryptRefreshToken(
+  refreshToken: string,
+  refreshTokenIv: string | undefined,
+  encryptionKey: string
+): string {
+  // If no IV, token is not encrypted (legacy or encryption failed on store)
+  if (!refreshTokenIv) {
+    return refreshToken;
+  }
+
+  try {
+    return decrypt(refreshToken, refreshTokenIv, encryptionKey);
+  } catch (error) {
+    console.error("[GmailSync] Failed to decrypt refresh token:", error);
+    // Return as-is - might be a legacy plaintext token with corrupt IV field
+    return refreshToken;
+  }
+}
+
+/**
  * Refresh access token using refresh token
  * Returns new token data or null if refresh fails
  *
  * @param integrationId - The integration to refresh
- * @param refreshToken - The refresh token
+ * @param refreshToken - The refresh token (possibly encrypted)
+ * @param refreshTokenIv - The IV for decryption (if encrypted)
  * @param clientId - Google OAuth Client ID (from secret)
  * @param clientSecret - Google OAuth Client Secret (from secret)
+ * @param encryptionKey - Key for token encryption/decryption
  */
 async function refreshAccessToken(
   integrationId: string,
   refreshToken: string,
+  refreshTokenIv: string | undefined,
   clientId: string,
-  clientSecret: string
+  clientSecret: string,
+  encryptionKey: string
 ): Promise<{ accessToken: string; expiresAt: Timestamp } | null> {
   if (!refreshToken) {
     console.log("[GmailSync] No refresh token available");
@@ -207,6 +238,9 @@ async function refreshAccessToken(
     return null;
   }
 
+  // Decrypt the refresh token
+  const decryptedRefreshToken = decryptRefreshToken(refreshToken, refreshTokenIv, encryptionKey);
+
   try {
     const response = await fetch(GOOGLE_TOKEN_URL, {
       method: "POST",
@@ -214,7 +248,7 @@ async function refreshAccessToken(
       body: new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
-        refresh_token: refreshToken,
+        refresh_token: decryptedRefreshToken,
         grant_type: "refresh_token",
       }),
     });
@@ -225,12 +259,30 @@ async function refreshAccessToken(
       return null;
     }
 
-    const tokens = await response.json() as { access_token: string; expires_in: number };
+    const tokens = await response.json() as { access_token: string; expires_in: number; refresh_token?: string };
     const expiresAt = Timestamp.fromDate(new Date(Date.now() + tokens.expires_in * 1000));
 
-    // Update stored tokens
+    // Re-encrypt the refresh token (use new one if provided, otherwise keep existing)
+    const tokenToStore = tokens.refresh_token || decryptedRefreshToken;
+    let encryptedRefreshToken = tokenToStore;
+    let newRefreshTokenIv: string | undefined;
+
+    if (encryptionKey) {
+      try {
+        const { encrypted, iv } = encrypt(tokenToStore, encryptionKey);
+        encryptedRefreshToken = encrypted;
+        newRefreshTokenIv = iv;
+      } catch (encryptError) {
+        console.error("[GmailSync] Failed to encrypt refresh token:", encryptError);
+        // Store unencrypted as fallback
+      }
+    }
+
+    // Update stored tokens (now encrypted)
     await db.collection("emailTokens").doc(integrationId).update({
       accessToken: tokens.access_token,
+      refreshToken: encryptedRefreshToken,
+      ...(newRefreshTokenIv && { refreshTokenIv: newRefreshTokenIv }),
       expiresAt,
       updatedAt: Timestamp.now(),
     });
@@ -352,6 +404,7 @@ class GmailApiClient {
 interface ProcessQueueOptions {
   clientId: string;
   clientSecret: string;
+  encryptionKey: string;
 }
 
 async function processQueueItem(
@@ -386,8 +439,10 @@ async function processQueueItem(
     const refreshedToken = await refreshAccessToken(
       queueItem.integrationId,
       tokenData.refreshToken,
+      tokenData.refreshTokenIv,
       options.clientId,
-      options.clientSecret
+      options.clientSecret,
+      options.encryptionKey
     );
 
     if (refreshedToken) {
@@ -883,7 +938,7 @@ export const processGmailSyncQueue = onSchedule(
     region: "europe-west1",
     memory: "1GiB",
     timeoutSeconds: 300,
-    secrets: [googleClientId, googleClientSecret],
+    secrets: [googleClientId, googleClientSecret, tokenEncryptionKey],
   },
   async () => {
     console.log("[GmailSync] Starting queue processor...");
@@ -925,6 +980,7 @@ export const processGmailSyncQueue = onSchedule(
       await processQueueItem(queueItem, {
         clientId: googleClientId.value(),
         clientSecret: googleClientSecret.value(),
+        encryptionKey: tokenEncryptionKey.value(),
       });
     } catch (error) {
       console.error("[GmailSync] Queue processor error:", error);
@@ -946,7 +1002,7 @@ export const onSyncQueueCreated = onDocumentCreated(
     region: "europe-west1",
     memory: "1GiB",
     timeoutSeconds: 300,
-    secrets: [googleClientId, googleClientSecret],
+    secrets: [googleClientId, googleClientSecret, tokenEncryptionKey],
   },
   async (event) => {
     const data = event.data?.data();
@@ -981,6 +1037,7 @@ export const onSyncQueueCreated = onDocumentCreated(
       await processQueueItem(queueItem, {
         clientId: googleClientId.value(),
         clientSecret: googleClientSecret.value(),
+        encryptionKey: tokenEncryptionKey.value(),
       });
     } catch (error) {
       console.error("[GmailSync] Immediate processing error:", error);

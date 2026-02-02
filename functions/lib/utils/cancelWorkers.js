@@ -13,7 +13,14 @@ exports.cancelPartnerWorkersForFile = cancelPartnerWorkersForFile;
 exports.cancelTransactionWorkersForFile = cancelTransactionWorkersForFile;
 exports.cancelPrecisionSearchForTransaction = cancelPrecisionSearchForTransaction;
 const firestore_1 = require("firebase-admin/firestore");
-const db = (0, firestore_1.getFirestore)();
+// Lazy initialization to avoid module-level getFirestore() call during testing
+let _db = null;
+function getDb() {
+    if (!_db) {
+        _db = (0, firestore_1.getFirestore)();
+    }
+    return _db;
+}
 /**
  * Cancel all pending/running workers for a given entity
  *
@@ -27,6 +34,7 @@ async function cancelWorkersForEntity(userId, entityType, entityId, workerTypes)
     // Build the trigger context field to match
     const triggerContextField = entityType === "transaction" ? "triggerContext.transactionId" : "triggerContext.fileId";
     // 1. Cancel pending workerRequests
+    const db = getDb();
     let requestsQuery = db
         .collection(`users/${userId}/workerRequests`)
         .where(triggerContextField, "==", entityId)
@@ -120,6 +128,7 @@ async function cancelPrecisionSearchForTransaction(userId, transactionId) {
     let cancelledQueueItems = 0;
     // Find queue items that are processing this specific transaction
     // (single_transaction scope with matching transactionId)
+    const db = getDb();
     const singleTxQuery = await db
         .collection("precisionSearchQueue")
         .where("userId", "==", userId)

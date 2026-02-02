@@ -40,11 +40,14 @@ const params_1 = require("firebase-functions/params");
 const firestore_2 = require("firebase-admin/firestore");
 const storage_1 = require("firebase-admin/storage");
 const crypto = __importStar(require("crypto"));
+const encryption_1 = require("../utils/encryption");
 // Define secrets for Google OAuth - set via Firebase CLI:
 // firebase functions:secrets:set GOOGLE_CLIENT_ID
 // firebase functions:secrets:set GOOGLE_CLIENT_SECRET
+// firebase functions:secrets:set GMAIL_TOKEN_ENCRYPTION_KEY
 const googleClientId = (0, params_1.defineSecret)("GOOGLE_CLIENT_ID");
 const googleClientSecret = (0, params_1.defineSecret)("GOOGLE_CLIENT_SECRET");
+const tokenEncryptionKey = (0, params_1.defineSecret)("GMAIL_TOKEN_ENCRYPTION_KEY");
 const db = (0, firestore_2.getFirestore)();
 const storage = (0, storage_1.getStorage)();
 // ============================================================================
@@ -137,15 +140,35 @@ async function sha256(data) {
 }
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 /**
+ * Decrypt refresh token if it was encrypted
+ * Handles both encrypted (with IV) and legacy plaintext tokens
+ */
+function decryptRefreshToken(refreshToken, refreshTokenIv, encryptionKey) {
+    // If no IV, token is not encrypted (legacy or encryption failed on store)
+    if (!refreshTokenIv) {
+        return refreshToken;
+    }
+    try {
+        return (0, encryption_1.decrypt)(refreshToken, refreshTokenIv, encryptionKey);
+    }
+    catch (error) {
+        console.error("[GmailSync] Failed to decrypt refresh token:", error);
+        // Return as-is - might be a legacy plaintext token with corrupt IV field
+        return refreshToken;
+    }
+}
+/**
  * Refresh access token using refresh token
  * Returns new token data or null if refresh fails
  *
  * @param integrationId - The integration to refresh
- * @param refreshToken - The refresh token
+ * @param refreshToken - The refresh token (possibly encrypted)
+ * @param refreshTokenIv - The IV for decryption (if encrypted)
  * @param clientId - Google OAuth Client ID (from secret)
  * @param clientSecret - Google OAuth Client Secret (from secret)
+ * @param encryptionKey - Key for token encryption/decryption
  */
-async function refreshAccessToken(integrationId, refreshToken, clientId, clientSecret) {
+async function refreshAccessToken(integrationId, refreshToken, refreshTokenIv, clientId, clientSecret, encryptionKey) {
     if (!refreshToken) {
         console.log("[GmailSync] No refresh token available");
         return null;
@@ -154,6 +177,8 @@ async function refreshAccessToken(integrationId, refreshToken, clientId, clientS
         console.error("[GmailSync] Google OAuth credentials not configured in Cloud Functions");
         return null;
     }
+    // Decrypt the refresh token
+    const decryptedRefreshToken = decryptRefreshToken(refreshToken, refreshTokenIv, encryptionKey);
     try {
         const response = await fetch(GOOGLE_TOKEN_URL, {
             method: "POST",
@@ -161,7 +186,7 @@ async function refreshAccessToken(integrationId, refreshToken, clientId, clientS
             body: new URLSearchParams({
                 client_id: clientId,
                 client_secret: clientSecret,
-                refresh_token: refreshToken,
+                refresh_token: decryptedRefreshToken,
                 grant_type: "refresh_token",
             }),
         });
@@ -172,9 +197,26 @@ async function refreshAccessToken(integrationId, refreshToken, clientId, clientS
         }
         const tokens = await response.json();
         const expiresAt = firestore_2.Timestamp.fromDate(new Date(Date.now() + tokens.expires_in * 1000));
-        // Update stored tokens
+        // Re-encrypt the refresh token (use new one if provided, otherwise keep existing)
+        const tokenToStore = tokens.refresh_token || decryptedRefreshToken;
+        let encryptedRefreshToken = tokenToStore;
+        let newRefreshTokenIv;
+        if (encryptionKey) {
+            try {
+                const { encrypted, iv } = (0, encryption_1.encrypt)(tokenToStore, encryptionKey);
+                encryptedRefreshToken = encrypted;
+                newRefreshTokenIv = iv;
+            }
+            catch (encryptError) {
+                console.error("[GmailSync] Failed to encrypt refresh token:", encryptError);
+                // Store unencrypted as fallback
+            }
+        }
+        // Update stored tokens (now encrypted)
         await db.collection("emailTokens").doc(integrationId).update({
             accessToken: tokens.access_token,
+            refreshToken: encryptedRefreshToken,
+            ...(newRefreshTokenIv && { refreshTokenIv: newRefreshTokenIv }),
             expiresAt,
             updatedAt: firestore_2.Timestamp.now(),
         });
@@ -274,7 +316,7 @@ async function processQueueItem(queueItem, options) {
     if (tokenExpiresAt < fiveMinutesFromNow) {
         console.log(`[GmailSync] Token expired or expiring soon, attempting refresh...`);
         // Try to refresh the token using secrets
-        const refreshedToken = await refreshAccessToken(queueItem.integrationId, tokenData.refreshToken, options.clientId, options.clientSecret);
+        const refreshedToken = await refreshAccessToken(queueItem.integrationId, tokenData.refreshToken, tokenData.refreshTokenIv, options.clientId, options.clientSecret, options.encryptionKey);
         if (refreshedToken) {
             console.log(`[GmailSync] Token refreshed successfully`);
             tokenData = { ...tokenData, accessToken: refreshedToken.accessToken, expiresAt: refreshedToken.expiresAt };
@@ -718,7 +760,7 @@ exports.processGmailSyncQueue = (0, scheduler_1.onSchedule)({
     region: "europe-west1",
     memory: "1GiB",
     timeoutSeconds: 300,
-    secrets: [googleClientId, googleClientSecret],
+    secrets: [googleClientId, googleClientSecret, tokenEncryptionKey],
 }, async () => {
     console.log("[GmailSync] Starting queue processor...");
     // Get oldest pending queue item
@@ -753,6 +795,7 @@ exports.processGmailSyncQueue = (0, scheduler_1.onSchedule)({
         await processQueueItem(queueItem, {
             clientId: googleClientId.value(),
             clientSecret: googleClientSecret.value(),
+            encryptionKey: tokenEncryptionKey.value(),
         });
     }
     catch (error) {
@@ -771,7 +814,7 @@ exports.onSyncQueueCreated = (0, firestore_1.onDocumentCreated)({
     region: "europe-west1",
     memory: "1GiB",
     timeoutSeconds: 300,
-    secrets: [googleClientId, googleClientSecret],
+    secrets: [googleClientId, googleClientSecret, tokenEncryptionKey],
 }, async (event) => {
     const data = event.data?.data();
     if (!data)
@@ -801,6 +844,7 @@ exports.onSyncQueueCreated = (0, firestore_1.onDocumentCreated)({
         await processQueueItem(queueItem, {
             clientId: googleClientId.value(),
             clientSecret: googleClientSecret.value(),
+            encryptionKey: tokenEncryptionKey.value(),
         });
     }
     catch (error) {

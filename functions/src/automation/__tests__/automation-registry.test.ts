@@ -59,7 +59,10 @@ describe("automation-registry", () => {
         expect(automation.description).toBeTruthy();
         expect(automation.trigger).toBeDefined();
         expect(automation.effects).toBeInstanceOf(Array);
-        expect(automation.effects.length).toBeGreaterThan(0);
+        // Search category automations are read-only and may have empty effects
+        if (automation.category !== "search") {
+          expect(automation.effects.length).toBeGreaterThan(0);
+        }
         expect(automation.category).toBeTruthy();
       });
     });

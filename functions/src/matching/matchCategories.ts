@@ -1,5 +1,6 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { AutomationMeta } from "../automation/types";
 import {
   matchTransactionToCategories,
   shouldAutoApplyCategory,
@@ -11,6 +12,41 @@ import {
 } from "../utils/category-matcher";
 
 const db = getFirestore();
+
+export const AUTOMATION_META: AutomationMeta = {
+  id: "matchCategories",
+  name: "Match Categories (Manual)",
+  description:
+    "Manually triggered category matching for transactions. Matches transactions to no-receipt categories based on partner associations and learned patterns.",
+  trigger: {
+    type: "callable",
+    regions: ["europe-west1"],
+  },
+  effects: [
+    {
+      entity: "transaction",
+      fields: [
+        "noReceiptCategoryId",
+        "noReceiptCategoryTemplateId",
+        "noReceiptCategoryConfidence",
+        "noReceiptCategoryMatchedBy",
+        "categorySuggestions",
+        "isComplete",
+      ],
+      action: "update",
+    },
+    {
+      entity: "noReceiptCategory",
+      fields: ["matchedPartnerIds"],
+      action: "update",
+    },
+  ],
+  config: {
+    autoApplyThreshold: 89,
+  },
+  icon: "FolderOpen",
+  category: "matching",
+};
 
 interface MatchCategoriesRequest {
   transactionIds?: string[];

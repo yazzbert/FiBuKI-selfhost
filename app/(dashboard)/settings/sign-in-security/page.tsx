@@ -42,6 +42,7 @@ import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase/config";
 import { MfaStatusCard } from "@/components/mfa";
 import { SettingsPageHeader } from "@/components/ui/settings-page-header";
+import { DeleteAccountSection } from "@/components/settings/delete-account-section";
 
 export default function SignInSecurityPage() {
   const { user } = useAuth();
@@ -283,7 +284,7 @@ export default function SignInSecurityPage() {
       </Card>
 
       {/* Two-Factor Authentication Section */}
-      <Card>
+      <Card className="mb-6">
         <CardHeader>
           <CardTitle>Two-Factor Authentication</CardTitle>
           <CardDescription>Add an extra layer of security to your account</CardDescription>
@@ -292,6 +293,9 @@ export default function SignInSecurityPage() {
           <MfaStatusCard showAsSection />
         </CardContent>
       </Card>
+
+      {/* Danger Zone - Delete Account */}
+      <DeleteAccountSection />
 
       {/* Password Setup Dialog */}
       <Dialog open={showPasswordSetup} onOpenChange={handleClosePasswordDialog}>

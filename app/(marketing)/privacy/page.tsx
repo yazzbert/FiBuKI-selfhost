@@ -38,7 +38,7 @@ export default async function PrivacyPage() {
 
           <h1 className="text-3xl font-bold mb-2">{t("title")}</h1>
           <p className="text-sm text-muted-foreground mb-8">
-            {t("lastUpdated", { date: "Januar 2026" })}
+            {t("lastUpdated", { date: "Februar 2026" })}
           </p>
 
           <p className="text-muted-foreground mb-8">{t("intro")}</p>
@@ -83,6 +83,34 @@ export default async function PrivacyPage() {
                     </p>
                   </div>
                 ))}
+              </div>
+            </section>
+
+            {/* Data Protection */}
+            <section>
+              <h2 className="text-xl font-semibold mb-3">
+                {t("sections.dataProtection.title")}
+              </h2>
+              <p className="text-muted-foreground whitespace-pre-line mb-4">
+                {t("sections.dataProtection.content")}
+              </p>
+              <div className="space-y-4">
+                <div className="border-l-2 border-muted pl-4">
+                  <h3 className="font-medium">
+                    {t("sections.dataProtection.emailData.title")}
+                  </h3>
+                  <p className="text-sm text-muted-foreground whitespace-pre-line">
+                    {t("sections.dataProtection.emailData.content")}
+                  </p>
+                </div>
+                <div className="border-l-2 border-muted pl-4">
+                  <h3 className="font-medium">
+                    {t("sections.dataProtection.retention.title")}
+                  </h3>
+                  <p className="text-sm text-muted-foreground whitespace-pre-line">
+                    {t("sections.dataProtection.retention.content")}
+                  </p>
+                </div>
               </div>
             </section>
 

@@ -1,0 +1,21 @@
+{
+  "name": "@fibuki/openclaw-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "openclaw": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@taxstudio/mcp-server": "file:../../mcp-server",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.9.0"
+  }
+}

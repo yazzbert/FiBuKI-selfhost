@@ -1,12 +1,45 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.matchCategories = void 0;
+exports.matchCategories = exports.AUTOMATION_META = void 0;
 exports.matchCategoriesForUser = matchCategoriesForUser;
 exports.matchCategoriesForTransactions = matchCategoriesForTransactions;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-admin/firestore");
 const category_matcher_1 = require("../utils/category-matcher");
 const db = (0, firestore_1.getFirestore)();
+exports.AUTOMATION_META = {
+    id: "matchCategories",
+    name: "Match Categories (Manual)",
+    description: "Manually triggered category matching for transactions. Matches transactions to no-receipt categories based on partner associations and learned patterns.",
+    trigger: {
+        type: "callable",
+        regions: ["europe-west1"],
+    },
+    effects: [
+        {
+            entity: "transaction",
+            fields: [
+                "noReceiptCategoryId",
+                "noReceiptCategoryTemplateId",
+                "noReceiptCategoryConfidence",
+                "noReceiptCategoryMatchedBy",
+                "categorySuggestions",
+                "isComplete",
+            ],
+            action: "update",
+        },
+        {
+            entity: "noReceiptCategory",
+            fields: ["matchedPartnerIds"],
+            action: "update",
+        },
+    ],
+    config: {
+        autoApplyThreshold: 89,
+    },
+    icon: "FolderOpen",
+    category: "matching",
+};
 /**
  * Callable function to manually trigger category matching
  * Can match specific transactions or all unmatched ones

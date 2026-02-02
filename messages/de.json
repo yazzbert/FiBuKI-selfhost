@@ -127,6 +127,18 @@
           "purpose": "Analyse und Optimierung der KI-Interaktionen zur Qualitätsverbesserung."
         }
       },
+      "dataProtection": {
+        "title": "Datenschutzmaßnahmen",
+        "content": "Wir setzen umfassende Sicherheitsmaßnahmen zum Schutz Ihrer Daten ein:\n\n• Verschlüsselung bei der Übertragung: Alle zwischen Ihrem Gerät und unseren Servern übertragenen Daten werden mit TLS 1.3 verschlüsselt\n• Verschlüsselung bei der Speicherung: Alle in unseren Datenbanken (Google Cloud Firestore) und Dateispeichern (Google Cloud Storage) gespeicherten Daten werden mit AES-256 verschlüsselt\n• Zugriffskontrollen: Ihre Daten sind nur für Sie über Ihr authentifiziertes Konto zugänglich. Unser Team greift nicht auf Ihre persönlichen Daten zu, außer für technischen Support auf Ihre ausdrückliche Anfrage\n• Infrastruktursicherheit: Unsere Dienste laufen auf der Google Cloud Platform, die SOC 2, ISO 27001 und andere Sicherheitszertifizierungen vorweist",
+        "emailData": {
+          "title": "E-Mail-Daten (Gmail-Integration)",
+          "content": "Wenn Sie Ihr Gmail-Konto verbinden:\n\n• Wir greifen nur auf E-Mail-Metadaten und Anhänge zu, die für Belege und Rechnungen relevant sind\n• E-Mail-Inhalte werden verarbeitet, um transaktionsrelevante Informationen zu extrahieren (Beträge, Daten, Händler)\n• Wir speichern keine vollständigen E-Mail-Inhalte; nur extrahierte Daten werden aufbewahrt\n• Sie können Ihr Gmail-Konto jederzeit trennen und alle zugehörigen Daten löschen"
+        },
+        "retention": {
+          "title": "Datenspeicherung & Löschung",
+          "content": "• Ihre Daten werden aufbewahrt, solange Ihr Konto aktiv ist\n• Sie können jederzeit einzelne Dateien, Transaktionen oder verbundene Konten löschen\n• Sie können Ihr Konto unter Einstellungen > Anmeldung & Sicherheit > Konto löschen entfernen\n• Die Kontolöschung beinhaltet eine 30-tägige Frist, in der Sie die Anfrage stornieren können\n• Nach Ablauf der Frist werden alle zugehörigen Daten dauerhaft entfernt\n• OAuth-Token für verbundene Dienste (z.B. Gmail) werden widerrufen und können nicht wiederhergestellt werden\n• Datenbank-Backups werden für bis zu 90 Tage zur Notfallwiederherstellung aufbewahrt und danach automatisch gelöscht"
+        }
+      },
       "rights": {
         "title": "Ihre Rechte",
         "content": "Nach der DSGVO haben Sie folgende Rechte:\n\n• Auskunftsrecht: Sie können Auskunft über Ihre gespeicherten Daten verlangen\n• Berichtigung: Sie können unrichtige Daten korrigieren lassen\n• Löschung: Sie können die Löschung Ihrer Daten verlangen\n• Einschränkung: Sie können die Verarbeitung einschränken lassen\n• Datenübertragbarkeit: Sie können Ihre Daten in einem gängigen Format erhalten\n• Widerspruch: Sie können der Verarbeitung widersprechen\n• Beschwerde: Sie können sich bei einer Aufsichtsbehörde beschweren"

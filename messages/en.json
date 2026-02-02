@@ -127,6 +127,18 @@
           "purpose": "Analysis and optimization of AI interactions for quality improvement."
         }
       },
+      "dataProtection": {
+        "title": "Data Protection Mechanisms",
+        "content": "We implement comprehensive security measures to protect your data:\n\n• Encryption in transit: All data transmitted between your device and our servers is encrypted using TLS 1.3\n• Encryption at rest: All data stored in our databases (Google Cloud Firestore) and file storage (Google Cloud Storage) is encrypted using AES-256\n• Access controls: Your data is only accessible to you via your authenticated account. Our team does not access your personal data except for technical support when explicitly requested by you\n• Infrastructure security: Our services run on Google Cloud Platform, which maintains SOC 2, ISO 27001, and other security certifications",
+        "emailData": {
+          "title": "Email Data (Gmail Integration)",
+          "content": "When you connect your Gmail account:\n\n• We access only email metadata and attachments relevant to receipts and invoices\n• Email content is processed to extract transaction-relevant information (amounts, dates, vendors)\n• We do not store full email content; only extracted data is retained\n• You can disconnect your Gmail account and delete all associated data at any time"
+        },
+        "retention": {
+          "title": "Data Retention & Deletion",
+          "content": "• Your data is retained while your account is active\n• You can delete individual files, transactions, or connected accounts at any time\n• You can delete your account via Settings > Sign-in & Security > Delete Account\n• Account deletion includes a 30-day grace period during which you can cancel the request\n• After the grace period, all associated data is permanently removed\n• OAuth tokens for connected services (e.g., Gmail) are revoked and cannot be recovered\n• Database backups are retained for up to 90 days for disaster recovery, after which they are automatically purged"
+        }
+      },
       "rights": {
         "title": "Your Rights",
         "content": "Under GDPR, you have the following rights:\n\n• Right of access: You can request information about your stored data\n• Rectification: You can have incorrect data corrected\n• Erasure: You can request deletion of your data\n• Restriction: You can request restriction of processing\n• Data portability: You can receive your data in a common format\n• Objection: You can object to processing\n• Complaint: You can lodge a complaint with a supervisory authority"

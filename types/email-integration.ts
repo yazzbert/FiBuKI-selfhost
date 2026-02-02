@@ -108,11 +108,14 @@ export interface EmailTokenDocument {
   userId: string;
   provider: EmailProvider;
 
-  /** Encrypted access token */
+  /** Access token (short-lived, stored in plaintext) */
   accessToken: string;
 
-  /** Encrypted refresh token */
+  /** Encrypted refresh token (AES-256-GCM) */
   refreshToken: string;
+
+  /** Initialization vector for refresh token decryption (hex string) */
+  refreshTokenIv?: string;
 
   /** Token expiry timestamp */
   expiresAt: Timestamp;

@@ -41,6 +41,7 @@ import { AUTOMATION_META as onCategoryUpdateMeta } from "../matching/onCategoryU
 
 // Callable - Matching (manual triggers)
 import { AUTOMATION_META as matchPartnersMeta } from "../matching/matchPartners";
+import { AUTOMATION_META as matchCategoriesMeta } from "../matching/matchCategories";
 import { AUTOMATION_META as searchExternalPartnersMeta } from "../matching/searchExternalPartners";
 
 // Callable - Agentic search
@@ -84,6 +85,7 @@ export const AUTOMATION_REGISTRY: Record<string, AutomationMeta> = {
 
   // Manual matching
   matchPartners: matchPartnersMeta,
+  matchCategories: matchCategoriesMeta,
   searchExternalPartners: searchExternalPartnersMeta,
 
   // Agentic search

@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp, FieldValue } from "firebase-admin/firestore";
+import { encrypt, getEncryptionKey } from "@/lib/crypto/encryption";
 
 const db = getAdminDb();
 const TOKENS_COLLECTION = "emailTokens";
@@ -247,6 +248,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * Store tokens in secure server-side collection
+ * Refresh tokens are encrypted with AES-256-GCM
  */
 async function storeTokens(
   integrationId: string,
@@ -255,12 +257,30 @@ async function storeTokens(
   expiresAt: Date,
   userId: string
 ): Promise<void> {
+  // Encrypt refresh token if present
+  let encryptedRefreshToken = refreshToken;
+  let refreshTokenIv: string | null = null;
+
+  if (refreshToken) {
+    try {
+      const encryptionKey = getEncryptionKey();
+      const { encrypted, iv } = encrypt(refreshToken, encryptionKey);
+      encryptedRefreshToken = encrypted;
+      refreshTokenIv = iv;
+    } catch (error) {
+      // Log but don't fail - encryption key might not be configured yet
+      console.error("[Gmail OAuth] Failed to encrypt refresh token:", error);
+      // Store unencrypted as fallback (will be encrypted on next refresh)
+    }
+  }
+
   await db.collection(TOKENS_COLLECTION).doc(integrationId).set({
     integrationId,
     userId,
     provider: "gmail",
     accessToken,
-    refreshToken,
+    refreshToken: encryptedRefreshToken,
+    ...(refreshTokenIv && { refreshTokenIv }),
     expiresAt: Timestamp.fromDate(expiresAt),
     updatedAt: Timestamp.now(),
   });

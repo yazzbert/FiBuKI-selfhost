@@ -102,37 +102,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(firebaseUser);
 
       if (firebaseUser) {
-        // Get fresh token to check admin claim
-        const token = await firebaseUser.getIdTokenResult();
+        // Get cached token first (no network call if valid)
+        // Only force refresh if we need fresh claims
+        const token = await firebaseUser.getIdTokenResult(false);
         setIsAdmin(!!token.claims.admin);
 
-        // Check if user has custom MFA (passkeys) that we need to verify
+        // Set loading false immediately - don't block on MFA check
+        setLoading(false);
+
+        // Check MFA status in background (non-blocking)
         // Skip if MFA was already verified this session
         if (!isMfaVerifiedForSession()) {
-          try {
-            const getMfaStatusFn = httpsCallable<void, MfaStatusResponse>(
-              functions,
-              "getMfaStatus"
-            );
-            const result = await getMfaStatusFn();
-            const mfaStatus = result.data;
-            console.log("[AuthProvider] getMfaStatus result:", mfaStatus);
+          // Run in background - don't await
+          (async () => {
+            try {
+              const getMfaStatusFn = httpsCallable<void, MfaStatusResponse>(
+                functions,
+                "getMfaStatus"
+              );
+              const result = await getMfaStatusFn();
+              const mfaStatus = result.data;
 
-            if (mfaStatus && mfaStatus.passkeysEnabled && !mfaStatus.totpEnabled) {
-              // User has passkeys but no TOTP - require custom MFA verification
-              console.log("[AuthProvider] Setting customMfaRequired=true with status:", mfaStatus);
-              setCustomMfaStatus(mfaStatus);
-              setCustomMfaRequired(true);
+              if (mfaStatus && mfaStatus.passkeysEnabled && !mfaStatus.totpEnabled) {
+                // User has passkeys but no TOTP - require custom MFA verification
+                setCustomMfaStatus(mfaStatus);
+                setCustomMfaRequired(true);
+              }
+            } catch (err) {
+              console.error("Error checking custom MFA status:", err);
             }
-          } catch (err) {
-            console.error("Error checking custom MFA status on auth state change:", err);
-          }
-        } else {
-          console.log("[AuthProvider] MFA already verified for session, skipping check");
+          })();
         }
-
-        // Only set loading false AFTER MFA check is complete
-        setLoading(false);
       } else {
         setIsAdmin(false);
         // Clear MFA state when user signs out

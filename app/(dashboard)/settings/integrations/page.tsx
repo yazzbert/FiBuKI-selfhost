@@ -16,11 +16,14 @@ import {
   Globe,
   Inbox,
   Copy,
+  Bot,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useAuth } from "@/components/auth/auth-provider";
 import { useEmailIntegrations } from "@/hooks/use-email-integrations";
 import {
   useActiveSyncForIntegration,
@@ -35,6 +38,7 @@ import { FinanzOnlineIntegrationCard } from "@/components/settings/finanzonline-
 
 function IntegrationsContent() {
   const router = useRouter();
+  const { user } = useAuth();
   const extension = useBrowserExtensionStatus();
   const {
     integrations,
@@ -52,6 +56,15 @@ function IntegrationsContent() {
   const [connecting, setConnecting] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [copiedEmail, setCopiedEmail] = useState(false);
+  const [copiedUserId, setCopiedUserId] = useState(false);
+
+  const handleCopyUserId = async () => {
+    if (user?.uid) {
+      await navigator.clipboard.writeText(user.uid);
+      setCopiedUserId(true);
+      setTimeout(() => setCopiedUserId(false), 2000);
+    }
+  };
 
   const handleConnectGmail = async () => {
     setConnecting(true);
@@ -325,6 +338,105 @@ function IntegrationsContent() {
 
         {/* FinanzOnline WebService Section */}
         <FinanzOnlineIntegrationCard />
+
+        {/* AI Agents Section */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-violet-100 flex items-center justify-center">
+                <Bot className="h-5 w-5 text-violet-600" />
+              </div>
+              <div>
+                <CardTitle className="text-lg">AI Agents</CardTitle>
+                <CardDescription>
+                  Let AI assistants manage your transactions and receipts
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            {/* User ID for integration */}
+            <div className="rounded-lg border bg-card p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium mb-1">Your User ID</div>
+                  <div className="text-xs text-muted-foreground mb-2">
+                    Use this ID to connect AI tools like OpenClaw or Claude Desktop
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="font-mono text-xs bg-muted px-2 py-1 rounded select-all">
+                      {user?.uid || "Loading..."}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={handleCopyUserId}
+                      disabled={!user?.uid}
+                    >
+                      {copiedUserId ? (
+                        <Check className="h-3.5 w-3.5 text-green-500" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* OpenClaw Plugin */}
+            <div className="rounded-lg border bg-card p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
+                    <Bot className="h-5 w-5 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <div className="font-medium">OpenClaw Plugin</div>
+                    <div className="text-xs text-muted-foreground">
+                      Full access to transactions, files, and automations
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.open("https://docs.openclaw.ai/plugin", "_blank")}
+                >
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Setup Guide
+                </Button>
+              </div>
+            </div>
+
+            {/* MCP Server */}
+            <div className="rounded-lg border bg-card p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
+                    <Bot className="h-5 w-5 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <div className="font-medium">Claude Desktop (MCP)</div>
+                    <div className="text-xs text-muted-foreground">
+                      Use with Claude Desktop via Model Context Protocol
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.open("https://modelcontextprotocol.io/quickstart", "_blank")}
+                >
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Setup Guide
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Coming Soon Section */}
         <Card className="opacity-60">

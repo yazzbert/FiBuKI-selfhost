@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./src/context.js": "./src/context.ts",
+    "./src/types.js": "./src/types.ts",
+    "./src/tools/*.js": "./src/tools/*.ts"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",

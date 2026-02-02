@@ -7,7 +7,14 @@
 
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 
-const db = getFirestore();
+// Lazy initialization to avoid module-level getFirestore() call during testing
+let _db: FirebaseFirestore.Firestore | null = null;
+function getDb(): FirebaseFirestore.Firestore {
+  if (!_db) {
+    _db = getFirestore();
+  }
+  return _db;
+}
 
 export type EntityType = "transaction" | "file";
 
@@ -37,6 +44,7 @@ export async function cancelWorkersForEntity(
     entityType === "transaction" ? "triggerContext.transactionId" : "triggerContext.fileId";
 
   // 1. Cancel pending workerRequests
+  const db = getDb();
   let requestsQuery = db
     .collection(`users/${userId}/workerRequests`)
     .where(triggerContextField, "==", entityId)
@@ -160,6 +168,7 @@ export async function cancelPrecisionSearchForTransaction(
 
   // Find queue items that are processing this specific transaction
   // (single_transaction scope with matching transactionId)
+  const db = getDb();
   const singleTxQuery = await db
     .collection("precisionSearchQueue")
     .where("userId", "==", userId)
