@@ -289,3 +289,27 @@ Used for the main chat interface and LangGraph agent. Requires `ANTHROPIC_API_KE
 - Super admin: `felix@i7v6.com` (hardcoded, auto-granted admin on first login)
 - Auth context provided by `AuthProvider` in `/components/auth/`
 - Protected routes use `ProtectedRoute` component
+
+## Deployment
+
+### Frontend (Next.js)
+- Hosted on **Firebase Hosting**
+- Auto-deploys when pushing to `main` branch
+- Domain: `fibuki.com`
+
+### Cloud Functions
+- Deploy manually: `firebase deploy --only functions`
+- Region: `europe-west1`
+- Deploy specific functions: `firebase deploy --only functions:functionName`
+
+### Full Deploy
+```bash
+# Functions only
+firebase deploy --only functions
+
+# Frontend only (after push to main, or manual)
+firebase deploy --only hosting
+
+# Everything
+firebase deploy
+```
