@@ -151,6 +151,33 @@ All callable functions automatically log to `functionCalls` collection:
 
 AI usage is logged separately to `aiUsage` collection via `ctx.logAIUsage()`
 
+### Server-Side Tool Registry (MCP/API)
+
+External AI integrations (OpenClaw, Claude Desktop, ChatGPT) use a shared tool registry:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    EXTERNAL AI TOOLS                            │
+│  OpenClaw  │  Claude Desktop (MCP)  │  ChatGPT  │  REST API     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                    HTTP + API Key Auth
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              functions/src/tools/handlers.ts                    │
+│              (Single source of truth)                           │
+│  listSources │ listTransactions │ connectFile │ ...             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key files:**
+- `functions/src/tools/handlers.ts` - All tool implementations
+- `functions/src/mcp-api/index.ts` - REST API endpoint (mcpApi)
+- `functions/src/mcp-api/mcp-sse.ts` - MCP protocol endpoint (mcpSse)
+
+**Note**: Chat assistant (`lib/agent/tools/`) has separate implementations for performance (direct Admin SDK reads). Writes are already unified via Cloud Function callables.
+
 ## Business Rules
 
 ### Server-Side Scoring Only
