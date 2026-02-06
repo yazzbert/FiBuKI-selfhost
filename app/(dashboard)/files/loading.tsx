@@ -5,8 +5,8 @@ export default function FilesLoading() {
     <div className="h-full flex flex-col overflow-hidden bg-card">
       {/* Toolbar skeleton */}
       <div className="flex items-center gap-2 px-4 py-2 border-b">
-        <Skeleton className="h-9 w-[300px]" />
-        <Skeleton className="h-9 w-[100px]" />
+        <Skeleton shimmer className="h-9 w-[300px]" />
+        <Skeleton shimmer className="h-9 w-[100px]" />
       </div>
       {/* Table header skeleton */}
       <div className="flex items-center gap-2 px-4 h-10 border-b bg-muted">
@@ -24,11 +24,11 @@ export default function FilesLoading() {
             className="flex items-center gap-2 px-4 border-b last:border-b-0"
             style={{ height: 64 }}
           >
-            <Skeleton className="h-5 w-[80px]" />
-            <Skeleton className="h-5 w-[70px]" />
-            <Skeleton className="h-5 w-[50px]" />
-            <Skeleton className="h-5 w-[200px]" />
-            <Skeleton className="h-5 w-[60px] rounded-full" />
+            <Skeleton shimmer className="h-5 w-[80px]" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton shimmer className="h-5 w-[70px]" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton shimmer className="h-5 w-[50px]" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton shimmer className="h-5 w-[200px]" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton shimmer className="h-5 w-[60px] rounded-full" style={{ animationDelay: `${i * 50}ms` }} />
           </div>
         ))}
       </div>

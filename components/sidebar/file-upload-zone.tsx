@@ -89,14 +89,14 @@ export function FileUploadZone({
             <>
               <div
                 className={cn(
-                  "p-3 rounded-full mb-3 transition-colors",
-                  isDragActive ? "bg-primary/20" : "bg-muted"
+                  "p-3 rounded-full mb-3 transition-all duration-200",
+                  isDragActive ? "bg-primary/20 scale-110" : "bg-muted"
                 )}
               >
                 <Upload
                   className={cn(
                     "h-6 w-6 transition-colors",
-                    isDragActive ? "text-primary" : "text-muted-foreground"
+                    isDragActive ? "text-primary animate-wiggle" : "text-muted-foreground"
                   )}
                 />
               </div>

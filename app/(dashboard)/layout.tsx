@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -74,6 +74,40 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
   const { user, isAdmin, signOut } = useAuth();
   const [isLogoJumping, setIsLogoJumping] = useState(false);
 
+  // Sliding nav indicator
+  const navRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const navRef = useRef<HTMLElement>(null);
+  const hasMeasured = useRef(false);
+  const [navIndicatorStyle, setNavIndicatorStyle] = useState<React.CSSProperties>({
+    opacity: 0, left: 0, width: 0, height: 0, top: 0,
+  });
+
+  const activeIndex = navItems.findIndex((item) => pathname.startsWith(item.href));
+
+  const updateIndicator = useCallback(() => {
+    const el = activeIndex >= 0 ? navRefs.current[activeIndex] : null;
+    const nav = navRef.current;
+    if (el && nav) {
+      const navRect = nav.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      setNavIndicatorStyle({
+        left: elRect.left - navRect.left,
+        width: elRect.width,
+        height: elRect.height,
+        top: elRect.top - navRect.top,
+        opacity: 1,
+      });
+      hasMeasured.current = true;
+    } else {
+      setNavIndicatorStyle((prev) => ({ ...prev, opacity: 0 }));
+    }
+  }, [activeIndex]);
+
+  // Update indicator on route change and sidebar resize
+  useLayoutEffect(() => {
+    updateIndicator();
+  }, [updateIndicator, sidebarWidth, isSidebarOpen]);
+
   const handleLogoClick = () => {
     if (!isLogoJumping) {
       setIsLogoJumping(true);
@@ -124,17 +158,29 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                 FiBuKI
               </span>
             </button>
-            <nav className="flex items-center gap-1">
-              {navItems.map((item) => {
+            <nav ref={navRef} className="relative flex items-center gap-1">
+              {/* Sliding active indicator */}
+              <div
+                className={cn(
+                  "absolute rounded-md bg-primary/8",
+                  hasMeasured.current
+                    ? "transition-[left,width,opacity] duration-300 ease-out"
+                    : "transition-none"
+                )}
+                style={navIndicatorStyle}
+                aria-hidden
+              />
+              {navItems.map((item, i) => {
                 const isActive = pathname.startsWith(item.href);
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
+                    ref={(el) => { navRefs.current[i] = el; }}
                     className={cn(
-                      "flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                      "relative flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200",
                       isActive
-                        ? "bg-primary/8 text-primary"
+                        ? "text-primary"
                         : "text-muted-foreground hover:text-foreground hover:bg-primary/5"
                     )}
                   >

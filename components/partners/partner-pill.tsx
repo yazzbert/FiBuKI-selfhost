@@ -13,6 +13,8 @@ interface PartnerPillProps {
   variant?: "default" | "suggestion";
   partnerType?: "user" | "global";
   disabled?: boolean;
+  /** Animate entrance with pop-in effect */
+  animate?: boolean;
   className?: string;
 }
 
@@ -25,6 +27,7 @@ export function PartnerPill({
   variant = "default",
   partnerType,
   disabled,
+  animate,
   className
 }: PartnerPillProps) {
   const isInteractive = onRemove || onClick;
@@ -49,13 +52,14 @@ export function PartnerPill({
   return (
     <div
       className={cn(
-        "inline-flex items-center h-7 px-3 gap-2 rounded-md border text-sm max-w-full min-w-0",
+        "inline-flex items-center h-7 px-3 gap-2 rounded-md border text-sm max-w-full min-w-0 transition-colors duration-300",
         isSuggestion
           ? "bg-info border-info-border text-info-foreground hover:bg-info/80"
           : "bg-background border-input",
         isInteractive && "cursor-pointer",
         !isSuggestion && isInteractive && "hover:bg-accent",
         disabled && "opacity-50 cursor-not-allowed",
+        animate && "animate-pill-pop",
         className
       )}
       onClick={handleClick}

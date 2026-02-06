@@ -21,6 +21,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn, toDateSafe } from "@/lib/utils";
+import { isRecentlyUpdated, MOTION } from "@/design-system";
 
 export interface FileAmountData {
   totalAmount: number;
@@ -125,53 +126,66 @@ export function getTransactionColumns(
       id: "assignedPartner",
       header: "Partner",
       cell: ({ row }) => {
-        const { partnerId, partnerType, partnerMatchConfidence, id: txId } = row.original;
-
-        // Show assigned partner if exists (styled like transaction detail)
-        if (partnerId) {
-          const partner = partnerType === "global"
-            ? globalPartnerMap.get(partnerId)
-            : userPartnerMap.get(partnerId);
-          return (
-            <PartnerPill
-              name={partner?.name || partnerId.slice(0, 8) + "..."}
-              confidence={partnerMatchConfidence ?? undefined}
-              matchedBy={row.original.partnerMatchedBy}
-            />
-          );
-        }
-
-        // Get top server suggestion with partner lookup
+        const { partnerId, partnerType, partnerMatchConfidence } = row.original;
         const serverSuggestions = row.original.partnerSuggestions || [];
-        let topSuggestion: { name: string; confidence: number } | null = null;
+
+        // Find top suggestion (first with a resolvable partner)
+        let topSuggestionId: string | null = null;
+        let topSuggestionType: "global" | "user" | null = null;
+        let topSuggestionConfidence: number | null = null;
         for (const s of serverSuggestions) {
-          const partner = s.partnerType === "global"
+          const p = s.partnerType === "global"
             ? globalPartnerMap.get(s.partnerId)
             : userPartnerMap.get(s.partnerId);
-          if (partner) {
-            topSuggestion = { name: partner.name, confidence: s.confidence };
-            break; // First one is highest confidence (already sorted server-side)
+          if (p) {
+            topSuggestionId = s.partnerId;
+            topSuggestionType = s.partnerType;
+            topSuggestionConfidence = s.confidence;
+            break;
           }
         }
 
-        if (topSuggestion) {
-          return (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <PartnerPill
-                  name={topSuggestion.name}
-                  confidence={topSuggestion.confidence}
-                  variant="suggestion"
-                />
-              </TooltipTrigger>
+        // Determine what to display: assigned partner wins, else top suggestion
+        const isAssigned = !!partnerId;
+        const displayId = partnerId || topSuggestionId;
+        const displayType = isAssigned ? partnerType : topSuggestionType;
+
+        if (!displayId) {
+          return <span className="text-sm text-muted-foreground">—</span>;
+        }
+
+        const partner = displayType === "global"
+          ? globalPartnerMap.get(displayId)
+          : userPartnerMap.get(displayId);
+
+        if (!partner) {
+          return <span className="text-sm text-muted-foreground">—</span>;
+        }
+
+        const isSuggestion = !isAssigned;
+        const recent = isRecentlyUpdated(row.original.updatedAt, MOTION.JUST_COMPLETED_THRESHOLD_MS);
+        // Pop-in only when genuinely new: recently assigned AND different from what was showing
+        const isNewPartner = isAssigned && recent && displayId !== topSuggestionId;
+
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PartnerPill
+                key={displayId}
+                name={partner.name}
+                variant={isSuggestion ? "suggestion" : "default"}
+                confidence={isAssigned ? (partnerMatchConfidence ?? undefined) : (topSuggestionConfidence ?? undefined)}
+                matchedBy={isAssigned ? row.original.partnerMatchedBy : undefined}
+                animate={isNewPartner}
+              />
+            </TooltipTrigger>
+            {isSuggestion && (
               <TooltipContent>
                 <p className="text-xs">Click row to confirm</p>
               </TooltipContent>
-            </Tooltip>
-          );
-        }
-
-        return <span className="text-sm text-muted-foreground">—</span>;
+            )}
+          </Tooltip>
+        );
       },
     },
     {
@@ -217,6 +231,7 @@ export function getTransactionColumns(
           const label = template?.name || "No receipt";
           const categoryConfidence = row.original.noReceiptCategoryConfidence;
           const categoryMatchedBy = row.original.noReceiptCategoryMatchedBy;
+          const recent = isRecentlyUpdated(row.original.updatedAt, MOTION.JUST_COMPLETED_THRESHOLD_MS);
           return (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -226,6 +241,7 @@ export function getTransactionColumns(
                     icon={Tag}
                     confidence={categoryConfidence ?? undefined}
                     matchedBy={categoryMatchedBy}
+                    animate={recent}
                   />
                 </div>
               </TooltipTrigger>

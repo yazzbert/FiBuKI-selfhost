@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { format } from "date-fns";
 import { Check, X, Loader2, Calendar, Euro, Building2, CreditCard, Hash, Sparkles } from "lucide-react";
 import { TaxFile, TransactionSuggestion, TransactionMatchSource } from "@/types/file";
@@ -49,6 +49,7 @@ interface SuggestionRowProps {
   onAccept: () => void;
   onDismiss: () => void;
   disabled?: boolean;
+  exitState?: "accepting" | "dismissing";
 }
 
 function SuggestionRow({
@@ -56,11 +57,18 @@ function SuggestionRow({
   onAccept,
   onDismiss,
   disabled,
+  exitState,
 }: SuggestionRowProps) {
   const { preview, confidence, matchSources } = suggestion;
 
   return (
-    <div className="flex items-center gap-2 p-2 -mx-2 rounded bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-800/30">
+    <div
+      className={cn(
+        "flex items-center gap-2 p-2 -mx-2 rounded bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-800/30",
+        exitState === "accepting" && "animate-suggestion-accept",
+        exitState === "dismissing" && "animate-suggestion-dismiss"
+      )}
+    >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm truncate flex-1">{preview.name}</p>
@@ -110,7 +118,7 @@ function SuggestionRow({
         <button
           type="button"
           onClick={onDismiss}
-          disabled={disabled}
+          disabled={disabled || !!exitState}
           className="p-1 rounded hover:bg-destructive/10 transition-colors"
           title="Dismiss suggestion"
         >
@@ -119,7 +127,7 @@ function SuggestionRow({
         <button
           type="button"
           onClick={onAccept}
-          disabled={disabled}
+          disabled={disabled || !!exitState}
           className="p-1 rounded hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
           title="Connect transaction"
         >
@@ -142,8 +150,10 @@ export function FileTransactionSuggestions({
   onDismiss,
 }: FileTransactionSuggestionsProps) {
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [exitingIds, setExitingIds] = useState<Map<string, "accepting" | "dismissing">>(new Map());
+  const [badgeBump, setBadgeBump] = useState(false);
 
-  // Filter out suggestions for already connected transactions
+  // Filter out suggestions for already connected transactions and exiting ones
   const suggestions = useMemo(() => {
     const connectedIds = new Set(file.transactionIds || []);
     return (file.transactionSuggestions || []).filter(
@@ -151,23 +161,58 @@ export function FileTransactionSuggestions({
     );
   }, [file.transactionSuggestions, file.transactionIds]);
 
-  const handleAccept = async (suggestion: TransactionSuggestion) => {
-    setProcessingId(suggestion.transactionId);
+  // Visible count excludes exiting suggestions
+  const visibleCount = suggestions.filter((s) => !exitingIds.has(s.transactionId)).length;
+
+  const triggerBadgeBump = useCallback(() => {
+    setBadgeBump(true);
+    const timer = setTimeout(() => setBadgeBump(false), 300);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleAccept = useCallback(async (suggestion: TransactionSuggestion) => {
+    const id = suggestion.transactionId;
+    setExitingIds((prev) => new Map(prev).set(id, "accepting"));
+    triggerBadgeBump();
+
+    // Fire the accept action (don't wait for animation)
+    setProcessingId(id);
     try {
       await onAccept(suggestion);
     } finally {
       setProcessingId(null);
     }
-  };
 
-  const handleDismiss = async (transactionId: string) => {
+    // Clean up after animation completes
+    setTimeout(() => {
+      setExitingIds((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 500);
+  }, [onAccept, triggerBadgeBump]);
+
+  const handleDismiss = useCallback(async (transactionId: string) => {
+    setExitingIds((prev) => new Map(prev).set(transactionId, "dismissing"));
+    triggerBadgeBump();
+
     setProcessingId(transactionId);
     try {
       await onDismiss(transactionId);
     } finally {
       setProcessingId(null);
     }
-  };
+
+    // Clean up after animation completes
+    setTimeout(() => {
+      setExitingIds((prev) => {
+        const next = new Map(prev);
+        next.delete(transactionId);
+        return next;
+      });
+    }, 350);
+  }, [onDismiss, triggerBadgeBump]);
 
   // Don't show section if no suggestions
   if (suggestions.length === 0) {
@@ -180,8 +225,11 @@ export function FileTransactionSuggestions({
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-amber-500" />
           <h3 className="text-sm font-medium">Suggested Transactions</h3>
-          <Badge variant="secondary" className="text-xs">
-            {suggestions.length}
+          <Badge
+            variant="secondary"
+            className={cn("text-xs", badgeBump && "animate-counter-bump")}
+          >
+            {visibleCount}
           </Badge>
         </div>
 
@@ -197,6 +245,7 @@ export function FileTransactionSuggestions({
               onAccept={() => handleAccept(suggestion)}
               onDismiss={() => handleDismiss(suggestion.transactionId)}
               disabled={processingId === suggestion.transactionId}
+              exitState={exitingIds.get(suggestion.transactionId)}
             />
           ))}
         </div>

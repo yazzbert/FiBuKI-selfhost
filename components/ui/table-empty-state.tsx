@@ -84,12 +84,9 @@ export function TableEmptyState({
         {/* Icon with float animation */}
         <div
           className={cn(
-            "relative text-muted-foreground/60 animate-in zoom-in-50 duration-500",
+            "relative text-muted-foreground/60 animate-in zoom-in-50 duration-500 animate-float-medium",
             styles.icon
           )}
-          style={{
-            animation: "float 3s ease-in-out infinite",
-          }}
         >
           {icon}
         </div>
@@ -155,17 +152,6 @@ export function TableEmptyState({
         </div>
       )}
 
-      {/* CSS for float animation */}
-      <style jsx>{`
-        @keyframes float {
-          0%, 100% {
-            transform: translateY(0px);
-          }
-          50% {
-            transform: translateY(-6px);
-          }
-        }
-      `}</style>
     </div>
   );
 }

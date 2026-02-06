@@ -6,12 +6,12 @@ export default function SourcesLoading() {
       {/* Header skeleton */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <Skeleton className="h-8 w-[180px] mb-2" />
-          <Skeleton className="h-4 w-[280px]" />
+          <Skeleton shimmer className="h-8 w-[180px] mb-2" />
+          <Skeleton shimmer className="h-4 w-[280px]" />
         </div>
         <div className="flex gap-2">
-          <Skeleton className="h-9 w-[120px]" />
-          <Skeleton className="h-9 w-[130px]" />
+          <Skeleton shimmer className="h-9 w-[120px]" />
+          <Skeleton shimmer className="h-9 w-[130px]" />
         </div>
       </div>
 
@@ -24,17 +24,17 @@ export default function SourcesLoading() {
           >
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3">
-                <Skeleton className="h-10 w-10 rounded-full" />
+                <Skeleton shimmer className="h-10 w-10 rounded-full" />
                 <div>
-                  <Skeleton className="h-5 w-[140px] mb-1" />
-                  <Skeleton className="h-3 w-[100px]" />
+                  <Skeleton shimmer className="h-5 w-[140px] mb-1" />
+                  <Skeleton shimmer className="h-3 w-[100px]" />
                 </div>
               </div>
-              <Skeleton className="h-5 w-[60px] rounded-full" />
+              <Skeleton shimmer className="h-5 w-[60px] rounded-full" />
             </div>
             <div className="space-y-2">
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-[80%]" />
+              <Skeleton shimmer className="h-4 w-full" />
+              <Skeleton shimmer className="h-4 w-[80%]" />
             </div>
           </div>
         ))}

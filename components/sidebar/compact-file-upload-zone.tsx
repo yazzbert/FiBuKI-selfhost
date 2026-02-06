@@ -86,7 +86,7 @@ export function CompactFileUploadZone({
             <Upload
               className={cn(
                 "h-4 w-4 shrink-0 transition-colors",
-                isDragActive ? "text-primary" : "text-muted-foreground"
+                isDragActive ? "text-primary animate-wiggle" : "text-muted-foreground"
               )}
             />
             <span className="text-sm text-muted-foreground">
