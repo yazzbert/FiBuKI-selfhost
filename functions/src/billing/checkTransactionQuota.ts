@@ -8,8 +8,13 @@ import type { TransactionQuotaResult, PlanId } from "./config";
 
 export async function checkTransactionQuota(
   userId: string,
-  countToAdd: number = 1
+  countToAdd: number = 1,
+  isAdmin: boolean = false
 ): Promise<TransactionQuotaResult> {
+  if (isAdmin) {
+    return { allowed: true, currentCount: 0, limit: Infinity, remainingSlots: Infinity };
+  }
+
   const db = getFirestore();
   const subRef = db.collection("subscriptions").doc(userId);
   const subDoc = await subRef.get();

@@ -295,139 +295,134 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
     // Detect completion: was loading, now not loading, and we have an active search
     if (wasLoading && !isLoading && activeSearchRef.current && user?.uid) {
-      const { notificationId, sessionId, workerType } = activeSearchRef.current;
+      const { notificationId, sessionId, transactionId } = activeSearchRef.current;
 
-      // Build summary from messages
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const assistantMessages = (messages as any[]).filter((m) => m.role === "assistant");
+      // Extract tool calls from streaming message parts
+      const assistantMessages = (messages as any[]).filter((m: any) => m.role === "assistant");
 
-      // Build transcript from messages (simplified)
-      const transcript = assistantMessages.map((msg, idx) => ({
-        id: `msg_${idx}`,
-        role: "assistant" as const,
-        content: typeof msg.content === "string" ? msg.content : "",
-        createdAt: new Date(),
-      }));
+      // Tool label mapping (matches worker route)
+      const toolLabels: Record<string, string> = {
+        searchLocalFiles: "Local files",
+        searchGmailAttachments: "Gmail attachments",
+        searchGmailMessages: "Gmail messages",
+        connectFileToTransaction: "Connect file",
+        downloadGmailAttachment: "Download attachment",
+        assignPartnerToTransaction: "Assign partner",
+      };
+      const skipTools = new Set(["getTransaction", "listFiles", "listTransactions", "getPartner", "listPartners"]);
 
-      let title: string;
-      let message: string;
+      type ToolSummary = { label: string; outcome: string; status: "success" | "no_results" | "error"; resultCount?: number };
+      const toolSummaries: ToolSummary[] = [];
       let actionsPerformed = 0;
 
-      if (workerType === "file_matching") {
-        // Extract downloaded/connected files from messages
-        const downloadedFiles: string[] = [];
-        let noMatchFound = false;
+      for (const msg of assistantMessages) {
+        if (!msg.parts) continue;
+        for (const part of msg.parts) {
+          // Handle streaming format: part.type starts with "tool-"
+          let toolName: string | undefined;
+          let toolResult: unknown;
 
-        for (const msg of assistantMessages) {
-          const content = typeof msg.content === "string" ? msg.content : "";
-
-          // Look for downloaded file patterns like "Downloaded and connected: filename.pdf"
-          const downloadMatch = content.match(/[Dd]ownloaded(?:\s+and\s+connected)?[:\s]+["']?([^"'\n,]+\.(?:pdf|png|jpg|jpeg|doc|docx))/gi);
-          if (downloadMatch) {
-            for (const match of downloadMatch) {
-              const fileMatch = match.match(/["']?([^"'\n,]+\.(?:pdf|png|jpg|jpeg|doc|docx))/i);
-              if (fileMatch) downloadedFiles.push(fileMatch[1].trim());
+          if (typeof part.type === "string" && part.type.startsWith("tool-")) {
+            toolName = part.type.replace("tool-", "");
+            // Get result from toolInvocations
+            if (msg.toolInvocations) {
+              const ti = msg.toolInvocations.find((t: any) => t.toolCallId === part.toolCallId);
+              toolResult = ti?.result;
+            }
+            if (toolResult === undefined) {
+              toolResult = part.result ?? part.output;
             }
           }
 
-          // Also check for "connected!" with filename in context
-          const connectedMatch = content.match(/connected[!.]?\s*["']?([^"'\n,]+\.(?:pdf|png|jpg|jpeg|doc|docx))/gi);
-          if (connectedMatch) {
-            for (const match of connectedMatch) {
-              const fileMatch = match.match(/["']?([^"'\n,]+\.(?:pdf|png|jpg|jpeg|doc|docx))/i);
-              if (fileMatch && !downloadedFiles.includes(fileMatch[1].trim())) {
-                downloadedFiles.push(fileMatch[1].trim());
-              }
+          if (!toolName || skipTools.has(toolName)) continue;
+
+          const label = toolLabels[toolName] || toolName;
+          let outcome = "";
+          let status: ToolSummary["status"] = "no_results";
+          let resultCount: number | undefined;
+
+          if (toolResult && typeof toolResult === "object" && !Array.isArray(toolResult)) {
+            const r = toolResult as Record<string, unknown>;
+            if (r.error) {
+              status = "error";
+              outcome = String(r.error).slice(0, 80);
+            } else if (r.success === true || r.connected === true) {
+              status = "success";
+              outcome = r.fileName ? String(r.fileName) : "Done";
+              actionsPerformed++;
+            } else if (r.results && Array.isArray(r.results)) {
+              resultCount = r.results.length;
+              status = resultCount > 0 ? "success" : "no_results";
+              outcome = `${resultCount} result${resultCount !== 1 ? "s" : ""}`;
+            } else if (r.files && Array.isArray(r.files)) {
+              resultCount = r.files.length;
+              status = resultCount > 0 ? "success" : "no_results";
+              outcome = `${resultCount} result${resultCount !== 1 ? "s" : ""}`;
+            } else if (r.totalResults !== undefined) {
+              resultCount = Number(r.totalResults);
+              status = resultCount > 0 ? "success" : "no_results";
+              outcome = `${resultCount} result${resultCount !== 1 ? "s" : ""}`;
+            } else if (r.partnerName) {
+              status = "success";
+              outcome = String(r.partnerName);
+              actionsPerformed++;
+            } else {
+              outcome = "Done";
             }
           }
 
-          // Check for no match scenarios
-          if (content.includes("no good match") || content.includes("No suitable") || content.includes("couldn't find") || content.includes("no results")) {
-            noMatchFound = true;
-          }
+          toolSummaries.push({ label, outcome, status, resultCount });
         }
-
-        if (downloadedFiles.length > 0) {
-          title = `Found ${downloadedFiles.length} file${downloadedFiles.length > 1 ? "s" : ""}`;
-          message = `Downloaded ${downloadedFiles.join(", ")}`;
-          actionsPerformed = downloadedFiles.length;
-        } else if (noMatchFound) {
-          title = "No files found";
-          message = "No suitable matches in local files or Gmail";
-        } else {
-          title = "Search completed";
-          message = "Finished searching for receipts";
-        }
-      } else if (workerType === "partner_matching") {
-        // Extract partner assignment results from messages
-        let partnerAssigned = false;
-        let partnerName = "";
-        let noPartnerFound = false;
-
-        for (const msg of assistantMessages) {
-          const content = typeof msg.content === "string" ? msg.content : "";
-
-          // Look for partner assignment patterns
-          const assignMatch = content.match(/(?:assigned|connected|matched)\s+(?:partner\s+)?["']?([^"'\n]+?)["']?\s+(?:to|with)/i);
-          if (assignMatch) {
-            partnerAssigned = true;
-            partnerName = assignMatch[1].trim();
-          }
-
-          // Also look for "Partner: NAME assigned" or similar
-          const partnerMatch = content.match(/partner[:\s]+["']?([^"'\n,]+?)["']?\s+(?:has been\s+)?(?:assigned|connected|matched)/i);
-          if (partnerMatch && !partnerName) {
-            partnerAssigned = true;
-            partnerName = partnerMatch[1].trim();
-          }
-
-          // Check for found/created patterns
-          if (content.includes("Successfully assigned") || content.includes("created and assigned")) {
-            partnerAssigned = true;
-            // Try to extract name from context
-            const nameMatch = content.match(/["']([^"']+)["']/);
-            if (nameMatch && !partnerName) {
-              partnerName = nameMatch[1];
-            }
-          }
-
-          // Check for no match scenarios
-          if (content.includes("couldn't find") || content.includes("no matching partner") ||
-              content.includes("uncertain") || content.includes("not confident") ||
-              content.includes("unable to determine")) {
-            noPartnerFound = true;
-          }
-        }
-
-        if (partnerAssigned && partnerName) {
-          title = "Partner assigned";
-          message = `Assigned "${partnerName}"`;
-          actionsPerformed = 1;
-        } else if (partnerAssigned) {
-          title = "Partner assigned";
-          message = "Successfully matched and assigned partner";
-          actionsPerformed = 1;
-        } else if (noPartnerFound) {
-          title = "No partner found";
-          message = "Could not find a confident match";
-        } else {
-          title = "Search completed";
-          message = "Finished searching for partner";
-        }
-      } else {
-        title = "Search completed";
-        message = "Finished processing";
       }
 
+      // Build title with transaction context
+      let title: string;
+      if (toolSummaries.length > 0) {
+        // Compact message from tool summaries
+        const searchParts = toolSummaries
+          .filter(s => s.label !== "Connect file" && s.label !== "Download attachment" && s.label !== "Assign partner")
+          .map(s => `${s.label}: ${s.outcome}`);
+        const actionParts = toolSummaries.filter(s =>
+          (s.label === "Connect file" || s.label === "Download attachment" || s.label === "Assign partner") && s.status === "success"
+        );
+        if (actionParts.length > 0) {
+          title = actionParts.length === 1 ? actionParts[0].outcome : `${actionParts.length} actions`;
+        } else if (searchParts.length > 0) {
+          title = "No match found";
+        } else {
+          title = "Search completed";
+        }
+      } else {
+        // Fallback: check text content for status
+        const lastContent = assistantMessages.length > 0
+          ? (typeof assistantMessages[assistantMessages.length - 1].content === "string" ? assistantMessages[assistantMessages.length - 1].content : "")
+          : "";
+        if (lastContent.includes("no good match") || lastContent.includes("couldn't find")) {
+          title = "No match found";
+        } else {
+          title = "Search completed";
+        }
+      }
+
+      // Compact message from tool summaries
+      const message = toolSummaries.length > 0
+        ? toolSummaries.map(s => `${s.label}: ${s.outcome}`).join(" · ")
+        : "Finished searching";
+
       // Update the notification
-      updateDoc(doc(db, `users/${user.uid}/notifications`, notificationId), {
+      const updateData: Record<string, unknown> = {
         title,
         message,
         "context.workerStatus": "completed",
         "context.sessionId": sessionId,
         "context.actionsPerformed": actionsPerformed,
-        transcript: transcript.slice(-10), // Last 10 messages
-      }).catch((err) => console.error("Failed to update search notification:", err));
+      };
+      if (toolSummaries.length > 0) {
+        updateData["context.toolSummary"] = toolSummaries;
+      }
+
+      updateDoc(doc(db, `users/${user.uid}/notifications`, notificationId), updateData)
+        .catch((err) => console.error("Failed to update search notification:", err));
 
       // Clear active search
       activeSearchRef.current = null;
@@ -569,6 +564,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
         role: m.role as "user" | "assistant" | "system",
         content: m.content || "",
         createdAt: m.createdAt,
+        // Include parts if present (for chronological order in useMemo normalization)
+        ...(m.parts && m.parts.length > 0 ? { parts: m.parts } : {}),
         // Include toolInvocations if present (for restoring tool call UI)
         ...(m.toolInvocations && m.toolInvocations.length > 0 ? { toolInvocations: m.toolInvocations } : {}),
       }));

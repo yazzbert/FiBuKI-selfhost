@@ -2,7 +2,7 @@
 
 import { Bot, Loader2, CheckCircle, XCircle, FileSearch, MessageSquare, Receipt, ExternalLink } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { AutoActionNotification } from "@/types/notification";
+import { AutoActionNotification, ToolCallSummary } from "@/types/notification";
 import { WorkerType } from "@/types/worker";
 import { Button } from "@/components/ui/button";
 import { useChat } from "./chat-provider";
@@ -69,6 +69,7 @@ export function WorkerActivityCard({ notification }: WorkerActivityCardProps) {
   const fileName = notification.context.fileName;
   const transactionId = notification.context.transactionId;
   const transactionName = notification.context.transactionName;
+  const toolSummary = (notification.context.toolSummary || []) as ToolCallSummary[];
 
   const handleViewInChat = async () => {
     if (sessionId) {
@@ -122,9 +123,29 @@ export function WorkerActivityCard({ notification }: WorkerActivityCardProps) {
       </div>
 
       {/* Title and message */}
-      <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 text-sm">
+      <div className="text-sm">
         <p className="font-medium">{notification.title}</p>
-        <p className="text-muted-foreground">{notification.message}</p>
+        {toolSummary.length > 0 ? (
+          <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1">
+            {toolSummary.map((s, i) => (
+              <span
+                key={i}
+                className={
+                  s.status === "success"
+                    ? "text-green-600 dark:text-green-400"
+                    : s.status === "error"
+                    ? "text-red-500 dark:text-red-400"
+                    : "text-muted-foreground"
+                }
+              >
+                {s.label}: {s.outcome}
+                {i < toolSummary.length - 1 && <span className="text-muted-foreground/50 ml-2">·</span>}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-muted-foreground mt-1">{notification.message}</p>
+        )}
       </div>
 
       {/* While running - show clickable link to file/transaction */}

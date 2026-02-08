@@ -46,28 +46,63 @@ export async function callFirebaseFunction<TRequest, TResponse>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ data }),
-    });
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 1000;
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[Firebase Callable] ${functionName} HTTP error:`, response.status, errorText);
-      throw new Error(`Firebase function ${functionName} failed: ${response.status} - ${errorText}`);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ data }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+
+        // Retry on rate limit errors (Gmail API 429s surfaced through Cloud Functions)
+        const isRateLimit =
+          response.status === 429 ||
+          (response.status >= 500 &&
+            (errorText.includes("rateLimitExceeded") ||
+              errorText.includes("Too many concurrent requests") ||
+              errorText.includes("Quota exceeded")));
+
+        if (isRateLimit && attempt < MAX_RETRIES) {
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(
+            `[Firebase Callable] ${functionName} rate limited (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delay}ms`
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        console.error(`[Firebase Callable] ${functionName} HTTP error:`, response.status, errorText);
+        throw new Error(`Firebase function ${functionName} failed: ${response.status} - ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log(`[Firebase Callable] ${functionName} completed successfully`);
+
+      // Firebase callable functions wrap response in { result: ... }
+      return result.result as TResponse;
+    } catch (err) {
+      if (attempt < MAX_RETRIES && err instanceof TypeError) {
+        // Network errors (fetch failures) - retry
+        const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+        console.warn(
+          `[Firebase Callable] ${functionName} network error (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delay}ms`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      console.error(`[Firebase Callable] ${functionName} exception:`, err);
+      throw err;
     }
-
-    const result = await response.json();
-    console.log(`[Firebase Callable] ${functionName} completed successfully`);
-
-    // Firebase callable functions wrap response in { result: ... }
-    return result.result as TResponse;
-  } catch (err) {
-    console.error(`[Firebase Callable] ${functionName} exception:`, err);
-    throw err;
   }
+
+  // Should not reach here, but TypeScript needs it
+  throw new Error(`Firebase function ${functionName} failed after ${MAX_RETRIES + 1} attempts`);
 }
 
 // ============================================================================

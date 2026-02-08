@@ -48,6 +48,9 @@ export interface NotificationContext {
   sessionId?: string; // Link to chat session for user-triggered searches
   transactionId?: string;
   transactionName?: string; // Display name for transaction link during processing
+  transactionAmount?: number;
+  transactionCurrency?: string;
+  toolSummary?: ToolCallSummary[];
 
   // For export_complete / export_failed
   exportId?: string;
@@ -59,6 +62,17 @@ export interface NotificationContext {
   // For data_import_complete / data_import_failed
   importId?: string;
   importCounts?: Record<string, number>;
+}
+
+/**
+ * Summary of a single tool call in a worker run
+ */
+export interface ToolCallSummary {
+  label: string;
+  outcome: string;
+  status: "success" | "no_results" | "error" | "skipped";
+  resultCount?: number;
+  confidence?: number;
 }
 
 /**

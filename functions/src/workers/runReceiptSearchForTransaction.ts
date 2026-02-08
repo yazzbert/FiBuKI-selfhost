@@ -142,7 +142,6 @@ async function queueAsDocument(
       workerRequestId: requestRef.id,
       status: "pending",
     }),
-    updatedAt: FieldValue.serverTimestamp(),
   });
 
   console.log(`[QueueReceiptSearch] Queued worker request ${requestRef.id} for transaction ${transactionId}`);
@@ -352,7 +351,6 @@ export async function queueReceiptSearchForTransaction(
         workerRunId: directResult.runId,
         status: directResult.status,
       }),
-      updatedAt: FieldValue.serverTimestamp(),
     });
 
     console.log(`[QueueReceiptSearch] Direct execution completed: ${directResult.runId}`);

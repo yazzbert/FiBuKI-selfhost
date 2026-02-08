@@ -177,6 +177,89 @@ export async function markOnboardingCompletionSeen(
 }
 
 /**
+ * Skip the entire onboarding (marks all remaining steps as complete)
+ */
+export async function skipOnboarding(
+  ctx: OperationsContext
+): Promise<void> {
+  const docRef = doc(
+    ctx.db,
+    "users",
+    ctx.userId,
+    SETTINGS_COLLECTION,
+    ONBOARDING_DOC
+  );
+  const now = Timestamp.now();
+
+  const current = await getOnboardingState(ctx);
+  if (!current) return;
+
+  // Mark all uncompleted steps as completed
+  const completedSteps = { ...current.completedSteps };
+  for (const step of ONBOARDING_STEPS) {
+    if (!completedSteps[step.id]) {
+      completedSteps[step.id] = { completedAt: now };
+    }
+  }
+
+  await setDoc(docRef, {
+    ...current,
+    isComplete: true,
+    completedSteps,
+    completedAt: now,
+    skippedAt: now,
+    hasSeenCompletion: true, // Don't show celebration for skipped onboarding
+  });
+}
+
+/**
+ * Skip a single onboarding step (advances to next step)
+ */
+export async function skipOnboardingStep(
+  ctx: OperationsContext,
+  step: OnboardingStep
+): Promise<void> {
+  const docRef = doc(
+    ctx.db,
+    "users",
+    ctx.userId,
+    SETTINGS_COLLECTION,
+    ONBOARDING_DOC
+  );
+  const now = Timestamp.now();
+
+  const current = await getOnboardingState(ctx);
+  if (!current) return;
+
+  // Don't skip already completed steps
+  if (current.completedSteps[step]) return;
+
+  const nextStep = getNextStep(step);
+  const isLastStep = !nextStep;
+
+  const updates: Record<string, unknown> = {
+    [`completedSteps.${step}`]: {
+      completedAt: now,
+    },
+    [`skippedSteps.${step}`]: {
+      skippedAt: now,
+    },
+  };
+
+  if (isLastStep) {
+    updates.isComplete = true;
+    updates.completedAt = now;
+    if (current.hasSeenCompletion !== true) {
+      updates.hasSeenCompletion = false;
+    }
+  } else {
+    updates.currentStep = nextStep;
+  }
+
+  await updateDoc(docRef, updates);
+}
+
+/**
  * Reset onboarding state (for testing/debugging)
  */
 export async function resetOnboarding(ctx: OperationsContext): Promise<void> {

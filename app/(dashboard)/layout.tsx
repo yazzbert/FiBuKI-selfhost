@@ -19,6 +19,7 @@ import { ChatProvider, ChatSidebar, useChat, WorkerQueueProcessor } from "@/comp
 import { ProtectedRoute, useAuth } from "@/components/auth";
 import { OnboardingOverlay, OnboardingCompletion } from "@/components/onboarding";
 import { useOnboarding } from "@/hooks/use-onboarding";
+import { BillingLimitBanner } from "@/components/billing/billing-limit-banner";
 import { logoFont } from "@/app/fonts";
 
 const navItems = [
@@ -140,11 +141,14 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className="h-screen bg-background transition-all duration-300 ease-in-out overflow-hidden"
+      className="h-screen bg-background transition-all duration-300 ease-in-out overflow-hidden flex flex-col"
       style={{ marginLeft: sidebarOffset }}
     >
+      {/* Billing limit banner */}
+      <BillingLimitBanner />
+
       {/* Header */}
-      <header className="border-b bg-card sticky top-0 z-50 px-4 h-14 flex items-center justify-between">
+      <header className="border-b bg-card flex-shrink-0 z-50 px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <button
               onClick={handleLogoClick}
@@ -309,7 +313,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
       </header>
 
       {/* Main content */}
-      <main className="h-[calc(100vh-3.5rem)] overflow-hidden">{children}</main>
+      <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
     </div>
   );
 }

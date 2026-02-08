@@ -7,7 +7,10 @@ exports.checkTransactionQuota = checkTransactionQuota;
 exports.incrementTransactionCount = incrementTransactionCount;
 const firestore_1 = require("firebase-admin/firestore");
 const config_1 = require("./config");
-async function checkTransactionQuota(userId, countToAdd = 1) {
+async function checkTransactionQuota(userId, countToAdd = 1, isAdmin = false) {
+    if (isAdmin) {
+        return { allowed: true, currentCount: 0, limit: Infinity, remainingSlots: Infinity };
+    }
     const db = (0, firestore_1.getFirestore)();
     const subRef = db.collection("subscriptions").doc(userId);
     const subDoc = await subRef.get();

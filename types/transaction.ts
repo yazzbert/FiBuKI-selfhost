@@ -213,6 +213,9 @@ export interface Transaction {
   /** Whether reverse charge applies (B2B EU services) */
   isReverseCharge?: boolean | null;
 
+  /** Whether this transaction exceeds the plan's monthly quota (imported but limited) */
+  quotaExceeded?: boolean;
+
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

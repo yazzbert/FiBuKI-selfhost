@@ -697,7 +697,7 @@ export default function ReportsPage() {
                         </Button>
                         {!finanzonlineConfigured ? (
                           <p className="text-xs text-muted-foreground text-center mt-2">
-                            <Link href="/settings/integrations" className="text-primary underline">
+                            <Link href="/integrations/finanzonline" className="text-primary underline">
                               Configure FinanzOnline
                             </Link>{" "}
                             to enable direct submission

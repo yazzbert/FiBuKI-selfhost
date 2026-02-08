@@ -42,6 +42,7 @@ export interface ImportState {
     skipped: number;
     errors: number;
     errorDetails: { row: number; message: string; rowData: Record<string, string> }[];
+    overLimitCount: number;
   } | null;
   error: string | null;
   /** Full CSV content stored for re-mapping later */
@@ -554,6 +555,7 @@ export function useImport(
     // Batch write transactions using Cloud Function
     let importedCount = 0;
     const transactionIds: string[] = [];
+    const overLimitTransactionIds: string[] = [];
 
     for (let i = 0; i < newTransactions.length; i += BATCH_SIZE) {
       const chunk = newTransactions.slice(i, i + BATCH_SIZE);
@@ -568,10 +570,13 @@ export function useImport(
 
       const result = await callFunction<
         { transactions: typeof transactionsForCF; sourceId: string },
-        { transactionIds: string[] }
+        { transactionIds: string[]; quotaExceeded?: boolean; overLimitCount?: number; overLimitTransactionIds?: string[] }
       >("bulkCreateTransactions", { transactions: transactionsForCF, sourceId: source.id });
 
       transactionIds.push(...result.transactionIds);
+      if (result.overLimitTransactionIds) {
+        overLimitTransactionIds.push(...result.overLimitTransactionIds);
+      }
       importedCount += chunk.length;
 
       setState((s) => ({
@@ -643,6 +648,7 @@ export function useImport(
         skipped: skippedCount,
         errors: errors.length,
         errorDetails: errors,
+        overLimitCount: overLimitTransactionIds.length,
       },
     }));
   }, [source, state.file, state.analysis, state.mappings, state.csvContent, userId]);

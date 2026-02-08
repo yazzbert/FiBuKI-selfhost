@@ -9,7 +9,14 @@ import { getFirestore } from "firebase-admin/firestore";
 import { PLANS } from "./config";
 import type { AIBudgetCheckResult, PlanId } from "./config";
 
-export async function checkAIBudget(userId: string): Promise<AIBudgetCheckResult> {
+export async function checkAIBudget(
+  userId: string,
+  isAdmin: boolean = false
+): Promise<AIBudgetCheckResult> {
+  if (isAdmin) {
+    return { allowed: true, source: "fair_use", remainingEur: Infinity, paused: false };
+  }
+
   const db = getFirestore();
   const subDoc = await db.collection("subscriptions").doc(userId).get();
 

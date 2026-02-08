@@ -53,18 +53,25 @@ function DataTableInner<TData extends { id: string }>(
   // Get row className based on completion status
   const getRowClassName = React.useCallback(
     (row: TData, isSelected: boolean) => {
-      if (isTransactionRow(row) && isRowComplete(row)) {
-        // Check if this row just became complete (glow animation)
-        const justCompleted = isRecentlyUpdated(
-          (row as unknown as Record<string, unknown>).updatedAt,
-          MOTION.JUST_COMPLETED_THRESHOLD_MS
-        );
-        const glowClass = justCompleted ? "animate-row-complete" : "";
-
-        if (isSelected) {
-          return `bg-[#b8e986] hover:bg-[#a8d976] dark:bg-green-900/40 dark:hover:bg-green-900/50 ${glowClass}`;
+      if (isTransactionRow(row)) {
+        // Quota-exceeded rows: greyed out
+        if ((row as unknown as Record<string, unknown>).quotaExceeded) {
+          return "opacity-50";
         }
-        return `bg-[#d9ffb2] hover:bg-[#c9f59f] dark:bg-green-950/20 dark:hover:bg-green-950/30 ${glowClass}`;
+
+        if (isRowComplete(row)) {
+          // Check if this row just became complete (glow animation)
+          const justCompleted = isRecentlyUpdated(
+            (row as unknown as Record<string, unknown>).updatedAt,
+            MOTION.JUST_COMPLETED_THRESHOLD_MS
+          );
+          const glowClass = justCompleted ? "animate-row-complete" : "";
+
+          if (isSelected) {
+            return `bg-[#b8e986] hover:bg-[#a8d976] dark:bg-green-900/40 dark:hover:bg-green-900/50 ${glowClass}`;
+          }
+          return `bg-[#d9ffb2] hover:bg-[#c9f59f] dark:bg-green-950/20 dark:hover:bg-green-950/30 ${glowClass}`;
+        }
       }
       return "";
     },

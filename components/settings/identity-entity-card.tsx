@@ -111,27 +111,27 @@ export function IdentityEntityCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Name */}
-        <div className="space-y-2">
-          <Label htmlFor={`${entity.id}-name`}>Name</Label>
-          <Input
-            id={`${entity.id}-name`}
-            placeholder={namePlaceholder}
-            value={entity.name}
-            onChange={(e) => onChange({ name: e.target.value })}
-          />
-        </div>
-
-        {/* VAT ID */}
-        <div className="space-y-2">
-          <Label htmlFor={`${entity.id}-vatId`}>VAT ID</Label>
-          <Input
-            id={`${entity.id}-vatId`}
-            placeholder="e.g., ATU12345678"
-            value={entity.vatId || ""}
-            onChange={(e) => onChange({ vatId: e.target.value })}
-            className="font-mono"
-          />
+        {/* Name + VAT ID (two-column) */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor={`${entity.id}-name`}>Name</Label>
+            <Input
+              id={`${entity.id}-name`}
+              placeholder={namePlaceholder}
+              value={entity.name}
+              onChange={(e) => onChange({ name: e.target.value })}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`${entity.id}-vatId`}>VAT ID</Label>
+            <Input
+              id={`${entity.id}-vatId`}
+              placeholder="e.g., ATU12345678"
+              value={entity.vatId || ""}
+              onChange={(e) => onChange({ vatId: e.target.value })}
+              className="font-mono"
+            />
+          </div>
         </div>
 
         {/* Aliases */}

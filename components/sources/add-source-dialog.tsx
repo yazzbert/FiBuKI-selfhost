@@ -98,8 +98,7 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
     if (!formData.name) return false;
 
     if (formData.accountKind === "bank_account") {
-      // For bank accounts, IBAN is required
-      if (!formData.iban) return false;
+      // For bank accounts, IBAN is optional but must be valid if provided
       if (ibanError) return false;
     } else {
       // For credit cards, card info is required
@@ -218,7 +217,7 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
           {formData.accountKind === "bank_account" && (
             <div>
               <label className="text-sm font-medium mb-1.5 block">
-                IBAN *
+                IBAN
               </label>
               <Input
                 placeholder="AT12 3456 7890 1234 5678"
@@ -226,7 +225,6 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
                 onChange={(e) => handleIbanChange(e.target.value)}
                 onBlur={handleIbanBlur}
                 className={ibanError ? "border-destructive" : ""}
-                required
               />
               {ibanError && (
                 <p className="text-xs text-destructive mt-1">{ibanError}</p>

@@ -23,6 +23,7 @@
 
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import {
   SCORING_CONFIG,
   scoreTransaction,
@@ -741,7 +742,12 @@ export async function runTransactionMatching(
   // Falls back to per-file worker when no partner is assigned
   if (autoMatches.length === 0) {
     // Check AI budget before queuing agentic workers (rule-based scoring above stays free)
-    const aiBudget = await checkAIBudget(userId);
+    let isAdminUser = false;
+    try {
+      const userRecord = await getAuth().getUser(userId);
+      isAdminUser = userRecord.customClaims?.admin === true;
+    } catch { /* not found = not admin */ }
+    const aiBudget = await checkAIBudget(userId, isAdminUser);
 
     if (!aiBudget.allowed) {
       console.log(

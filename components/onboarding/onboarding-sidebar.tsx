@@ -10,6 +10,8 @@ import {
   ChevronRight,
   Loader2,
   User,
+  Mail,
+  SkipForward,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -25,24 +27,29 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Users,
   FileCheck,
   User,
+  Mail,
 };
 
 interface StepItemProps {
   step: OnboardingStepConfig;
   index: number;
   isCompleted: boolean;
+  isSkipped: boolean;
   isCurrent: boolean;
   isInProgress: boolean;
   onNavigate: () => void;
+  onSkip?: () => void;
 }
 
 function StepItem({
   step,
   index,
   isCompleted,
+  isSkipped,
   isCurrent,
   isInProgress,
   onNavigate,
+  onSkip,
 }: StepItemProps) {
   const Icon = iconMap[step.icon] || FileCheck;
 
@@ -51,7 +58,7 @@ function StepItem({
       className={cn(
         "relative flex gap-3 p-3 rounded-lg transition-colors",
         isCurrent && "bg-primary/10 border border-primary/20",
-        isCompleted && !isCurrent && "opacity-70"
+        (isCompleted || isSkipped) && !isCurrent && "opacity-70"
       )}
     >
       {/* Step number / check icon */}
@@ -60,6 +67,8 @@ function StepItem({
           "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium",
           isCompleted
             ? "bg-primary text-primary-foreground"
+            : isSkipped
+            ? "bg-muted text-muted-foreground"
             : isCurrent
             ? "bg-primary/20 text-primary border-2 border-primary"
             : "bg-muted text-muted-foreground"
@@ -67,6 +76,8 @@ function StepItem({
       >
         {isCompleted ? (
           <Check className="h-4 w-4" />
+        ) : isSkipped ? (
+          <SkipForward className="h-3.5 w-3.5" />
         ) : isInProgress ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
@@ -85,11 +96,15 @@ function StepItem({
             className={cn(
               "font-medium text-sm",
               isCurrent && "text-primary",
-              isCompleted && "line-through"
+              isCompleted && "line-through",
+              isSkipped && "line-through"
             )}
           >
             {step.title}
           </span>
+          {isSkipped && (
+            <span className="text-[10px] text-muted-foreground">Skipped</span>
+          )}
         </div>
         <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
           {step.description}
@@ -103,14 +118,26 @@ function StepItem({
               In progress...
             </div>
           ) : (
-            <Button
-              size="sm"
-              className="mt-2 h-7 text-xs"
-              onClick={onNavigate}
-            >
-              Go to step
-              <ChevronRight className="h-3 w-3 ml-1" />
-            </Button>
+            <div className="mt-2 flex items-center gap-2">
+              <Button
+                size="sm"
+                className="h-7 text-xs"
+                onClick={onNavigate}
+              >
+                Go to step
+                <ChevronRight className="h-3 w-3 ml-1" />
+              </Button>
+              {onSkip && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs text-muted-foreground"
+                  onClick={onSkip}
+                >
+                  Skip
+                </Button>
+              )}
+            </div>
           )
         )}
       </div>
@@ -126,6 +153,9 @@ function isUserInProgressOnStep(stepId: OnboardingStep, pathname: string): boole
     case "set_identity":
       // User is on identity settings page
       return pathname === "/settings/identity";
+    case "connect_email":
+      // User is on Gmail integration or email inbound page
+      return pathname === "/integrations/gmail" || pathname === "/integrations/email-inbound";
     case "add_bank_account":
       // User is on sources page (adding account)
       return pathname === "/sources" || pathname === "/sources/connect";
@@ -152,8 +182,11 @@ export function OnboardingSidebar() {
     steps,
     currentStep,
     isStepCompleted,
+    isStepSkipped,
     progress,
     loading,
+    skipOnboarding,
+    skipStep,
   } = useOnboarding();
 
   const handleNavigate = (route: string) => {
@@ -185,7 +218,7 @@ export function OnboardingSidebar() {
             <span>Progress</span>
             <span>{progress.completed} of {progress.total} complete</span>
           </div>
-          <Progress value={progress.percentage} className="h-2" />
+          <Progress value={progress.percentage} className="h-2 [&>div]:bg-emerald-500" />
         </div>
       </div>
 
@@ -194,6 +227,7 @@ export function OnboardingSidebar() {
         <div className="p-4 space-y-2">
           {steps.map((step, index) => {
             const isCompleted = isStepCompleted(step.id);
+            const isSkipped = isStepSkipped(step.id);
             const isCurrent = currentStep === step.id;
             const isInProgress = isCurrent && isUserInProgressOnStep(step.id, pathname);
 
@@ -203,9 +237,11 @@ export function OnboardingSidebar() {
                 step={step}
                 index={index}
                 isCompleted={isCompleted}
+                isSkipped={isSkipped}
                 isCurrent={isCurrent}
                 isInProgress={isInProgress}
                 onNavigate={() => handleNavigate(step.route)}
+                onSkip={isCurrent ? () => skipStep(step.id) : undefined}
               />
             );
           })}
@@ -213,10 +249,19 @@ export function OnboardingSidebar() {
       </ScrollArea>
 
       {/* Footer */}
-      <div className="p-4 border-t">
+      <div className="p-4 border-t space-y-2">
         <p className="text-xs text-muted-foreground text-center">
           Complete all steps to unlock the full experience
         </p>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full h-7 text-xs text-muted-foreground"
+          onClick={skipOnboarding}
+        >
+          <SkipForward className="h-3 w-3 mr-1" />
+          Skip setup
+        </Button>
       </div>
     </div>
   );

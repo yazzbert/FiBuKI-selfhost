@@ -92,7 +92,7 @@ export default function EmailInboundDetailPage() {
     setDeleting(true);
     try {
       await deleteAddress(primaryAddress.id);
-      router.push("/integrations");
+      router.push("/settings/integrations");
     } catch {
       // Error handled by hook
     } finally {
@@ -135,14 +135,14 @@ export default function EmailInboundDetailPage() {
   if (!primaryAddress) {
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <Button variant="ghost" onClick={() => router.push("/integrations")}>
+        <Button variant="ghost" onClick={() => router.push("/settings/integrations")}>
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Integrations
         </Button>
         <div className="mt-8 text-center text-muted-foreground">
           <Inbox className="h-12 w-12 mx-auto mb-3 opacity-30" />
           <p>No forwarding address configured</p>
-          <Button className="mt-4" onClick={() => router.push("/integrations")}>
+          <Button className="mt-4" onClick={() => router.push("/settings/integrations")}>
             Go to Integrations
           </Button>
         </div>
@@ -158,7 +158,7 @@ export default function EmailInboundDetailPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Button variant="ghost" onClick={() => router.push("/integrations")}>
+            <Button variant="ghost" onClick={() => router.push("/settings/integrations")}>
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
             </Button>

@@ -42,7 +42,20 @@ interface UIMessageInput {
     input?: Record<string, unknown>;
     result?: unknown;
     output?: unknown;
+    toolCall?: {
+      id: string;
+      name: string;
+      args: Record<string, unknown>;
+      result?: unknown;
+    };
     [key: string]: unknown;
+  }>;
+  toolInvocations?: Array<{
+    toolCallId: string;
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    state?: string;
   }>;
 }
 
@@ -78,6 +91,7 @@ async function convertToLangChainMessages(uiMessages: UIMessageInput[]) {
           if (part.type === "text" && part.text) {
             textContent += part.text;
           } else if (part.type.startsWith("tool-")) {
+            // Streaming format: part.type = "tool-<toolName>"
             const toolName = part.type.replace("tool-", "");
             const toolCallId = part.toolCallId as string;
             const args = (part.args || part.input || {}) as Record<string, unknown>;
@@ -88,10 +102,38 @@ async function convertToLangChainMessages(uiMessages: UIMessageInput[]) {
             if (toolResult !== undefined) {
               toolResults.push({ toolCallId, result: toolResult });
             }
+          } else if (part.type === "tool" && part.toolCall) {
+            // Worker transcript format: full toolCall object embedded in part
+            const tc = part.toolCall;
+            toolCalls.push({ id: tc.id, name: tc.name, args: tc.args || {} });
+            if (tc.result !== undefined) {
+              toolResults.push({ toolCallId: tc.id, result: tc.result });
+            }
+          } else if (part.type === "tool" && part.toolCallId && part.toolName) {
+            // Stored format: toolCallId + toolName on part, args/result from toolInvocations
+            const ti = msg.toolInvocations?.find(t => t.toolCallId === part.toolCallId);
+            const args = ti?.args || (part.args || part.input || {}) as Record<string, unknown>;
+            const toolResult = ti?.result ?? part.result ?? part.output;
+
+            toolCalls.push({ id: part.toolCallId, name: part.toolName, args });
+
+            if (toolResult !== undefined) {
+              toolResults.push({ toolCallId: part.toolCallId, result: toolResult });
+            }
           }
         }
       } else if (msg.content) {
         textContent = msg.content;
+      }
+
+      // Fallback: if no tool calls found from parts, use toolInvocations directly
+      if (toolCalls.length === 0 && msg.toolInvocations) {
+        for (const ti of msg.toolInvocations) {
+          toolCalls.push({ id: ti.toolCallId, name: ti.toolName, args: ti.args || {} });
+          if (ti.result !== undefined) {
+            toolResults.push({ toolCallId: ti.toolCallId, result: ti.result });
+          }
+        }
       }
 
       if (textContent || toolCalls.length > 0) {

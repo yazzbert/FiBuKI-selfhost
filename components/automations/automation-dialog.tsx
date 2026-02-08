@@ -101,7 +101,7 @@ export function AutomationDialog({
   };
 
   const handleIntegrationClick = () => {
-    router.push("/integrations");
+    router.push("/settings/integrations");
     onClose();
   };
 

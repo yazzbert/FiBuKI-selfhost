@@ -14,6 +14,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import { runWorkerGraph } from "@/lib/agent/worker-graph";
 import { getWorkerConfig } from "@/lib/agent/worker-configs";
 import { WorkerType, WorkerRunInput, WorkerMessage, WorkerRun } from "@/types/worker";
+import { ToolCallSummary } from "@/types/notification";
 import { ModelProvider } from "@/lib/agent/model";
 
 const db = getAdminDb();
@@ -179,6 +180,157 @@ function convertToWorkerMessages(
 }
 
 /**
+ * Tool name to human-readable label mapping
+ */
+const TOOL_LABELS: Record<string, string> = {
+  searchLocalFiles: "Local files",
+  searchGmailAttachments: "Gmail attachments",
+  searchGmailMessages: "Gmail messages",
+  connectFileToTransaction: "Connect file",
+  downloadGmailAttachment: "Download attachment",
+  assignPartnerToTransaction: "Assign partner",
+  searchReceiptForTransaction: "Receipt search",
+};
+
+/** Tools to skip in summary (read-only / setup tools) */
+const SKIP_TOOLS = new Set([
+  "getTransaction",
+  "listFiles",
+  "listTransactions",
+  "getPartner",
+  "listPartners",
+]);
+
+/**
+ * Build a structured tool summary from worker transcript
+ */
+function buildToolSummary(transcript: WorkerMessage[]): ToolCallSummary[] {
+  const summaries: ToolCallSummary[] = [];
+
+  for (const msg of transcript) {
+    if (!msg.parts) continue;
+    for (const part of msg.parts) {
+      if (part.type !== "tool" || !("toolCall" in part)) continue;
+      const tc = (part as { toolCall: { id: string; name: string; args: Record<string, unknown>; result?: unknown } }).toolCall;
+      if (!tc || SKIP_TOOLS.has(tc.name)) continue;
+
+      const label = TOOL_LABELS[tc.name] || tc.name;
+      let outcome = "";
+      let status: ToolCallSummary["status"] = "no_results";
+      let resultCount: number | undefined;
+      let confidence: number | undefined;
+
+      // Parse result to extract counts and status
+      const result = tc.result;
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        const r = result as Record<string, unknown>;
+
+        // Check for error
+        if (r.error) {
+          status = "error";
+          outcome = String(r.error);
+        } else if (r.success === true || r.connected === true) {
+          status = "success";
+          outcome = r.fileName ? String(r.fileName) : "Done";
+        } else if (r.results && Array.isArray(r.results)) {
+          resultCount = r.results.length;
+          if (resultCount > 0) {
+            status = "success";
+            outcome = `${resultCount} result${resultCount !== 1 ? "s" : ""}`;
+          } else {
+            outcome = "0 results";
+          }
+        } else if (r.files && Array.isArray(r.files)) {
+          resultCount = r.files.length;
+          if (resultCount > 0) {
+            status = "success";
+            outcome = `${resultCount} result${resultCount !== 1 ? "s" : ""}`;
+          } else {
+            outcome = "0 results";
+          }
+        } else if (r.totalResults !== undefined) {
+          resultCount = Number(r.totalResults);
+          if (resultCount > 0) {
+            status = "success";
+            outcome = `${resultCount} result${resultCount !== 1 ? "s" : ""}`;
+          } else {
+            outcome = "0 results";
+          }
+        } else if (r.partnerName) {
+          status = "success";
+          outcome = String(r.partnerName);
+        } else {
+          outcome = "Done";
+        }
+
+        // Extract confidence if present
+        if (typeof r.confidence === "number") {
+          confidence = r.confidence;
+        }
+      } else if (typeof result === "string") {
+        if (result.toLowerCase().includes("error") || result.toLowerCase().includes("failed")) {
+          status = "error";
+          outcome = result.slice(0, 80);
+        } else {
+          status = "success";
+          outcome = result.slice(0, 80);
+        }
+      }
+
+      summaries.push({ label, outcome, status, resultCount, confidence });
+    }
+  }
+
+  return summaries;
+}
+
+/**
+ * Build a compact notification message from tool summaries
+ */
+function buildCompactMessage(summaries: ToolCallSummary[]): string {
+  if (summaries.length === 0) return "No actions performed";
+
+  // Check if any action succeeded (connect/download/assign)
+  const actionTools = summaries.filter(s =>
+    s.label === "Connect file" || s.label === "Download attachment" || s.label === "Assign partner"
+  );
+  const hasSuccessAction = actionTools.some(s => s.status === "success");
+
+  // Build search results line
+  const searchTools = summaries.filter(s =>
+    s.label === "Local files" || s.label === "Gmail attachments" || s.label === "Gmail messages"
+  );
+
+  const parts: string[] = [];
+  for (const s of searchTools) {
+    parts.push(`${s.label}: ${s.outcome}`);
+  }
+
+  if (hasSuccessAction) {
+    const successAction = actionTools.find(s => s.status === "success");
+    if (successAction) {
+      parts.push(successAction.outcome === "Done" ? successAction.label : `${successAction.label}: ${successAction.outcome}`);
+    }
+  } else if (searchTools.length > 0 && !hasSuccessAction) {
+    parts.push("No match");
+  }
+
+  return parts.join(" · ");
+}
+
+/**
+ * Format amount with currency for notification title
+ */
+function formatAmount(amount: number, currency?: string): string {
+  const curr = currency || "EUR";
+  try {
+    return new Intl.NumberFormat("de-AT", { style: "currency", currency: curr }).format(Math.abs(amount));
+  } catch {
+    return `${Math.abs(amount).toFixed(2)} ${curr}`;
+  }
+}
+
+/**
  * Create a chat session from worker transcript
  * This allows users to view the worker's reasoning via "View in chat"
  */
@@ -266,6 +418,12 @@ async function createStartingNotification(
       if (txDoc.exists) {
         const txData = txDoc.data()!;
         notificationContext.transactionName = txData.name || "Transaction";
+        if (txData.amount !== undefined) {
+          notificationContext.transactionAmount = txData.amount;
+        }
+        if (txData.currency) {
+          notificationContext.transactionCurrency = txData.currency;
+        }
       }
     } catch (err) {
       console.warn("[Worker API] Failed to fetch transaction name:", err);
@@ -296,18 +454,51 @@ async function updateWorkerNotification(
 ): Promise<void> {
   const config = getWorkerConfig(workerRun.workerType!);
 
+  // Build tool summary from transcript
+  const toolSummary = workerRun.messages ? buildToolSummary(workerRun.messages) : [];
+
+  // Fetch transaction context for title enrichment
+  let txName: string | undefined;
+  let txAmount: number | undefined;
+  let txCurrency: string | undefined;
+
+  const txId = workerRun.triggerContext?.transactionId;
+  if (txId) {
+    try {
+      const txDoc = await db.collection("transactions").doc(txId).get();
+      if (txDoc.exists) {
+        const txData = txDoc.data()!;
+        txName = txData.name;
+        txAmount = txData.amount;
+        txCurrency = txData.currency;
+      }
+    } catch {
+      // Non-critical, fall back to generic title
+    }
+  }
+
   // Build title and message based on outcome
   let title: string;
   let message: string;
 
   if (workerRun.status === "completed") {
-    const actionsCount = workerRun.actionsPerformed?.length || 0;
-    if (actionsCount > 0) {
-      title = `${config.name} completed`;
-      message = workerRun.summary || `Performed ${actionsCount} action${actionsCount !== 1 ? "s" : ""}`;
+    // Rich title with transaction context
+    const titlePrefix = config.name;
+    if (txName) {
+      const amountStr = txAmount !== undefined ? ` · ${formatAmount(txAmount, txCurrency)}` : "";
+      title = `${titlePrefix}: ${txName}${amountStr}`;
     } else {
-      title = `${config.name} finished`;
-      message = workerRun.summary || "No actions needed";
+      title = titlePrefix;
+    }
+
+    // Compact message from tool summaries
+    if (toolSummary.length > 0) {
+      message = buildCompactMessage(toolSummary);
+    } else {
+      const actionsCount = workerRun.actionsPerformed?.length || 0;
+      message = actionsCount > 0
+        ? `Performed ${actionsCount} action${actionsCount !== 1 ? "s" : ""}`
+        : "No actions needed";
     }
   } else if (workerRun.status === "failed") {
     title = `${config.name} failed`;
@@ -317,22 +508,27 @@ async function updateWorkerNotification(
     message = workerRun.summary || "";
   }
 
-  // Build context update
-  const contextUpdate: Record<string, unknown> = {
-    workerStatus: workerRun.status,
-    actionsPerformed: workerRun.actionsPerformed?.length || 0,
-  };
-  if (sessionId) {
-    contextUpdate.sessionId = sessionId;
-  }
-
-  await db.collection(`users/${userId}/notifications`).doc(notificationId).update({
+  const updateData: Record<string, unknown> = {
     title,
     message,
     "context.workerStatus": workerRun.status,
     "context.actionsPerformed": workerRun.actionsPerformed?.length || 0,
-    ...(sessionId ? { "context.sessionId": sessionId } : {}),
-  });
+  };
+
+  if (sessionId) {
+    updateData["context.sessionId"] = sessionId;
+  }
+  if (toolSummary.length > 0) {
+    updateData["context.toolSummary"] = toolSummary;
+  }
+  if (txAmount !== undefined) {
+    updateData["context.transactionAmount"] = txAmount;
+  }
+  if (txCurrency) {
+    updateData["context.transactionCurrency"] = txCurrency;
+  }
+
+  await db.collection(`users/${userId}/notifications`).doc(notificationId).update(updateData);
 }
 
 // ============================================================================

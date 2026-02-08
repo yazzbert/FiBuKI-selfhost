@@ -9,7 +9,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkAIBudget = checkAIBudget;
 const firestore_1 = require("firebase-admin/firestore");
 const config_1 = require("./config");
-async function checkAIBudget(userId) {
+async function checkAIBudget(userId, isAdmin = false) {
+    if (isAdmin) {
+        return { allowed: true, source: "fair_use", remainingEur: Infinity, paused: false };
+    }
     const db = (0, firestore_1.getFirestore)();
     const subDoc = await db.collection("subscriptions").doc(userId).get();
     if (!subDoc.exists) {

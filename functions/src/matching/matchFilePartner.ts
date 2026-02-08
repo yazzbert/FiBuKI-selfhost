@@ -12,6 +12,7 @@
 
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import { createLocalPartnerFromGlobal } from "./createLocalPartnerFromGlobal";
 import { isValidCompanyName } from "../utils/companyNameValidator";
 import {
@@ -1225,7 +1226,12 @@ export async function runPartnerMatching(
 
   // No high-confidence match - try Gemini lookup if valid company name
   // Check AI budget before making Gemini calls (rule-based matching above stays free)
-  const aiBudget = await checkAIBudget(userId);
+  let isAdminUser = false;
+  try {
+    const userRecord = await getAuth().getUser(userId);
+    isAdminUser = userRecord.customClaims?.admin === true;
+  } catch { /* not found = not admin */ }
+  const aiBudget = await checkAIBudget(userId, isAdminUser);
 
   if (hasValidCompanyName) {
     if (!aiBudget.allowed) {

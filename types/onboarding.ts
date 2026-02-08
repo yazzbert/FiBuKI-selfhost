@@ -5,6 +5,7 @@ import { Timestamp } from "firebase/firestore";
  */
 export type OnboardingStep =
   | "set_identity"
+  | "connect_email"
   | "add_bank_account"
   | "import_transactions"
   | "assign_partner"
@@ -38,6 +39,16 @@ export interface OnboardingState {
 
   /** Whether user has seen the completion celebration */
   hasSeenCompletion: boolean;
+
+  /** When onboarding was skipped (null if not skipped) */
+  skippedAt?: Timestamp | null;
+
+  /** Steps that the user explicitly skipped */
+  skippedSteps?: {
+    [K in OnboardingStep]?: {
+      skippedAt: Timestamp;
+    };
+  };
 }
 
 /**
@@ -66,6 +77,14 @@ export const ONBOARDING_STEPS: OnboardingStepConfig[] = [
     route: "/settings/identity",
     highlightTarget: '[data-onboarding="identity-form"]',
     icon: "User",
+  },
+  {
+    id: "connect_email",
+    title: "Connect Email",
+    description: "Connect Gmail or set up email forwarding for automatic receipt import",
+    route: "/integrations/gmail",
+    highlightTarget: '[data-onboarding="connect-email"]',
+    icon: "Mail",
   },
   {
     id: "add_bank_account",

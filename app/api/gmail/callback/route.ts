@@ -41,19 +41,19 @@ export async function GET(request: NextRequest) {
   // Handle errors from Google
   if (error) {
     console.error("OAuth error from Google:", error);
-    return redirectWithParams(request, "/integrations", { error });
+    return redirectWithParams(request, "/integrations/gmail", { error });
   }
 
   // Verify required parameters
   if (!code) {
-    return redirectWithParams(request, "/integrations", { error: "missing_code" });
+    return redirectWithParams(request, "/integrations/gmail", { error: "missing_code" });
   }
 
   // Verify state parameter (CSRF protection)
   const storedState = request.cookies.get("gmail_oauth_state")?.value;
   if (!state || state !== storedState) {
     console.error("OAuth state mismatch:", { state, storedState });
-    return redirectWithParams(request, "/integrations", { error: "invalid_state" });
+    return redirectWithParams(request, "/integrations/gmail", { error: "invalid_state" });
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
   const redirectUri = process.env.GOOGLE_OAUTH_REDIRECT_URI || "http://localhost:3000/api/gmail/callback";
 
   if (!clientId || !clientSecret) {
-    return redirectWithParams(request, "/integrations", { error: "oauth_not_configured" });
+    return redirectWithParams(request, "/integrations/gmail", { error: "oauth_not_configured" });
   }
 
   try {
@@ -81,14 +81,14 @@ export async function GET(request: NextRequest) {
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text();
       console.error("Token exchange failed:", errorData);
-      return redirectWithParams(request, "/integrations", { error: "token_exchange_failed" });
+      return redirectWithParams(request, "/integrations/gmail", { error: "token_exchange_failed" });
     }
 
     const tokens: GoogleTokenResponse = await tokenResponse.json();
 
     if (!tokens.access_token) {
       console.error("No access token in response:", tokens);
-      return redirectWithParams(request, "/integrations", { error: "no_access_token" });
+      return redirectWithParams(request, "/integrations/gmail", { error: "no_access_token" });
     }
 
     // Get user info
@@ -98,13 +98,13 @@ export async function GET(request: NextRequest) {
 
     if (!userInfoResponse.ok) {
       console.error("Failed to get user info");
-      return redirectWithParams(request, "/integrations", { error: "userinfo_failed" });
+      return redirectWithParams(request, "/integrations/gmail", { error: "userinfo_failed" });
     }
 
     const userInfo: GoogleUserInfo = await userInfoResponse.json();
 
     if (!userInfo.email) {
-      return redirectWithParams(request, "/integrations", { error: "no_email" });
+      return redirectWithParams(request, "/integrations/gmail", { error: "no_email" });
     }
 
     // Calculate token expiry
@@ -114,7 +114,7 @@ export async function GET(request: NextRequest) {
     const cookieUserId = request.cookies.get("gmail_oauth_user_id")?.value;
     const userId = cookieUserId || "";
     if (!userId) {
-      return redirectWithParams(request, "/integrations", { error: "no_user_id" });
+      return redirectWithParams(request, "/integrations/gmail", { error: "no_user_id" });
     }
 
     // Check if email is already connected (active) using Admin SDK
@@ -143,7 +143,7 @@ export async function GET(request: NextRequest) {
         updatedAt: Timestamp.now(),
       });
 
-      return redirectWithParams(request, "/integrations", { success: "tokens_updated" });
+      return redirectWithParams(request, "/integrations/gmail", { success: "tokens_updated" });
     }
 
     // Check for disconnected integration (reconnection)
@@ -204,7 +204,7 @@ export async function GET(request: NextRequest) {
       // Add email to user's own emails
       await addOwnEmail(userId, userInfo.email);
 
-      return redirectWithParams(request, "/integrations", { success: "reconnected" });
+      return redirectWithParams(request, "/integrations/gmail", { success: "reconnected" });
     }
 
     // Create new integration
@@ -238,11 +238,11 @@ export async function GET(request: NextRequest) {
 
     console.log(`[Gmail OAuth] Created integration for ${userInfo.email} with refresh token: ${tokens.refresh_token ? "yes" : "no"}`);
 
-    return redirectWithParams(request, "/integrations", { success: "connected" });
+    return redirectWithParams(request, "/integrations/gmail", { success: "connected" });
 
   } catch (error) {
     console.error("OAuth callback error:", error);
-    return redirectWithParams(request, "/integrations", { error: String(error) });
+    return redirectWithParams(request, "/integrations/gmail", { error: String(error) });
   }
 }
 

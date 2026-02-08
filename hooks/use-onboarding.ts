@@ -16,11 +16,14 @@ import {
   uncompleteOnboardingStep,
   markOnboardingCompletionSeen,
   calculateProgress,
+  skipOnboarding as skipOnboardingOp,
+  skipOnboardingStep,
 } from "@/lib/operations";
 import { useAuth } from "@/components/auth";
 import { useSources } from "./use-sources";
 import { useTransactions } from "./use-transactions";
 import { useUserData } from "./use-user-data";
+import { useEmailIntegrations } from "./use-email-integrations";
 
 /**
  * Hook for managing onboarding state and auto-detecting step completion
@@ -35,6 +38,7 @@ export function useOnboarding() {
   const { sources, loading: sourcesLoading } = useSources();
   const { transactions, loading: transactionsLoading } = useTransactions();
   const { userData, loading: userDataLoading, isConfigured: hasIdentity } = useUserData();
+  const { hasGmailIntegration, loading: emailLoading } = useEmailIntegrations();
 
   // Track if we've done initial check to avoid duplicate calls
   const hasCheckedInitial = useRef(false);
@@ -102,6 +106,7 @@ export function useOnboarding() {
       sourcesLoading ||
       transactionsLoading ||
       userDataLoading ||
+      emailLoading ||
       !userId
     ) {
       return;
@@ -119,9 +124,24 @@ export function useOnboarding() {
         return;
       }
 
-      // Step 1: Add bank account (only check if step 0 is done)
+      // Step 1: Connect email (only check if step 0 is done, skip if user explicitly skipped)
+      // Note: inbound addresses are auto-created for every user, so only count Gmail OAuth
+      const hasEmailConnected = hasGmailIntegration;
+      const isEmailSkipped = !!state.skippedSteps?.connect_email;
+      if (state.completedSteps.set_identity && !isEmailSkipped) {
+        if (state.completedSteps.connect_email && !hasEmailConnected) {
+          await uncompleteOnboardingStep(ctx, "connect_email");
+          return;
+        }
+        if (!state.completedSteps.connect_email && hasEmailConnected) {
+          await completeOnboardingStep(ctx, "connect_email");
+          return;
+        }
+      }
+
+      // Step 2: Add bank account (only check if step 1 is done or skipped)
       const hasSources = sources.length > 0;
-      if (!state.completedSteps.set_identity) return;
+      if (!state.completedSteps.connect_email) return;
       if (state.completedSteps.add_bank_account && !hasSources) {
         // Uncomplete if no longer has sources
         await uncompleteOnboardingStep(ctx, "add_bank_account");
@@ -186,7 +206,9 @@ export function useOnboarding() {
     sourcesLoading,
     transactionsLoading,
     userDataLoading,
+    emailLoading,
     hasIdentity,
+    hasGmailIntegration,
     userId,
     ctx,
   ]);
@@ -208,6 +230,35 @@ export function useOnboarding() {
     [state]
   );
 
+  // Check if a step was explicitly skipped
+  const isStepSkipped = useCallback(
+    (step: OnboardingStep): boolean => {
+      return !!state?.skippedSteps?.[step];
+    },
+    [state]
+  );
+
+  // Skip entire onboarding
+  const skipOnboarding = useCallback(async () => {
+    try {
+      await skipOnboardingOp(ctx);
+    } catch (err) {
+      console.error("Error skipping onboarding:", err);
+    }
+  }, [ctx]);
+
+  // Skip a single step
+  const skipStep = useCallback(
+    async (step: OnboardingStep) => {
+      try {
+        await skipOnboardingStep(ctx, step);
+      } catch (err) {
+        console.error("Error skipping step:", err);
+      }
+    },
+    [ctx]
+  );
+
   // Mark completion seen
   const dismissCompletion = useCallback(async () => {
     try {
@@ -225,7 +276,7 @@ export function useOnboarding() {
   return {
     // State
     state,
-    loading: loading || sourcesLoading || transactionsLoading || userDataLoading,
+    loading: loading || sourcesLoading || transactionsLoading || userDataLoading || emailLoading,
     error,
 
     // Derived state
@@ -238,9 +289,12 @@ export function useOnboarding() {
     // Step info
     steps: ONBOARDING_STEPS,
     isStepCompleted,
+    isStepSkipped,
     progress,
 
     // Actions
     dismissCompletion,
+    skipOnboarding,
+    skipStep,
   };
 }

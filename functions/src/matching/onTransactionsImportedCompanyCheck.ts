@@ -300,6 +300,11 @@ export const onTransactionsImportedCompanyCheck = onDocumentCreated(
         continue;
       }
 
+      // Skip over-quota transactions (imported but processing limited)
+      if (txData.quotaExceeded) {
+        continue;
+      }
+
       const transaction: TransactionData = {
         id: txDoc.id,
         partner: txData.partner || null,

@@ -2,8 +2,9 @@
 
 import React from "react";
 import { Progress } from "@/components/ui/progress";
-import { CheckCircle2, XCircle, AlertCircle, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, AlertCircle, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
 
 interface ImportProgressProps {
   progress: number;
@@ -13,6 +14,7 @@ interface ImportProgressProps {
     skipped: number;
     errors: number;
     errorDetails: { row: number; message: string; rowData: Record<string, string> }[];
+    overLimitCount?: number;
   } | null;
   isComplete: boolean;
 }
@@ -60,6 +62,24 @@ export function ImportProgress({
               <ResultCard {...card} />
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Over-limit notice */}
+      {isComplete && results && (results.overLimitCount ?? 0) > 0 && (
+        <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+          <Lock className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              {results.overLimitCount} transaction{results.overLimitCount !== 1 ? "s" : ""} imported over your plan limit
+            </p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+              These transactions are visible but auto-matching is disabled.{" "}
+              <Link href="/settings/billing" className="underline underline-offset-2 font-medium hover:text-amber-700 dark:hover:text-amber-300">
+                Upgrade to unlock &rarr;
+              </Link>
+            </p>
+          </div>
         </div>
       )}
 

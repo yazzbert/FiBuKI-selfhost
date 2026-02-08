@@ -37,7 +37,7 @@ const CONFIG = {
   /** Enable agentic fallback for unmatched transactions */
   ENABLE_AGENTIC_FALLBACK: true,
   /** Max transactions to queue for agentic fallback per run */
-  AGENTIC_FALLBACK_MAX_QUEUE: 5,
+  AGENTIC_FALLBACK_MAX_QUEUE: 2,
 };
 
 // === Types ===

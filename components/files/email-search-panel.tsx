@@ -271,7 +271,7 @@ export function EmailSearchPanel({
           Connect your Gmail to search for invoices.
         </p>
         <Button variant="outline" asChild>
-          <a href="/integrations">Go to Integrations</a>
+          <a href="/integrations/gmail">Go to Integrations</a>
         </Button>
       </div>
     );

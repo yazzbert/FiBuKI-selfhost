@@ -318,6 +318,27 @@
   100% { background-position: 200% 0; }
 }
 
+/* Info icon: fade in + gentle bounce */
+@keyframes info-icon-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-info-icon-in {
+  animation: info-icon-in 400ms var(--ease-out-back) both;
+  animation-delay: 200ms;
+}
+
 /* Reduced motion: instant all custom animations */
 @media (prefers-reduced-motion: reduce) {
   .animate-row-complete,
@@ -326,7 +347,8 @@
   .animate-stagger-in,
   .animate-counter-bump,
   .animate-suggestion-accept,
-  .animate-suggestion-dismiss {
+  .animate-suggestion-dismiss,
+  .animate-info-icon-in {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }

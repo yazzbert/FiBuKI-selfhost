@@ -218,6 +218,10 @@ exports.onTransactionsImportedCompanyCheck = (0, firestore_1.onDocumentCreated)(
         if (txData.noReceiptCategoryId) {
             continue;
         }
+        // Skip over-quota transactions (imported but processing limited)
+        if (txData.quotaExceeded) {
+            continue;
+        }
         const transaction = {
             id: txDoc.id,
             partner: txData.partner || null,

@@ -285,7 +285,7 @@ export default function BrowserIntegrationPage() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => router.push("/integrations")}
+              onClick={() => router.push("/settings/integrations")}
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>

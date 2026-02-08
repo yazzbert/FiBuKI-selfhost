@@ -117,7 +117,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
     setDisconnecting(true);
     try {
       await disconnect(id);
-      router.push("/integrations");
+      router.push("/settings/integrations");
     } catch {
       // Error handled by hook
     } finally {
@@ -159,7 +159,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
         <p className="text-muted-foreground">Integration not found</p>
         <Button
           variant="link"
-          onClick={() => router.push("/integrations")}
+          onClick={() => router.push("/settings/integrations")}
           className="mt-2"
         >
           Back to integrations
@@ -218,7 +218,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => router.push("/integrations")}
+            onClick={() => router.push("/settings/integrations")}
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>

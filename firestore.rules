@@ -229,6 +229,20 @@ service cloud.firestore {
       allow write: if false; // Cloud Functions only
     }
 
+    // BMD exports - users can read their own, write handled by Cloud Functions
+    match /bmdExports/{docId} {
+      allow get: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow list: if isAuthenticated();
+      allow write: if false; // Cloud Functions only
+    }
+
+    // API keys - users can read their own, write handled by Cloud Functions
+    match /apiKeys/{docId} {
+      allow get: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow list: if isAuthenticated();
+      allow write: if false; // Cloud Functions only
+    }
+
     // Subscriptions - users can read their own, write handled by Cloud Functions (Stripe webhook + callables)
     match /subscriptions/{userId} {
       allow read: if request.auth != null && request.auth.uid == userId;

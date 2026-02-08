@@ -1128,7 +1128,7 @@ export function ConnectFileOverlay({
   }, [gmailAuthIssues, integrations]);
 
   const reconnectReturnTo = useMemo(() => {
-    if (typeof window === "undefined") return "/integrations";
+    if (typeof window === "undefined") return "/settings/integrations";
     const pathname = window.location.pathname;
     const searchParams = new URLSearchParams(window.location.search);
     if (transaction?.id) {

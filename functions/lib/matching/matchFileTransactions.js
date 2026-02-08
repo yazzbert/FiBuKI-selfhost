@@ -26,6 +26,7 @@ exports.matchFileTransactions = exports.AUTOMATION_META = void 0;
 exports.runTransactionMatching = runTransactionMatching;
 const firestore_1 = require("firebase-functions/v2/firestore");
 const firestore_2 = require("firebase-admin/firestore");
+const auth_1 = require("firebase-admin/auth");
 const transactionScoring_1 = require("./transactionScoring");
 const checkAIBudget_1 = require("../billing/checkAIBudget");
 // =============================================================================
@@ -576,7 +577,13 @@ async function runTransactionMatching(fileId, fileData) {
     // Falls back to per-file worker when no partner is assigned
     if (autoMatches.length === 0) {
         // Check AI budget before queuing agentic workers (rule-based scoring above stays free)
-        const aiBudget = await (0, checkAIBudget_1.checkAIBudget)(userId);
+        let isAdminUser = false;
+        try {
+            const userRecord = await (0, auth_1.getAuth)().getUser(userId);
+            isAdminUser = userRecord.customClaims?.admin === true;
+        }
+        catch { /* not found = not admin */ }
+        const aiBudget = await (0, checkAIBudget_1.checkAIBudget)(userId, isAdminUser);
         if (!aiBudget.allowed) {
             console.log(`[TxMatch] AI budget exhausted for user ${userId}, skipping agentic worker for file ${fileId}`);
         }

@@ -15,6 +15,7 @@ exports.matchFilePartner = exports.AUTOMATION_META = void 0;
 exports.runPartnerMatching = runPartnerMatching;
 const firestore_1 = require("firebase-functions/v2/firestore");
 const firestore_2 = require("firebase-admin/firestore");
+const auth_1 = require("firebase-admin/auth");
 const createLocalPartnerFromGlobal_1 = require("./createLocalPartnerFromGlobal");
 const companyNameValidator_1 = require("../utils/companyNameValidator");
 const filePartnerMatcher_1 = require("../utils/filePartnerMatcher");
@@ -892,7 +893,13 @@ async function runPartnerMatching(fileId, fileData) {
     }
     // No high-confidence match - try Gemini lookup if valid company name
     // Check AI budget before making Gemini calls (rule-based matching above stays free)
-    const aiBudget = await (0, checkAIBudget_1.checkAIBudget)(userId);
+    let isAdminUser = false;
+    try {
+        const userRecord = await (0, auth_1.getAuth)().getUser(userId);
+        isAdminUser = userRecord.customClaims?.admin === true;
+    }
+    catch { /* not found = not admin */ }
+    const aiBudget = await (0, checkAIBudget_1.checkAIBudget)(userId, isAdminUser);
     if (hasValidCompanyName) {
         if (!aiBudget.allowed) {
             console.log(`[PartnerMatch] AI budget exhausted for user ${userId}, skipping Gemini lookup for "${extractedPartner}"`);

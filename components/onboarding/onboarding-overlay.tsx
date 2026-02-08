@@ -6,6 +6,8 @@ import { HighlightPin } from "./highlight-pin";
 
 // Map step IDs to human-readable labels for the highlight pin
 const stepLabels: Record<string, string> = {
+  set_identity: "Fill in your details",
+  connect_email: "Connect your email",
   add_bank_account: "Start here",
   import_transactions: "Import your transactions",
   assign_partner: "Assign a partner",
@@ -14,6 +16,8 @@ const stepLabels: Record<string, string> = {
 
 // Map steps to their expected routes
 const stepRoutes: Record<string, string[]> = {
+  set_identity: ["/settings/identity"],
+  connect_email: ["/integrations/gmail", "/integrations/email-inbound"],
   add_bank_account: ["/sources"],
   import_transactions: ["/sources"],
   assign_partner: ["/transactions"],

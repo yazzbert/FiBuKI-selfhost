@@ -116,7 +116,6 @@ async function queueAsDocument(transactionId, userId, partnerId, initialPrompt) 
             workerRequestId: requestRef.id,
             status: "pending",
         }),
-        updatedAt: firestore_1.FieldValue.serverTimestamp(),
     });
     console.log(`[QueueReceiptSearch] Queued worker request ${requestRef.id} for transaction ${transactionId}`);
     return {
@@ -278,7 +277,6 @@ async function queueReceiptSearchForTransaction(options) {
                 workerRunId: directResult.runId,
                 status: directResult.status,
             }),
-            updatedAt: firestore_1.FieldValue.serverTimestamp(),
         });
         console.log(`[QueueReceiptSearch] Direct execution completed: ${directResult.runId}`);
         return {

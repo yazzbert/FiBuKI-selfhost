@@ -47,7 +47,7 @@ export function IntegrationStatusBanner({
     if (integrationId) {
       return `/integrations/${integrationId}`;
     }
-    return "/integrations";
+    return "/settings/integrations";
   };
 
   const getMessage = () => {

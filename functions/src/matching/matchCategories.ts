@@ -220,6 +220,11 @@ export async function matchCategoriesForUser(
       fileIds: txData.fileIds || [],
     };
 
+    // Skip over-quota transactions (imported but processing limited)
+    if (txData.quotaExceeded) {
+      continue;
+    }
+
     // Skip if not eligible (has category or files)
     if (!isEligibleForCategoryMatching(transaction)) {
       continue;
