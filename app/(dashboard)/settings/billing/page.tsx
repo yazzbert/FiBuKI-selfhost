@@ -6,11 +6,12 @@ import { BillingUsageSection } from "@/components/settings/billing-usage-section
 import { BillingCreditsSection } from "@/components/settings/billing-credits-section";
 import { BillingOverageSettings } from "@/components/settings/billing-overage-settings";
 import { BillingPlanComparison } from "@/components/settings/billing-plan-comparison";
+import { InvestmentsAddonCard } from "@/components/billing/investments-addon-card";
 import { useSubscription } from "@/hooks/use-subscription";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function BillingPage() {
-  const { loading } = useSubscription();
+  const { subscription, loading } = useSubscription();
 
   if (loading) {
     return (
@@ -35,6 +36,7 @@ export default function BillingPage() {
       <BillingUsageSection />
       <BillingCreditsSection />
       <BillingOverageSettings />
+      <InvestmentsAddonCard subscription={subscription} />
       <BillingPlanComparison />
     </div>
   );

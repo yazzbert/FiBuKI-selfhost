@@ -16,9 +16,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SourceFormData, TransactionSource, AccountKind, CardBrand } from "@/types/source";
+import { SourceFormData, TransactionSource, AccountKind, CardBrand, BrokerName } from "@/types/source";
 import { isValidIban, normalizeIban, formatIban } from "@/lib/import/deduplication";
-import { Building2, CreditCard } from "lucide-react";
+import { Building2, CreditCard, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AddSourceDialogProps {
@@ -36,6 +36,15 @@ const CARD_BRANDS: { value: CardBrand; label: string }[] = [
   { value: "other", label: "Other" },
 ];
 
+const BROKERS: { value: BrokerName; label: string }[] = [
+  { value: "trade_republic", label: "Trade Republic" },
+  { value: "flatex", label: "Flatex" },
+  { value: "interactive_brokers", label: "Interactive Brokers" },
+  { value: "etoro", label: "eToro" },
+  { value: "bitpanda", label: "Bitpanda" },
+  { value: "other", label: "Other" },
+];
+
 export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourceDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [ibanError, setIbanError] = useState<string | null>(null);
@@ -46,6 +55,7 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
     cardBrand: CardBrand;
     cardLast4: string;
     linkedSourceId: string;
+    brokerName: BrokerName;
     currency: string;
     type: "csv" | "api";
   }>({
@@ -55,6 +65,7 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
     cardBrand: "visa",
     cardLast4: "",
     linkedSourceId: "",
+    brokerName: "other",
     currency: "EUR",
     type: "csv",
   });
@@ -100,11 +111,12 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
     if (formData.accountKind === "bank_account") {
       // For bank accounts, IBAN is optional but must be valid if provided
       if (ibanError) return false;
-    } else {
+    } else if (formData.accountKind === "credit_card") {
       // For credit cards, card info is required
       if (!formData.cardBrand) return false;
       if (!formData.cardLast4 || formData.cardLast4.length !== 4) return false;
     }
+    // Depot: only name is required (broker is optional)
 
     return true;
   };
@@ -127,6 +139,7 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
         iban: formData.accountKind === "bank_account" ? formData.iban : undefined,
         cardBrand: formData.accountKind === "credit_card" ? formData.cardBrand : undefined,
         cardLast4: formData.accountKind === "credit_card" ? formData.cardLast4 : undefined,
+        brokerName: formData.accountKind === "depot" ? formData.brokerName : undefined,
         linkedSourceId: formData.linkedSourceId || undefined,
         currency: formData.currency,
         type: formData.type,
@@ -140,6 +153,7 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
         cardBrand: "visa",
         cardLast4: "",
         linkedSourceId: "",
+        brokerName: "other",
         currency: "EUR",
         type: "csv" as const,
       });
@@ -163,7 +177,7 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
             <label className="text-sm font-medium mb-2 block">
               Account Type *
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => handleAccountKindChange("bank_account")}
@@ -190,6 +204,19 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
                 <CreditCard className="h-5 w-5" />
                 <span className="font-medium">Credit Card</span>
               </button>
+              <button
+                type="button"
+                onClick={() => handleAccountKindChange("depot")}
+                className={cn(
+                  "flex items-center gap-2 p-3 rounded-lg border-2 transition-colors",
+                  formData.accountKind === "depot"
+                    ? "border-primary bg-primary/5"
+                    : "border-muted hover:border-muted-foreground/50"
+                )}
+              >
+                <TrendingUp className="h-5 w-5" />
+                <span className="font-medium">Depot</span>
+              </button>
             </div>
           </div>
 
@@ -199,9 +226,13 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
               Account Name *
             </label>
             <Input
-              placeholder={formData.accountKind === "credit_card"
-                ? "e.g., Amex Business Card"
-                : "e.g., Business Account"}
+              placeholder={
+                formData.accountKind === "credit_card"
+                  ? "e.g., Amex Business Card"
+                  : formData.accountKind === "depot"
+                    ? "e.g., Trade Republic Depot"
+                    : "e.g., Business Account"
+              }
               value={formData.name}
               onChange={(e) =>
                 setFormData((f) => ({ ...f, name: e.target.value }))
@@ -212,6 +243,35 @@ export function AddSourceDialog({ open, onClose, onAdd, sources = [] }: AddSourc
               A friendly name to identify this account
             </p>
           </div>
+
+          {/* Broker - Only for depot sources */}
+          {formData.accountKind === "depot" && (
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">
+                Broker
+              </label>
+              <Select
+                value={formData.brokerName}
+                onValueChange={(value) =>
+                  setFormData((f) => ({ ...f, brokerName: value as BrokerName }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BROKERS.map((broker) => (
+                    <SelectItem key={broker.value} value={broker.value}>
+                      {broker.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Helps with automatic column matching during CSV import
+              </p>
+            </div>
+          )}
 
           {/* IBAN - Only for bank accounts */}
           {formData.accountKind === "bank_account" && (

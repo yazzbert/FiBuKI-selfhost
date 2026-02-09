@@ -19,11 +19,19 @@ export default function SourcesPage() {
   usePageTitle("Accounts");
 
   const handleSourceClick = (source: TransactionSource) => {
-    router.push(`/sources/${source.id}`);
+    if (source.accountKind === "depot") {
+      router.push(`/sources/${source.id}/trades`);
+    } else {
+      router.push(`/sources/${source.id}`);
+    }
   };
 
   const handleImportClick = (source: TransactionSource) => {
-    router.push(`/sources/${source.id}/import`);
+    if (source.accountKind === "depot") {
+      router.push(`/sources/${source.id}/import-trades`);
+    } else {
+      router.push(`/sources/${source.id}/import`);
+    }
   };
 
   const handleConnectClick = () => {

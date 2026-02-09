@@ -81,13 +81,24 @@ export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) 
     return <Badge variant="secondary" className="text-xs">CSV</Badge>;
   };
 
+  // Broker name display for depot sources
+  const BROKER_LABELS: Record<string, string> = {
+    etoro: "eToro",
+    bitpanda: "Bitpanda",
+    trade_republic: "Trade Republic",
+    flatex: "Flatex",
+    interactive_brokers: "Interactive Brokers",
+    other: "Broker",
+  };
+
   // Get account type icon based on accountKind or finAPI accountType
   const getAccountTypeIcon = () => {
-    // For credit cards
     if (source.accountKind === "credit_card") {
       return <CreditCard className="h-3 w-3" />;
     }
-    // For API sources, we could store the finAPI accountType - for now use accountKind
+    if (source.accountKind === "depot") {
+      return <TrendingUp className="h-3 w-3" />;
+    }
     return <Building2 className="h-3 w-3" />;
   };
 
@@ -112,6 +123,8 @@ export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) 
       <div className="p-2 rounded-lg bg-primary/10 border border-border shrink-0">
         {source.accountKind === "credit_card" ? (
           <CreditCard className="h-5 w-5 text-primary" />
+        ) : source.accountKind === "depot" ? (
+          <TrendingUp className="h-5 w-5 text-primary" />
         ) : (
           <Building2 className="h-5 w-5 text-primary" />
         )}
@@ -140,7 +153,9 @@ export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) 
         <p className="text-sm font-mono text-muted-foreground mb-1">
           {source.accountKind === "credit_card"
             ? `${source.cardBrand?.toUpperCase() || "Card"} ••••${source.cardLast4 || ""}`
-            : formatIban(source.iban)}
+            : source.accountKind === "depot"
+              ? BROKER_LABELS[source.brokerName || "other"]
+              : formatIban(source.iban)}
         </p>
 
         {source.latestBalance != null && (
@@ -168,7 +183,7 @@ export function SourceCard({ source, onClick, onImportClick }: SourceCardProps) 
               data-onboarding="import-transactions"
             >
               <Upload className="h-4 w-4 mr-2" />
-              Import
+              {source.accountKind === "depot" ? "Import Trades" : "Import"}
             </Button>
           )}
           {isApiConnected && (

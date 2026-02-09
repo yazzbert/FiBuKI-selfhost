@@ -170,6 +170,7 @@ export {
   deleteSourceCallable as deleteSource,
   getBalanceAtDateCallable as getBalanceAtDate,
   getAccountBalancesCallable as getAccountBalances,
+  backfillSourcePartnersCallable as backfillSourcePartners,
 } from "./sources";
 
 // Worker operations
@@ -255,14 +256,27 @@ export {
 // Browser recipe operations
 export { saveBrowserRecipeCallable as saveBrowserRecipe } from "./browser/saveBrowserRecipe";
 
-// Card reconciliation operations
-export { processReconciliation } from "./reconciliation/processReconciliation";
+// Card reconciliation operations (processReconciliation is now a utility called from onTransactionUpdate)
 export {
   confirmReconciliationCallable as confirmReconciliation,
 } from "./reconciliation/confirmReconciliation";
 export {
   rejectReconciliationCallable as rejectReconciliation,
 } from "./reconciliation/rejectReconciliation";
+
+// Investment operations
+export {
+  bulkCreateTradesCallable as bulkCreateTrades,
+  matchInvestmentColumns,
+  calculateFifoCallable as calculateFifo,
+  calculateCapitalGainsSummaryCallable as calculateCapitalGainsSummary,
+} from "./investments";
+
+// Billing addon operations
+export {
+  activateInvestmentsAddonCallable as activateInvestmentsAddon,
+  deactivateInvestmentsAddonCallable as deactivateInvestmentsAddon,
+} from "./billing/investmentsAddon";
 
 // MCP HTTP API (for OpenClaw, Claude Desktop, ChatGPT, etc.)
 export { mcpApi, mcpToolsList, mcpSse } from "./mcp-api";

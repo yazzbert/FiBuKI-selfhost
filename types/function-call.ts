@@ -99,7 +99,14 @@ export type CloudFunctionName =
   | "saveBrowserRecipe"
   // Card reconciliation operations
   | "confirmReconciliation"
-  | "rejectReconciliation";
+  | "rejectReconciliation"
+  // Investment operations
+  | "bulkCreateTrades"
+  | "matchInvestmentColumns"
+  | "calculateFifo"
+  | "calculateCapitalGainsSummary"
+  | "activateInvestmentsAddon"
+  | "deactivateInvestmentsAddon";
 
 /**
  * Summary statistics for function calls (for dashboards).

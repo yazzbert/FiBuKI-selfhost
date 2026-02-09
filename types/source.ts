@@ -4,7 +4,18 @@ import { AmountFormatConfig } from "./import";
 /**
  * Type of financial account
  */
-export type AccountKind = "bank_account" | "credit_card";
+export type AccountKind = "bank_account" | "credit_card" | "depot";
+
+/**
+ * Known broker platforms for depot sources
+ */
+export type BrokerName =
+  | "etoro"
+  | "bitpanda"
+  | "trade_republic"
+  | "flatex"
+  | "interactive_brokers"
+  | "other";
 
 /**
  * Credit card brand/network
@@ -36,6 +47,9 @@ export interface TransactionSource {
 
   /** For credit cards: card brand/network */
   cardBrand?: CardBrand;
+
+  /** For depot sources: broker platform name */
+  brokerName?: BrokerName;
 
   /** Auto-created partner for this source (for pattern learning + reconciliation) */
   sourcePartnerId?: string;
@@ -166,6 +180,8 @@ export interface SourceFormData {
   cardLast4?: string;
   /** For credit cards: card brand */
   cardBrand?: CardBrand;
+  /** For depot sources: broker platform */
+  brokerName?: BrokerName;
   /** Primary currency for the account */
   currency: string;
   type: "csv" | "api";

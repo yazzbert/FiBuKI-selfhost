@@ -1,6 +1,6 @@
 "use client";
 
-import { FieldMapping } from "@/types/import";
+import { FieldMapping, FieldDefinition } from "@/types/import";
 import { MappingRow } from "./mapping-row";
 import { TRANSACTION_FIELDS } from "@/lib/import/field-definitions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,9 @@ interface MappingEditorProps {
   sampleRows: Record<string, string>[];
   onMappingChange: (index: number, targetField: string | null) => void;
   onFormatChange: (index: number, format: string) => void;
-  onMappingDelete: (index: number) => void;
+  onMappingDelete?: (index: number) => void;
+  /** Custom field definitions (defaults to TRANSACTION_FIELDS) */
+  fieldDefinitions?: FieldDefinition[];
 }
 
 export function MappingEditor({
@@ -21,14 +23,17 @@ export function MappingEditor({
   onMappingChange,
   onFormatChange,
   onMappingDelete,
+  fieldDefinitions,
 }: MappingEditorProps) {
+  const fields = fieldDefinitions || TRANSACTION_FIELDS;
+
   // Get list of already mapped fields
   const mappedFields = new Set(
     mappings.filter((m) => m.targetField).map((m) => m.targetField)
   );
 
   // Check for missing required fields
-  const requiredFields = TRANSACTION_FIELDS.filter((f) => f.required);
+  const requiredFields = fields.filter((f) => f.required);
   const missingRequired = requiredFields.filter(
     (f) => !mappedFields.has(f.key)
   );
@@ -79,7 +84,8 @@ export function MappingEditor({
                   usedFields={mappedFields}
                   onChange={(targetField) => onMappingChange(index, targetField)}
                   onFormatChange={(format) => onFormatChange(index, format)}
-                  onDelete={() => onMappingDelete(index)}
+                  onDelete={onMappingDelete ? () => onMappingDelete(index) : undefined}
+                  fieldDefinitions={fieldDefinitions}
                 />
               );
             })}

@@ -13,6 +13,7 @@ interface DeleteSourceResponse {
   success: boolean;
   deletedImports: number;
   deletedTransactions: number;
+  deletedTrades?: number;
 }
 
 const BATCH_SIZE = 500;
@@ -49,6 +50,7 @@ export const deleteSourceCallable = createCallable<
     const now = Timestamp.now();
     let deletedImports = 0;
     let deletedTransactions = 0;
+    let deletedTrades = 0;
 
     // 1. Clear linkedSourceId on any credit cards that link to this bank account
     const linkedCardsQuery = await ctx.db
@@ -215,7 +217,48 @@ export const deleteSourceCallable = createCallable<
       }
     }
 
-    // 5. Delete the source document itself
+    // 5. Delete investment trades for depot sources
+    if (sourceData.accountKind === "depot") {
+      const tradesQuery = await ctx.db
+        .collection("investmentTrades")
+        .where("userId", "==", ctx.userId)
+        .where("sourceId", "==", sourceId)
+        .get();
+
+      if (!tradesQuery.empty) {
+        for (let i = 0; i < tradesQuery.docs.length; i += BATCH_SIZE) {
+          const tradeBatch = ctx.db.batch();
+          const chunk = tradesQuery.docs.slice(i, i + BATCH_SIZE);
+          for (const tradeDoc of chunk) {
+            tradeBatch.delete(tradeDoc.ref);
+            deletedTrades++;
+          }
+          await tradeBatch.commit();
+        }
+      }
+
+      // Also delete capital gains summaries for this user (they'll need recalculation)
+      // We don't delete them here since they span all sources, just log a note
+      if (deletedTrades > 0) {
+        console.log(`[deleteSource] Deleted ${deletedTrades} investment trades for depot ${sourceId}`);
+      }
+    }
+
+    // 6. Delete source partner if exists
+    if (sourceData.sourcePartnerId) {
+      try {
+        const partnerRef = ctx.db.collection("partners").doc(sourceData.sourcePartnerId);
+        const partnerSnap = await partnerRef.get();
+        if (partnerSnap.exists && partnerSnap.data()?.userId === ctx.userId) {
+          await partnerRef.delete();
+          console.log(`[deleteSource] Deleted source partner ${sourceData.sourcePartnerId}`);
+        }
+      } catch (err) {
+        console.warn(`[deleteSource] Failed to delete source partner:`, err);
+      }
+    }
+
+    // 7. Delete the source document itself
     await sourceRef.delete();
 
     console.log(`[deleteSource] Deleted source ${sourceId}`, {
@@ -228,6 +271,7 @@ export const deleteSourceCallable = createCallable<
       success: true,
       deletedImports,
       deletedTransactions,
+      deletedTrades,
     };
   }
 );

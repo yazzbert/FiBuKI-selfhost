@@ -130,6 +130,14 @@ export interface Subscription {
   // Transaction count (calendar month)
   transactionCountCurrentMonth: number;
   transactionCountMonth: string; // "YYYY-MM"
+  // Addons
+  addons?: {
+    investments?: {
+      active: boolean;
+      stripeSubscriptionItemId?: string;
+      activatedAt?: Timestamp;
+    };
+  };
   // Migration
   grandfatheredUntil?: Timestamp | null;
   // Admin overrides

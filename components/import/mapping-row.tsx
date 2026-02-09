@@ -1,6 +1,6 @@
 "use client";
 
-import { FieldMapping } from "@/types/import";
+import { FieldMapping, FieldDefinition } from "@/types/import";
 import { TRANSACTION_FIELDS } from "@/lib/import/field-definitions";
 import { DATE_PARSERS } from "@/lib/import/date-parsers";
 import { AMOUNT_PARSERS } from "@/lib/import/amount-parsers";
@@ -21,7 +21,9 @@ interface MappingRowProps {
   usedFields: Set<string | null>;
   onChange: (targetField: string | null, format?: string) => void;
   onFormatChange: (format: string) => void;
-  onDelete: () => void;
+  onDelete?: () => void;
+  /** Custom field definitions (defaults to TRANSACTION_FIELDS) */
+  fieldDefinitions?: FieldDefinition[];
 }
 
 export function MappingRow({
@@ -31,9 +33,11 @@ export function MappingRow({
   onChange,
   onFormatChange,
   onDelete,
+  fieldDefinitions,
 }: MappingRowProps) {
+  const fields = fieldDefinitions || TRANSACTION_FIELDS;
   const isAutoMatched = mapping.confidence > 0.7 && !mapping.userConfirmed;
-  const fieldDef = TRANSACTION_FIELDS.find((f) => f.key === mapping.targetField);
+  const fieldDef = fields.find((f) => f.key === mapping.targetField);
   const needsFormat = fieldDef?.type === "date" || fieldDef?.type === "amount";
   const formatOptions = fieldDef?.type === "date" ? DATE_PARSERS : AMOUNT_PARSERS;
 
@@ -84,7 +88,7 @@ export function MappingRow({
             <SelectItem value="_unmapped">
               <span className="text-muted-foreground">Keep as metadata</span>
             </SelectItem>
-            {TRANSACTION_FIELDS.map((field) => {
+            {fields.map((field) => {
               const isUsed =
                 usedFields.has(field.key) && mapping.targetField !== field.key;
               return (
@@ -126,15 +130,17 @@ export function MappingRow({
       )}
 
       {/* Delete button */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8 text-muted-foreground hover:text-destructive"
-        onClick={onDelete}
-        title="Exclude from import"
-      >
-        <Trash2 className="h-4 w-4" />
-      </Button>
+      {onDelete && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+          onClick={onDelete}
+          title="Exclude from import"
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      )}
     </div>
   );
 }
