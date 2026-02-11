@@ -32,6 +32,13 @@ service cloud.firestore {
       allow list: if isAuthenticated();
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      // Edit history subcollection
+      match /history/{entryId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated();
+        allow update, delete: if false; // History entries are immutable
+      }
     }
 
     match /files/{docId} {
