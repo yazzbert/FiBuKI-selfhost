@@ -6,17 +6,42 @@ import { Timestamp } from "firebase/firestore";
  */
 export interface AutomationHistoryEntry {
   /** Type of automation that ran */
-  type: "file_matching" | "partner_matching" | "company_check";
+  type:
+    | "file_matching"
+    | "partner_matching"
+    | "company_check"
+    | "receipt_search"
+    | "partner_assigned"
+    | "partner_removed"
+    | "category_assigned"
+    | "category_removed"
+    | "file_connected"
+    | "file_disconnected"
+    | "category_matched";
   /** When it ran */
   ranAt: Timestamp;
-  /** Partner ID at time of run (to detect if partner changed) */
-  forPartnerId?: string | null;
-  /** Worker run ID for linking to full transcript */
-  workerRunId?: string;
   /** Status of the run */
-  status: "completed" | "failed" | "no_match";
+  status: "completed" | "failed" | "no_match" | "pending" | "skipped";
+  /** Who/what triggered this action */
+  actor?: "auto" | "manual" | "ai" | "suggestion";
   /** Brief summary of what happened */
   summary?: string;
+  /** Partner ID at time of run (to detect if partner changed) */
+  forPartnerId?: string | null;
+  /** Partner name for display */
+  partnerName?: string;
+  /** File ID involved */
+  fileId?: string;
+  /** File name for display */
+  fileName?: string;
+  /** Category name for display */
+  categoryName?: string;
+  /** Match confidence (0-100) */
+  confidence?: number;
+  /** Worker run ID for linking to full transcript */
+  workerRunId?: string;
+  /** Activity level for filtering and analysis */
+  level?: "decision" | "outcome" | "info";
 }
 
 /**
@@ -232,6 +257,47 @@ export interface Transaction {
 
   createdAt: Timestamp;
   updatedAt: Timestamp;
+}
+
+/**
+ * Derive the activity level from an automation history entry's type and actor.
+ * Used for backward compatibility with entries that don't have `level` set,
+ * and as the single source of truth for level classification.
+ */
+export function deriveActivityLevel(
+  entry: Pick<AutomationHistoryEntry, "type" | "actor" | "level">
+): "decision" | "outcome" | "info" {
+  // Use persisted level if available
+  if (entry.level) return entry.level;
+
+  const { type, actor } = entry;
+
+  // Process telemetry types are always info
+  if (
+    type === "receipt_search" ||
+    type === "file_matching" ||
+    type === "partner_matching" ||
+    type === "company_check"
+  ) {
+    return "info";
+  }
+
+  // category_matched is always an automation outcome
+  if (type === "category_matched") {
+    return "outcome";
+  }
+
+  // Removal types are always user decisions
+  if (type === "partner_removed" || type === "file_disconnected" || type === "category_removed") {
+    return "decision";
+  }
+
+  // Assignment types: decision if manual/suggestion, outcome if auto/ai
+  if (actor === "auto" || actor === "ai") {
+    return "outcome";
+  }
+
+  return "decision";
 }
 
 /**

@@ -58,7 +58,8 @@ function StepItem({
       className={cn(
         "relative flex gap-3 p-3 rounded-lg transition-colors",
         isCurrent && "bg-primary/10 border border-primary/20",
-        (isCompleted || isSkipped) && !isCurrent && "opacity-70"
+        isCompleted && !isCurrent && "opacity-80",
+        isSkipped && !isCurrent && "opacity-70"
       )}
     >
       {/* Step number / check icon */}
@@ -66,7 +67,7 @@ function StepItem({
         className={cn(
           "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium",
           isCompleted
-            ? "bg-primary text-primary-foreground"
+            ? "bg-emerald-500 text-white"
             : isSkipped
             ? "bg-muted text-muted-foreground"
             : isCurrent
@@ -250,9 +251,6 @@ export function OnboardingSidebar() {
 
       {/* Footer */}
       <div className="p-4 border-t space-y-2">
-        <p className="text-xs text-muted-foreground text-center">
-          Complete all steps to unlock the full experience
-        </p>
         <Button
           variant="ghost"
           size="sm"

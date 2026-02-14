@@ -15,6 +15,8 @@ import type { PlanId, AIBudgetCheckResult } from "../config";
 // This mirrors the logic in checkAIBudget.ts without Firestore dependency.
 // ============================================================================
 
+type AdminOverride = "free_plan" | "plan_tester" | null;
+
 interface SubscriptionData {
   aiPaused: boolean;
   aiFairUseLimitEur: number;
@@ -23,9 +25,18 @@ interface SubscriptionData {
   aiOverageCapEur: number;
   aiOverageCurrentPeriodEur: number;
   plan: PlanId;
+  adminOverride?: AdminOverride;
 }
 
-function checkBudgetPure(sub: SubscriptionData | null): AIBudgetCheckResult {
+function checkBudgetPure(
+  sub: SubscriptionData | null,
+  isAdmin: boolean = false
+): AIBudgetCheckResult {
+  // Admin users have unlimited budget
+  if (isAdmin) {
+    return { allowed: true, source: "fair_use", remainingEur: Infinity, paused: false };
+  }
+
   if (!sub) {
     const freePlan = PLANS.free;
     return {
@@ -34,6 +45,11 @@ function checkBudgetPure(sub: SubscriptionData | null): AIBudgetCheckResult {
       remainingEur: freePlan.aiFairUseLimitEur,
       paused: false,
     };
+  }
+
+  // Admin override: free_plan users have unlimited AI budget
+  if (sub.adminOverride === "free_plan") {
+    return { allowed: true, source: "fair_use", remainingEur: Infinity, paused: false };
   }
 
   if (sub.aiPaused) {
@@ -251,6 +267,107 @@ describe("checkAIBudget logic", () => {
         expect(result.source).toBe("fair_use");
         expect(result.remainingEur).toBe(PLANS[planId].aiFairUseLimitEur);
       }
+    });
+  });
+
+  describe("admin override: free_plan", () => {
+    it("should allow unlimited AI budget for free_plan override", () => {
+      const result = checkBudgetPure({
+        ...baseSub,
+        plan: "free",
+        aiFairUseLimitEur: 0.5,
+        aiUsageCurrentPeriodEur: 100,
+        aiCreditsEur: 0,
+        adminOverride: "free_plan",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.source).toBe("fair_use");
+      expect(result.remainingEur).toBe(Infinity);
+      expect(result.paused).toBe(false);
+    });
+
+    it("should bypass even when aiPaused is true", () => {
+      const result = checkBudgetPure({
+        ...baseSub,
+        aiPaused: true,
+        adminOverride: "free_plan",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.remainingEur).toBe(Infinity);
+    });
+
+    it("should bypass when all budgets exhausted", () => {
+      const result = checkBudgetPure({
+        ...baseSub,
+        aiFairUseLimitEur: 3.0,
+        aiUsageCurrentPeriodEur: 3.0,
+        aiCreditsEur: 0,
+        aiOverageCapEur: 10.0,
+        aiOverageCurrentPeriodEur: 10.0,
+        adminOverride: "free_plan",
+      });
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe("admin override: plan_tester", () => {
+    it("should use normal budget chain for plan_tester", () => {
+      const result = checkBudgetPure({
+        ...baseSub,
+        aiUsageCurrentPeriodEur: 1.0,
+        adminOverride: "plan_tester",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.source).toBe("fair_use");
+      expect(result.remainingEur).toBeCloseTo(2.0);
+    });
+
+    it("should deny plan_tester when budget exhausted", () => {
+      const result = checkBudgetPure({
+        ...baseSub,
+        aiUsageCurrentPeriodEur: 3.0,
+        aiCreditsEur: 0,
+        aiOverageCapEur: 0,
+        adminOverride: "plan_tester",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.source).toBe("none");
+    });
+
+    it("should respect plan-specific limits for testers on different plans", () => {
+      const proBudget = PLANS.pro.aiFairUseLimitEur;
+      const result = checkBudgetPure({
+        ...baseSub,
+        plan: "pro",
+        aiFairUseLimitEur: proBudget,
+        aiUsageCurrentPeriodEur: 0,
+        adminOverride: "plan_tester",
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.remainingEur).toBe(proBudget);
+    });
+  });
+
+  describe("isAdmin flag", () => {
+    it("should allow unlimited for admin users", () => {
+      const result = checkBudgetPure(null, true);
+      expect(result.allowed).toBe(true);
+      expect(result.source).toBe("fair_use");
+      expect(result.remainingEur).toBe(Infinity);
+    });
+
+    it("should bypass all checks for admin even with exhausted subscription", () => {
+      const result = checkBudgetPure(
+        {
+          ...baseSub,
+          aiPaused: true,
+          aiUsageCurrentPeriodEur: 100,
+          aiCreditsEur: 0,
+        },
+        true
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.remainingEur).toBe(Infinity);
     });
   });
 });

@@ -75,7 +75,7 @@ export function Pill({
       )}
       <span className="truncate">{label}</span>
       {matchedBy === "manual" ? (
-        <span className="inline-flex items-center gap-0.5 text-xs flex-shrink-0 ml-auto text-green-600">
+        <span className="inline-flex items-center gap-0.5 text-xs flex-shrink-0 ml-auto text-green-600 dark:text-green-400">
           <UserCheck className="h-3 w-3" />
         </span>
       ) : confidence ? (

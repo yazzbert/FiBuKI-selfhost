@@ -37,7 +37,7 @@ const CONFIG = {
   /** Enable agentic fallback for unmatched transactions */
   ENABLE_AGENTIC_FALLBACK: true,
   /** Max transactions to queue for agentic fallback per run */
-  AGENTIC_FALLBACK_MAX_QUEUE: 2,
+  AGENTIC_FALLBACK_MAX_QUEUE: 10,
 };
 
 // === Types ===
@@ -525,11 +525,23 @@ export async function matchFilesForPartnerInternal(
         updatedAt: Timestamp.now(),
       });
 
-      // Update transaction's fileIds
+      // Update transaction's fileIds + activity log
       const txRef = db.collection("transactions").doc(match.transactionId);
+      const matchedFileData = fileMap.get(match.fileId)?.data();
       batch.update(txRef, {
         fileIds: FieldValue.arrayUnion(match.fileId),
         updatedAt: Timestamp.now(),
+        automationHistory: FieldValue.arrayUnion({
+          type: "file_connected",
+          ranAt: Timestamp.now(),
+          status: "completed",
+          actor: "auto",
+          level: "outcome" as const,
+          fileId: match.fileId,
+          fileName: matchedFileData?.fileName || null,
+          confidence: match.confidence,
+          summary: `File "${matchedFileData?.fileName || match.fileId}" auto-connected (${match.confidence}%)`,
+        }),
       });
 
       usedFiles.add(match.fileId);
@@ -612,11 +624,23 @@ export async function matchFilesForPartnerInternal(
             updatedAt: Timestamp.now(),
           });
 
-          // Update transaction's fileIds
+          // Update transaction's fileIds + activity log
           const txRef = db.collection("transactions").doc(match.transactionId);
+          const aiMatchedFileData = fileMap.get(match.fileId)?.data();
           aiBatch.update(txRef, {
             fileIds: FieldValue.arrayUnion(match.fileId),
             updatedAt: Timestamp.now(),
+            automationHistory: FieldValue.arrayUnion({
+              type: "file_connected",
+              ranAt: Timestamp.now(),
+              status: "completed",
+              actor: "ai",
+              level: "outcome" as const,
+              fileId: match.fileId,
+              fileName: aiMatchedFileData?.fileName || null,
+              confidence: CONFIG.AI_MATCH_CONFIDENCE,
+              summary: `File "${aiMatchedFileData?.fileName || match.fileId}" AI-matched`,
+            }),
           });
 
           usedFiles.add(match.fileId);

@@ -9,3 +9,4 @@ export { updateSourceCallable } from "./updateSource";
 export { deleteSourceCallable } from "./deleteSource";
 export { getBalanceAtDateCallable } from "./getBalanceAtDate";
 export { getAccountBalancesCallable } from "./getAccountBalances";
+export { backfillSourcePartnersCallable } from "./backfillSourcePartners";

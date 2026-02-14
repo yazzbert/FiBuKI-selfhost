@@ -9,6 +9,7 @@ import {
   cancelTransactionWorkersForFile,
   cancelPrecisionSearchForTransaction,
 } from "../utils/cancelWorkers";
+import { deriveActivityLevel } from "../utils/activityLevel";
 
 interface FileConnectionSourceInfo {
   sourceType?: string;
@@ -184,10 +185,22 @@ export const connectFileToTransactionCallable = createCallable<
     };
 
     // 3. Update transaction's fileIds array and mark as complete
+    const actor = connectionType === "manual" ? "manual" : "auto";
     const transactionUpdate: Record<string, unknown> = {
       fileIds: FieldValue.arrayUnion(fileId),
       isComplete: true,
       updatedAt: now,
+      automationHistory: FieldValue.arrayUnion({
+        type: "file_connected",
+        ranAt: now,
+        status: "completed",
+        actor,
+        level: deriveActivityLevel({ type: "file_connected", actor }),
+        fileId,
+        fileName: fileData.fileName || null,
+        confidence: matchConfidence ?? null,
+        summary: `File "${fileData.fileName || fileId}" connected`,
+      }),
     };
 
     // 4. Partner sync logic - FILE TAKES PRECEDENCE (it's the actual document)

@@ -1,7 +1,19 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { History, RotateCcw, Bot, User, Upload, Loader2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  History,
+  UserPlus,
+  UserMinus,
+  Paperclip,
+  Unlink,
+  Tag,
+  Bot,
+  Search,
+  Zap,
+  Building2,
+  ChevronDown,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -10,207 +22,251 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { TransactionHistoryEntry } from "@/types/transaction-history";
-import { getTransactionHistory, rollbackTransaction } from "@/lib/operations/transaction-history-ops";
-import { db } from "@/lib/firebase/config";
-import { useAuth } from "@/components/auth";
+import {
+  Transaction,
+  AutomationHistoryEntry,
+  deriveActivityLevel,
+} from "@/types/transaction";
 
 interface TransactionHistoryProps {
-  transactionId: string;
-  onRollback?: () => void;
+  transaction: Transaction;
   expandedByDefault?: boolean;
 }
 
-export function TransactionHistory({ transactionId, onRollback, expandedByDefault = false }: TransactionHistoryProps) {
-  const { userId } = useAuth();
-  const [history, setHistory] = useState<TransactionHistoryEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isRollingBack, setIsRollingBack] = useState<string | null>(null);
+const TYPE_CONFIG: Record<
+  string,
+  { icon: typeof History; label: string; color: string }
+> = {
+  partner_assigned: {
+    icon: UserPlus,
+    label: "Partner assigned",
+    color: "text-blue-500",
+  },
+  partner_removed: {
+    icon: UserMinus,
+    label: "Partner removed",
+    color: "text-orange-500",
+  },
+  file_connected: {
+    icon: Paperclip,
+    label: "File connected",
+    color: "text-green-600",
+  },
+  file_disconnected: {
+    icon: Unlink,
+    label: "File disconnected",
+    color: "text-orange-500",
+  },
+  category_assigned: {
+    icon: Tag,
+    label: "Category assigned",
+    color: "text-purple-500",
+  },
+  category_removed: {
+    icon: Tag,
+    label: "Category removed",
+    color: "text-orange-500",
+  },
+  category_matched: {
+    icon: Zap,
+    label: "Category auto-matched",
+    color: "text-purple-500",
+  },
+  receipt_search: {
+    icon: Search,
+    label: "Receipt search",
+    color: "text-blue-500",
+  },
+  file_matching: {
+    icon: Paperclip,
+    label: "File matching",
+    color: "text-blue-500",
+  },
+  partner_matching: {
+    icon: Bot,
+    label: "Partner matching",
+    color: "text-blue-500",
+  },
+  company_check: {
+    icon: Building2,
+    label: "Company check",
+    color: "text-blue-500",
+  },
+};
+
+function getStatusDot(status: AutomationHistoryEntry["status"]) {
+  switch (status) {
+    case "completed":
+      return "bg-green-500";
+    case "failed":
+      return "bg-red-500";
+    case "pending":
+      return "bg-yellow-500";
+    default:
+      return "bg-muted-foreground";
+  }
+}
+
+function formatRelativeTime(timestamp: { toDate?: () => Date }): string {
+  if (!timestamp?.toDate) return "";
+  const date = timestamp.toDate();
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
+}
+
+const ACTOR_LABEL: Record<string, string> = {
+  manual: "Manual",
+  suggestion: "Suggestion",
+  auto: "Auto",
+  ai: "AI",
+};
+
+function EntryRow({ entry, index }: { entry: AutomationHistoryEntry; index: number }) {
+  const level = deriveActivityLevel(entry);
+  const config = TYPE_CONFIG[entry.type] || {
+    icon: History,
+    label: entry.type,
+    color: "text-muted-foreground",
+  };
+  const Icon = config.icon;
+  const isInfo = level === "info";
+
+  // Show summary only if it adds info beyond the type label
+  const hasSummary = entry.summary && entry.summary !== config.label;
+
+  return (
+    <div
+      key={`${entry.type}-${index}`}
+      className={cn(
+        "flex gap-2 py-1.5 px-1 text-xs",
+        isInfo && "opacity-50"
+      )}
+    >
+      <Icon className={cn("h-3.5 w-3.5 flex-shrink-0 mt-0.5", config.color)} />
+
+      <div className="flex-1 min-w-0">
+        {/* Line 1: type label + actor badge + status dot + time */}
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-foreground/80">
+            {config.label}
+          </span>
+
+          {entry.actor && (
+            <span className="flex-shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {ACTOR_LABEL[entry.actor] || entry.actor}
+            </span>
+          )}
+
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-full flex-shrink-0",
+              getStatusDot(entry.status)
+            )}
+            title={entry.status}
+          />
+
+          <span className="ml-auto flex-shrink-0 text-muted-foreground/60 tabular-nums">
+            {formatRelativeTime(entry.ranAt)}
+          </span>
+        </div>
+
+        {/* Line 2: summary (wraps, not truncated) */}
+        {hasSummary && (
+          <p className="text-muted-foreground mt-0.5 leading-snug">
+            {entry.summary}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function TransactionHistory({
+  transaction,
+  expandedByDefault = false,
+}: TransactionHistoryProps) {
   const [isOpen, setIsOpen] = useState(expandedByDefault);
-  const [error, setError] = useState<string | null>(null);
+  const [showAllInfo, setShowAllInfo] = useState(false);
 
-  // Load history when component opens
-  useEffect(() => {
-    async function loadHistory() {
-      if (!isOpen || !transactionId) return;
+  const entries = useMemo(() => {
+    const history = transaction.automationHistory || [];
+    return [...history].sort((a, b) => {
+      const aTime = a.ranAt?.toDate?.()?.getTime() ?? 0;
+      const bTime = b.ranAt?.toDate?.()?.getTime() ?? 0;
+      return bTime - aTime;
+    });
+  }, [transaction.automationHistory]);
 
-      setIsLoading(true);
-      setError(null);
-      try {
-        const ctx = { db, userId: userId ?? "" };
-        const entries = await getTransactionHistory(ctx, transactionId);
-        setHistory(entries);
-      } catch (err) {
-        console.error("Failed to load history:", err);
-        setError("Failed to load history");
-      } finally {
-        setIsLoading(false);
+  const { nonInfoEntries, infoEntries } = useMemo(() => {
+    const nonInfo: typeof entries = [];
+    const info: typeof entries = [];
+    for (const entry of entries) {
+      if (deriveActivityLevel(entry) === "info") {
+        info.push(entry);
+      } else {
+        nonInfo.push(entry);
       }
     }
+    return { nonInfoEntries: nonInfo, infoEntries: info };
+  }, [entries]);
 
-    loadHistory();
-  }, [isOpen, transactionId, userId]);
+  // Collapse info entries behind "Show all" if there are 3+ non-info entries
+  const shouldCollapseInfo = nonInfoEntries.length >= 3 && infoEntries.length > 0;
 
-  const handleRollback = async (historyId: string) => {
-    setIsRollingBack(historyId);
-    try {
-      const ctx = { db, userId: userId ?? "" };
-      await rollbackTransaction(ctx, transactionId, historyId, {
-        type: "user",
-        userId: userId ?? "",
-      });
-
-      // Reload history after rollback
-      const entries = await getTransactionHistory(ctx, transactionId);
-      setHistory(entries);
-
-      // Notify parent to refresh transaction data
-      onRollback?.();
-    } catch (err) {
-      console.error("Failed to rollback:", err);
-      setError("Failed to rollback transaction");
-    } finally {
-      setIsRollingBack(null);
-    }
-  };
-
-  const getAuthorIcon = (author: TransactionHistoryEntry["changedBy"]) => {
-    switch (author.type) {
-      case "ai_chat":
-        return <Bot className="h-4 w-4 text-purple-500" />;
-      case "import":
-        return <Upload className="h-4 w-4 text-blue-500" />;
-      default:
-        return <User className="h-4 w-4 text-gray-500" />;
-    }
-  };
-
-  const getAuthorLabel = (author: TransactionHistoryEntry["changedBy"]) => {
-    switch (author.type) {
-      case "ai_chat":
-        return "AI Assistant";
-      case "import":
-        return "Import";
-      default:
-        return "User";
-    }
-  };
-
-  const formatFieldName = (field: string) => {
-    return field
-      .replace(/([A-Z])/g, " $1")
-      .replace(/^./, (str) => str.toUpperCase())
-      .trim();
-  };
-
-  const formatValue = (value: unknown): string => {
-    if (value === null || value === undefined) return "—";
-    if (Array.isArray(value)) return `${value.length} items`;
-    if (typeof value === "boolean") return value ? "Yes" : "No";
-    return String(value);
-  };
-
-  // Content to render (shared between both modes)
-  const historyContent = (
-    <div className={cn(!expandedByDefault && "rounded-lg border bg-muted/30 p-3")}>
-      {isLoading ? (
-        <div className="flex items-center justify-center py-4">
-          <Loader2 className="h-4 w-4 animate-spin mr-2" />
-          <span className="text-sm text-muted-foreground">Loading history...</span>
-        </div>
-      ) : error ? (
-        <div className="text-sm text-destructive py-2">{error}</div>
-      ) : history.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-2">
-          No edit history yet
-        </p>
+  const content = (
+    <div
+      className={cn(!expandedByDefault && "rounded-lg border bg-muted/30 p-3")}
+    >
+      {entries.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-2">No activity yet</p>
       ) : (
-        <div className="space-y-3">
-          {history.map((entry, index) => (
-            <div
-              key={entry.id}
-              className={cn(
-                "relative pl-4 pb-3",
-                index !== history.length - 1 && "border-l border-muted-foreground/20"
-              )}
-            >
-              {/* Timeline dot */}
-              <div className="absolute -left-1.5 top-0 h-3 w-3 rounded-full border-2 border-background bg-muted-foreground/20" />
-
-              <div className="ml-2">
-                {/* Header with author and time */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    {getAuthorIcon(entry.changedBy)}
-                    <span className="text-xs font-medium">
-                      {getAuthorLabel(entry.changedBy)}
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {entry.createdAt?.toDate?.()?.toLocaleDateString("de-DE", {
-                      day: "2-digit",
-                      month: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    }) ?? "Unknown"}
-                  </span>
-                </div>
-
-                {/* Changed fields */}
-                <div className="mt-1.5 space-y-1">
-                  {entry.changedFields.map((field) => (
-                    <div key={field} className="text-xs">
-                      <span className="text-muted-foreground">
-                        {formatFieldName(field)}:
-                      </span>{" "}
-                      <span className="font-mono">
-                        {formatValue(entry.previousState[field as keyof typeof entry.previousState])}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Reason if provided */}
-                {entry.changeReason && (
-                  <p className="mt-1 text-xs text-muted-foreground italic">
-                    {entry.changeReason}
-                  </p>
-                )}
-
-                {/* Rollback button */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mt-2 h-6 text-xs"
-                  onClick={() => handleRollback(entry.id)}
-                  disabled={isRollingBack === entry.id}
+        <div className="space-y-1">
+          {shouldCollapseInfo ? (
+            <>
+              {nonInfoEntries.map((entry, index) => (
+                <EntryRow key={`${entry.type}-${index}`} entry={entry} index={index} />
+              ))}
+              {!showAllInfo ? (
+                <button
+                  onClick={() => setShowAllInfo(true)}
+                  className="flex items-center gap-1 py-1 px-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
                 >
-                  {isRollingBack === entry.id ? (
-                    <>
-                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      Rolling back...
-                    </>
-                  ) : (
-                    <>
-                      <RotateCcw className="h-3 w-3 mr-1" />
-                      Rollback to this
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          ))}
+                  <ChevronDown className="h-3 w-3" />
+                  {infoEntries.length} more
+                </button>
+              ) : (
+                infoEntries.map((entry, index) => (
+                  <EntryRow key={`info-${entry.type}-${index}`} entry={entry} index={index} />
+                ))
+              )}
+            </>
+          ) : (
+            entries.map((entry, index) => (
+              <EntryRow key={`${entry.type}-${index}`} entry={entry} index={index} />
+            ))
+          )}
         </div>
       )}
     </div>
   );
 
-  // When expanded by default, render content directly without collapsible
   if (expandedByDefault) {
-    return historyContent;
+    return content;
   }
 
-  // Normal collapsible mode
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <CollapsibleTrigger asChild>
@@ -220,19 +276,17 @@ export function TransactionHistory({ transactionId, onRollback, expandedByDefaul
           className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground"
         >
           <History className="h-4 w-4" />
-          <span>Edit History</span>
-          {history.length > 0 && (
+          <span>Activity Log</span>
+          {entries.length > 0 && (
             <span className="ml-auto text-xs bg-muted px-2 py-0.5 rounded">
-              {history.length}
+              {entries.length}
             </span>
           )}
         </Button>
       </CollapsibleTrigger>
 
       <CollapsibleContent className="mt-2">
-        <ScrollArea className="max-h-[300px]">
-          {historyContent}
-        </ScrollArea>
+        <ScrollArea className="max-h-[300px]">{content}</ScrollArea>
       </CollapsibleContent>
     </Collapsible>
   );

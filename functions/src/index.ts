@@ -252,9 +252,13 @@ export {
   updateOverageSettingsCallable as updateOverageSettings,
   stripeWebhook,
 } from "./billing";
+export { updateAutomationModeCallable as updateAutomationMode } from "./billing/updateAutomationMode";
 
 // Browser recipe operations
 export { saveBrowserRecipeCallable as saveBrowserRecipe } from "./browser/saveBrowserRecipe";
+export { updateBrowserRecipeCallable as updateBrowserRecipe } from "./browser/updateBrowserRecipe";
+export { deleteBrowserRecipeCallable as deleteBrowserRecipe } from "./browser/deleteBrowserRecipe";
+export { migrateInvoiceSourcesCallable as migrateInvoiceSources } from "./browser/migrateInvoiceSources";
 
 // Card reconciliation operations (processReconciliation is now a utility called from onTransactionUpdate)
 export {

@@ -33,6 +33,7 @@ import { AutomationMeta } from "../automation/types";
 import { logAIUsage } from "../utils/ai-usage-logger";
 import { ensureGlobalPartnerFromVies } from "../utils/globalPartnerUpsert";
 import { checkAIBudget } from "../billing/checkAIBudget";
+import { isPassiveMode } from "../utils/checkAutomationMode";
 
 // =============================================================================
 // AUTOMATION METADATA
@@ -1225,6 +1226,16 @@ export async function runPartnerMatching(
   }
 
   // No high-confidence match - try Gemini lookup if valid company name
+  // Check automation mode — passive mode skips AI-powered steps
+  const passiveMode = await isPassiveMode(userId);
+  if (passiveMode) {
+    console.log(
+      `[PartnerMatch] Passive mode: skipping Gemini lookup for file ${fileId}, storing suggestions only`
+    );
+    await markPartnerMatchComplete(fileId, null, null, null, null, suggestions);
+    return;
+  }
+
   // Check AI budget before making Gemini calls (rule-based matching above stays free)
   let isAdminUser = false;
   try {

@@ -115,7 +115,7 @@ export function PdfPageViewer({
 
             const highlight = document.createElement("mark");
             highlight.className = "pdf-highlight";
-            highlight.style.cssText = "background-color: #fef08a; padding: 2px 0; border-radius: 2px;";
+            highlight.style.cssText = "background-color: var(--color-highlight); padding: 2px 0; border-radius: 2px;";
             highlight.textContent = match;
             span.appendChild(highlight);
 

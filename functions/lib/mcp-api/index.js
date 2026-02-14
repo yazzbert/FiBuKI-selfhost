@@ -10,6 +10,7 @@ exports.mcpSse = exports.mcpToolsList = exports.mcpApi = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const api_keys_1 = require("../api-keys");
 const handlers_1 = require("./handlers");
+const definitions_1 = require("../tools/definitions");
 const CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
@@ -74,25 +75,9 @@ exports.mcpToolsList = (0, https_1.onRequest)({ region: "europe-west1" }, async 
         return;
     }
     res.status(200).json({
-        tools: TOOL_DEFINITIONS,
+        tools: definitions_1.TOOL_DEFINITIONS,
     });
 });
-const TOOL_DEFINITIONS = [
-    { name: "list_sources", description: "List all bank accounts/sources" },
-    { name: "get_source", description: "Get a single bank account by ID" },
-    { name: "list_transactions", description: "List transactions with filters" },
-    { name: "get_transaction", description: "Get a transaction by ID" },
-    { name: "update_transaction", description: "Update transaction description/status" },
-    { name: "list_files", description: "List uploaded files with match suggestions" },
-    { name: "get_file", description: "Get a file by ID" },
-    { name: "connect_file_to_transaction", description: "Connect file to transaction" },
-    { name: "disconnect_file_from_transaction", description: "Disconnect file from transaction" },
-    { name: "list_transactions_needing_files", description: "Find transactions without receipts" },
-    { name: "auto_connect_file_suggestions", description: "Auto-connect high-confidence matches" },
-    { name: "list_no_receipt_categories", description: "List no-receipt categories" },
-    { name: "assign_no_receipt_category", description: "Assign category to transaction" },
-    { name: "remove_no_receipt_category", description: "Remove category from transaction" },
-];
 // Re-export MCP SSE endpoint
 var mcp_sse_1 = require("./mcp-sse");
 Object.defineProperty(exports, "mcpSse", { enumerable: true, get: function () { return mcp_sse_1.mcpSse; } });

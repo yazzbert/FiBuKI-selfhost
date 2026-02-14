@@ -29,6 +29,7 @@ const firestore_2 = require("firebase-admin/firestore");
 const auth_1 = require("firebase-admin/auth");
 const transactionScoring_1 = require("./transactionScoring");
 const checkAIBudget_1 = require("../billing/checkAIBudget");
+const checkAutomationMode_1 = require("../utils/checkAutomationMode");
 // =============================================================================
 // AUTOMATION METADATA
 // =============================================================================
@@ -439,6 +440,27 @@ async function runTransactionMatching(fileId, fileData) {
         else {
             console.log(`[TxMatch] No matches found.`);
         }
+    }
+    // In passive mode: store suggestions but skip auto-connecting and agentic workers
+    const passive = await (0, checkAutomationMode_1.isPassiveMode)(userId);
+    if (passive) {
+        console.log(`[TxMatch] Passive mode for user ${userId} — storing suggestions only, skipping auto-connect`);
+        const suggestions = matches.map((m) => ({
+            transactionId: m.transactionId,
+            confidence: m.confidence,
+            matchSources: m.matchSources,
+            preview: m.preview,
+        }));
+        await db.collection("files").doc(fileId).update({
+            transactionMatchComplete: true,
+            transactionMatchedAt: firestore_2.Timestamp.now(),
+            transactionSuggestions: suggestions,
+            updatedAt: firestore_2.Timestamp.now(),
+        });
+        const elapsed = Date.now() - t0;
+        console.log(`[TxMatch] Passive mode complete for ${fileData.fileName || fileId}: ` +
+            `${suggestions.length} suggestions stored (${elapsed}ms)`);
+        return;
     }
     // Separate auto-matches from suggestions
     let potentialAutoMatches = matches.filter((m) => m.confidence >= CONFIG.AUTO_MATCH_THRESHOLD);

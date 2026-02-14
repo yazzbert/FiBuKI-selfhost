@@ -70,7 +70,7 @@ const CONFIG = {
     /** Enable agentic fallback for unmatched transactions */
     ENABLE_AGENTIC_FALLBACK: true,
     /** Max transactions to queue for agentic fallback per run */
-    AGENTIC_FALLBACK_MAX_QUEUE: 2,
+    AGENTIC_FALLBACK_MAX_QUEUE: 10,
 };
 // === Scoring Functions ===
 /**
@@ -436,11 +436,23 @@ async function matchFilesForPartnerInternal(userId, partnerId, specificTransacti
                 transactionIds: firestore_1.FieldValue.arrayUnion(match.transactionId),
                 updatedAt: firestore_1.Timestamp.now(),
             });
-            // Update transaction's fileIds
+            // Update transaction's fileIds + activity log
             const txRef = db.collection("transactions").doc(match.transactionId);
+            const matchedFileData = fileMap.get(match.fileId)?.data();
             batch.update(txRef, {
                 fileIds: firestore_1.FieldValue.arrayUnion(match.fileId),
                 updatedAt: firestore_1.Timestamp.now(),
+                automationHistory: firestore_1.FieldValue.arrayUnion({
+                    type: "file_connected",
+                    ranAt: firestore_1.Timestamp.now(),
+                    status: "completed",
+                    actor: "auto",
+                    level: "outcome",
+                    fileId: match.fileId,
+                    fileName: matchedFileData?.fileName || null,
+                    confidence: match.confidence,
+                    summary: `File "${matchedFileData?.fileName || match.fileId}" auto-connected (${match.confidence}%)`,
+                }),
             });
             usedFiles.add(match.fileId);
             usedTransactions.add(match.transactionId);
@@ -498,11 +510,23 @@ async function matchFilesForPartnerInternal(userId, partnerId, specificTransacti
                         transactionIds: firestore_1.FieldValue.arrayUnion(match.transactionId),
                         updatedAt: firestore_1.Timestamp.now(),
                     });
-                    // Update transaction's fileIds
+                    // Update transaction's fileIds + activity log
                     const txRef = db.collection("transactions").doc(match.transactionId);
+                    const aiMatchedFileData = fileMap.get(match.fileId)?.data();
                     aiBatch.update(txRef, {
                         fileIds: firestore_1.FieldValue.arrayUnion(match.fileId),
                         updatedAt: firestore_1.Timestamp.now(),
+                        automationHistory: firestore_1.FieldValue.arrayUnion({
+                            type: "file_connected",
+                            ranAt: firestore_1.Timestamp.now(),
+                            status: "completed",
+                            actor: "ai",
+                            level: "outcome",
+                            fileId: match.fileId,
+                            fileName: aiMatchedFileData?.fileName || null,
+                            confidence: CONFIG.AI_MATCH_CONFIDENCE,
+                            summary: `File "${aiMatchedFileData?.fileName || match.fileId}" AI-matched`,
+                        }),
                     });
                     usedFiles.add(match.fileId);
                     usedTransactions.add(match.transactionId);

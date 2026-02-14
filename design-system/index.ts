@@ -10,3 +10,6 @@ export * from "./tool-results";
 
 // Motion Tokens
 export * from "./motion";
+
+// Color Tokens
+export * from "./colors";

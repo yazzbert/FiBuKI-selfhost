@@ -40,6 +40,7 @@ exports.assignPartnerToTransactionCallable = void 0;
 const firestore_1 = require("firebase-admin/firestore");
 const createCallable_1 = require("../utils/createCallable");
 const cancelWorkers_1 = require("../utils/cancelWorkers");
+const activityLevel_1 = require("../utils/activityLevel");
 exports.assignPartnerToTransactionCallable = (0, createCallable_1.createCallable)({ name: "assignPartnerToTransaction" }, async (ctx, request) => {
     const { transactionId, partnerId, partnerType, matchedBy, confidence } = request;
     if (!transactionId) {
@@ -126,13 +127,29 @@ exports.assignPartnerToTransactionCallable = (0, createCallable_1.createCallable
             console.error("[assignPartnerToTransaction] Failed to cancel partner workers:", err);
         });
     }
-    // Update transaction with partner assignment
+    // Capture previous partner info before overwriting (used for relearning + receipt search)
+    const previousPartnerId = txData.partnerId;
+    const previousPartnerType = txData.partnerType;
+    const partnerChanged = previousPartnerId !== effectivePartnerId;
+    // Update transaction with partner assignment + activity log
+    const actor = (matchedBy === "manual" ? "manual" : matchedBy === "suggestion" ? "suggestion" : matchedBy === "ai" ? "ai" : "auto");
     await transactionRef.update({
         partnerId: effectivePartnerId,
         partnerType: effectivePartnerType,
         partnerMatchedBy: matchedBy,
         partnerMatchConfidence: confidence ?? null,
         updatedAt: firestore_1.FieldValue.serverTimestamp(),
+        automationHistory: firestore_1.FieldValue.arrayUnion({
+            type: "partner_assigned",
+            ranAt: firestore_1.Timestamp.now(),
+            status: "completed",
+            actor,
+            level: (0, activityLevel_1.deriveActivityLevel)({ type: "partner_assigned", actor }),
+            partnerName: partnerData.name || null,
+            forPartnerId: effectivePartnerId,
+            confidence: confidence ?? null,
+            summary: `Partner "${partnerData.name || effectivePartnerId}" assigned`,
+        }),
     });
     console.log(`[assignPartnerToTransaction] Assigned partner ${effectivePartnerId} to transaction ${transactionId}`, {
         userId: ctx.userId,
@@ -169,33 +186,26 @@ exports.assignPartnerToTransactionCallable = (0, createCallable_1.createCallable
             // Don't throw - assignment succeeded, just pattern learning failed
         }
     }
-    // Trigger receipt search if transaction has no files attached AND no no-receipt category
-    // This runs in background and creates a worker request for the frontend to process
-    const hasFiles = txData.fileIds && txData.fileIds.length > 0;
-    const hasNoReceiptCategory = !!txData.noReceiptCategoryId;
-    const previousPartnerId = txData.partnerId;
-    const partnerChanged = previousPartnerId !== effectivePartnerId;
-    // Skip receipt search if transaction is already complete (has file or no-receipt category)
-    if (!hasFiles && !hasNoReceiptCategory && (partnerChanged || !previousPartnerId)) {
+    // Trigger pattern relearning for the PREVIOUS partner when overwriting
+    // The old partner's patterns may now be based on fewer/no manual assignments,
+    // so cascade-unassign will clean up stale auto-matches
+    if (previousPartnerId && previousPartnerType === "user" && partnerChanged) {
         try {
-            const { queueReceiptSearchForTransaction } = await Promise.resolve().then(() => __importStar(require("../workers/runReceiptSearchForTransaction")));
-            // Queue receipt search in background (don't await)
-            queueReceiptSearchForTransaction({
-                transactionId,
-                userId: ctx.userId,
-                partnerId: effectivePartnerId,
-            })
-                .then((result) => {
-                console.log(`[assignPartnerToTransaction] Receipt search queued:`, result);
+            const { learnPatternsForPartnersBatch } = await Promise.resolve().then(() => __importStar(require("../matching/learnPartnerPatterns")));
+            learnPatternsForPartnersBatch(ctx.userId, [previousPartnerId])
+                .then(() => {
+                console.log(`[assignPartnerToTransaction] Previous partner ${previousPartnerId} pattern relearning completed`);
             })
                 .catch((err) => {
-                console.error(`[assignPartnerToTransaction] Receipt search queue failed:`, err);
+                console.error(`[assignPartnerToTransaction] Previous partner pattern relearning failed:`, err);
             });
         }
         catch (err) {
-            console.error(`[assignPartnerToTransaction] Failed to queue receipt search:`, err);
+            console.error(`[assignPartnerToTransaction] Failed to trigger previous partner relearning:`, err);
         }
     }
+    // Receipt search is handled by onTransactionUpdate trigger when it sees the
+    // partnerId change — no need to queue it here (would be a duplicate).
     return { success: true };
 });
 //# sourceMappingURL=assignPartnerToTransaction.js.map

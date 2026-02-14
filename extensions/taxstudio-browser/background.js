@@ -5,10 +5,30 @@
   var injectedTabs = {};
   var activeTabRuns = {};
   var pdfHistory = {};
-  var DEBUG_LOG_URL = "http://localhost:3000/api/browser/log";
+  var appBaseUrl = "https://fibuki.com";
+
+  function setAppBaseUrl(origin) {
+    if (!origin || typeof origin !== "string") return;
+    // Validate it looks like a URL origin
+    if (origin.indexOf("http") !== 0) return;
+    appBaseUrl = origin;
+    try {
+      chrome.storage.local.set({ ts_app_base_url: origin });
+    } catch (e) {}
+  }
+
+  function getApiUrl(path) {
+    return appBaseUrl + path;
+  }
+
+  var DEBUG_LOG_URL = null; // computed dynamically via getApiUrl
 
   // Learn mode state
-  var learnRuns = {}; // { runId: { tabId, appTabId, partnerId, partnerName, transactionId, pdfCount } }
+  var learnRuns = {}; // { runId: { tabId, appTabId, partnerId, partnerName, transactionId, pdfCount, childTabIds } }
+
+  // Replay mode state
+  var replayRuns = {}; // { runId: { tabId, appTabId, transactionId, partnerId, partnerName, recipe, childTabIds, status } }
+
   console.log("[FiBuKI] Background service worker loaded");
 
   // Track URLs we've already started processing
@@ -158,7 +178,7 @@
 
   function sendDebugLog(runId, data) {
     if (!runId) return;
-    fetch(DEBUG_LOG_URL, {
+    fetch(getApiUrl("/api/browser/log"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -173,15 +193,18 @@
 
   if (chrome.storage && chrome.storage.local) {
     chrome.storage.local.get(
-      ["ts_pdf_history", "ts_dev_extractor_url", "ts_dev_extractor_enabled"],
+      ["ts_pdf_history", "ts_dev_extractor_url", "ts_dev_extractor_enabled", "ts_app_base_url"],
       function (result) {
       if (result && result.ts_pdf_history) {
         pdfHistory = result.ts_pdf_history;
       }
+      if (result && result.ts_app_base_url) {
+        appBaseUrl = result.ts_app_base_url;
+      }
       if (!result || typeof result.ts_dev_extractor_enabled !== "boolean") {
         chrome.storage.local.set({
           ts_dev_extractor_enabled: true,
-          ts_dev_extractor_url: "http://localhost:3000/api/browser/extractor",
+          ts_dev_extractor_url: getApiUrl("/api/browser/extractor"),
         });
       }
     }
@@ -406,7 +429,7 @@
 
     chrome.notifications.create(notificationId, {
       type: "basic",
-      iconUrl: "icons/icon48.png",
+      iconUrl: chrome.runtime.getURL("icons/icon48.png"),
       title: "FiBuKI: Login Required",
       message: "Please log in to " + domain + " to continue invoice collection.",
       buttons: [
@@ -521,6 +544,8 @@
     Object.keys(runs).forEach(function (runId) {
       var run = runs[runId];
       if (!run || run.tabId !== tabId) return;
+      // Don't send pull overlay for replay/learn runs — they have their own overlays
+      if (run.isReplayRun || run.isLearnRun) return;
       sendToTab(run.tabId, { type: "TS_SHOW_OVERLAY", runId: runId });
       sendToTab(run.appTabId, { type: "TS_PULL_EVENT", runId: runId, status: "completed" });
     });
@@ -570,6 +595,7 @@
 
   chrome.runtime.onMessage.addListener(function (message, sender) {
     if (!message || message.type !== "TS_START_PULL") return;
+    if (message.appOrigin) setAppBaseUrl(message.appOrigin);
     console.log("[FiBuKI] TS_START_PULL", message.runId, message.url);
     var runId = message.runId;
     var url = message.url;
@@ -584,6 +610,7 @@
       downloadedCount: 0,
       urls: [],
       overlaySent: false,
+      authToken: message.authToken || null,
     };
     setTimeout(function () {
       if (!runs[runId] || runs[runId].tabId) return;
@@ -664,6 +691,71 @@
             } catch (e) {}
           });
           return origSend.apply(this, arguments);
+        };
+        // Wrap URL.createObjectURL to capture blob PDFs
+        var origCreateObjectURL = URL.createObjectURL;
+        URL.createObjectURL = function (obj) {
+          var blobUrl = origCreateObjectURL.call(URL, obj);
+          try {
+            if (obj instanceof Blob && obj.size > 100) {
+              var blobType = (obj.type || "").toLowerCase();
+              // Skip types that are definitely NOT PDFs
+              var isNotPdf = blobType.indexOf("image/") === 0 ||
+                             blobType.indexOf("video/") === 0 ||
+                             blobType.indexOf("audio/") === 0 ||
+                             blobType.indexOf("font/") === 0 ||
+                             blobType.indexOf("text/css") === 0 ||
+                             blobType.indexOf("text/javascript") === 0 ||
+                             blobType.indexOf("text/html") === 0;
+              if (!isNotPdf) {
+                // Read first bytes to check for PDF magic (%PDF)
+                var sliceForCheck = obj.slice(0, 5);
+                var magicReader = new FileReader();
+                magicReader.onload = function () {
+                  try {
+                    var header = new Uint8Array(magicReader.result);
+                    if (header.length >= 4 && header[0] === 0x25 && header[1] === 0x50 && header[2] === 0x44 && header[3] === 0x46) {
+                      console.log("[FiBuKI-MAIN] PDF blob detected via createObjectURL, type:", blobType, "size:", obj.size);
+                      // It's a PDF — read the full blob
+                      var fullReader = new FileReader();
+                      fullReader.onload = function () {
+                        try {
+                          var bytes = new Uint8Array(fullReader.result);
+                          var binary = "";
+                          for (var i = 0; i < bytes.length; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                          }
+                          var base64 = btoa(binary);
+                          window.postMessage({ type: "TS_BLOB_PDF", base64: base64, blobUrl: blobUrl }, "*");
+                        } catch (e) {
+                          console.warn("[FiBuKI-MAIN] TS_BLOB_PDF encode error:", e);
+                        }
+                      };
+                      fullReader.readAsArrayBuffer(obj);
+                    }
+                  } catch (e) {}
+                };
+                magicReader.readAsArrayBuffer(sliceForCheck);
+              }
+            }
+          } catch (e) {}
+          return blobUrl;
+        };
+        // Wrap HTMLAnchorElement.prototype.click to capture anchor downloads
+        var origAnchorClick = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () {
+          try {
+            var downloadAttr = this.getAttribute("download");
+            var href = this.href || "";
+            if (downloadAttr !== null && (href.indexOf("blob:") === 0 || href.indexOf("data:") === 0)) {
+              window.postMessage({
+                type: "TS_ANCHOR_DOWNLOAD",
+                href: href,
+                filename: downloadAttr || "download.pdf",
+              }, "*");
+            }
+          } catch (e) {}
+          return origAnchorClick.apply(this, arguments);
         };
       },
     });
@@ -751,7 +843,17 @@
     if (!message || message.type !== "TS_UPLOAD_FILE") return;
     console.log("[FiBuKI] TS_UPLOAD_FILE", message.runId, message.filename || "");
     var runId = message.runId;
-    if (!runId || !runs[runId]) return;
+    if (!runId) return;
+    // Auto-create runs entry for learn/replay mode if not yet created
+    if (!runs[runId]) {
+      if (learnRuns[runId]) {
+        runs[runId] = { tabId: learnRuns[runId].tabId, downloadTabIds: [], attemptedUrls: {}, openedDownloadUrls: {}, appTabId: learnRuns[runId].appTabId, foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false, isLearnRun: true };
+      } else if (replayRuns[runId]) {
+        runs[runId] = { tabId: replayRuns[runId].tabId, downloadTabIds: [], attemptedUrls: {}, openedDownloadUrls: {}, appTabId: replayRuns[runId].appTabId, foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false, isReplayRun: true };
+      } else {
+        return;
+      }
+    }
     var buffer = message.buffer;
     var filename = message.filename || "invoice.pdf";
     var mimeType = message.mimeType || "application/pdf";
@@ -766,7 +868,17 @@
     var runId = message.runId;
     var urls = message.urls || [];
     var pageOrigin = message.pageOrigin || "";
-    if (!runId || !runs[runId]) return;
+    if (!runId) return;
+    // Auto-create runs entry for learn/replay mode if not yet created
+    if (!runs[runId]) {
+      if (learnRuns[runId]) {
+        runs[runId] = { tabId: learnRuns[runId].tabId, downloadTabIds: [], attemptedUrls: {}, openedDownloadUrls: {}, appTabId: learnRuns[runId].appTabId, foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false, isLearnRun: true };
+      } else if (replayRuns[runId]) {
+        runs[runId] = { tabId: replayRuns[runId].tabId, downloadTabIds: [], attemptedUrls: {}, openedDownloadUrls: {}, appTabId: replayRuns[runId].appTabId, foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false, isReplayRun: true };
+      } else {
+        return;
+      }
+    }
     if (!urls.length) {
       if (runs[runId].appTabId) {
         sendToTab(runs[runId].appTabId, {
@@ -797,7 +909,7 @@
   // Fetch extractor script (background can bypass CORS)
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!message || message.type !== "TS_FETCH_EXTRACTOR") return false;
-    var url = message.url || "http://localhost:3000/api/browser/extractor";
+    var url = message.url || getApiUrl("/api/browser/extractor");
     var targetUrl = url + (url.indexOf("?") === -1 ? "?" : "&") + "ts=" + Date.now();
     fetch(targetUrl, { cache: "no-store" })
       .then(function (resp) {
@@ -834,13 +946,65 @@
     var url = item.finalUrl || item.url;
     console.log("[FiBuKI] Download detected:", url, "tabId:", item.tabId, "filename:", item.filename);
 
-    // Check if this download is from a learn mode tab first
+    // Check if this download is from a learn mode tab (direct or child tab)
     var learnRunId = null;
     var learnTransactionId = null;
     if (item && typeof item.tabId === "number" && item.tabId > 0) {
       learnRunId = findLearnRunByTab(item.tabId);
       if (learnRunId && learnRuns[learnRunId]) {
         learnTransactionId = learnRuns[learnRunId].transactionId;
+        // Track this tab as a child if it's not already known
+        var run = learnRuns[learnRunId];
+        if (run.tabId !== item.tabId && run.childTabIds.indexOf(item.tabId) === -1) {
+          run.childTabIds.push(item.tabId);
+        }
+      }
+    }
+    // Fallback: check if the download tab was opened BY a learn tab (openerTabId)
+    if (!learnRunId && item && typeof item.tabId === "number" && item.tabId > 0) {
+      try {
+        chrome.tabs.get(item.tabId, function (tab) {
+          if (chrome.runtime.lastError || !tab || !tab.openerTabId) return;
+          var openerRunId = findLearnRunByTab(tab.openerTabId);
+          if (openerRunId && learnRuns[openerRunId]) {
+            console.log("[FiBuKI] Download tab opened by learn tab (via openerTabId):", tab.openerTabId);
+            learnRuns[openerRunId].childTabIds.push(item.tabId);
+          }
+        });
+      } catch (e) {}
+    }
+    // Fallback: if tabId is invalid (-1, 0) but there's an active learn run, use it
+    if (!learnRunId) {
+      var activeLearnIds = Object.keys(learnRuns);
+      if (activeLearnIds.length > 0) {
+        learnRunId = activeLearnIds[0];
+        learnTransactionId = learnRuns[learnRunId].transactionId;
+        console.log("[FiBuKI] Download matched to active learn run (no tabId match):", learnRunId);
+      }
+    }
+
+    // Check if this download is from a replay mode tab
+    var replayRunId = null;
+    var replayTransactionId = null;
+    if (item && typeof item.tabId === "number" && item.tabId > 0) {
+      replayRunId = findReplayRunByTab(item.tabId);
+      if (replayRunId && replayRuns[replayRunId]) {
+        replayTransactionId = replayRuns[replayRunId].transactionId;
+        if (!learnTransactionId) {
+          learnTransactionId = replayTransactionId;
+        }
+      }
+    }
+    // Fallback: if tabId is invalid but there's an active replay run, use it
+    if (!replayRunId) {
+      var activeReplayIds = Object.keys(replayRuns);
+      if (activeReplayIds.length > 0) {
+        replayRunId = activeReplayIds[0];
+        replayTransactionId = replayRuns[replayRunId].transactionId;
+        if (!learnTransactionId) {
+          learnTransactionId = replayTransactionId;
+        }
+        console.log("[FiBuKI] Download matched to active replay run (no tabId match):", replayRunId);
       }
     }
 
@@ -881,9 +1045,17 @@
     if (!runId) {
       // Check if this is from a learn mode tab
       if (learnRunId && learnRuns[learnRunId]) {
-        console.log("[FiBuKI] Download from learn mode tab, creating temp run:", learnRunId);
+        console.log("[FiBuKI] Download from learn mode tab:", learnRunId);
         runId = learnRunId;
-        runs[runId] = { tabId: learnRuns[learnRunId].tabId, downloadTabIds: [], attemptedUrls: {}, openedDownloadUrls: {}, appTabId: learnRuns[learnRunId].appTabId, foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false };
+        if (!runs[runId]) {
+          runs[runId] = { tabId: learnRuns[learnRunId].tabId, downloadTabIds: [], attemptedUrls: {}, openedDownloadUrls: {}, appTabId: learnRuns[learnRunId].appTabId, foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false, isLearnRun: true };
+        }
+      } else if (replayRunId && replayRuns[replayRunId]) {
+        console.log("[FiBuKI] Download from replay mode tab:", replayRunId);
+        runId = replayRunId;
+        if (!runs[runId]) {
+          runs[runId] = { tabId: replayRuns[replayRunId].tabId, downloadTabIds: [], attemptedUrls: {}, openedDownloadUrls: {}, appTabId: replayRuns[replayRunId].appTabId, foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false, isReplayRun: true };
+        }
       } else {
         // Even without an active run, if it's a document from a billing site, try to capture it
         var lowerUrl2 = (url || "").toLowerCase();
@@ -900,7 +1072,69 @@
         }
       }
     }
-    if (!url || url.indexOf("http") !== 0) return;
+    if (!url) return;
+    // Blob URLs can't be fetched from background service worker.
+    // Inject a MAIN world script to fetch the blob and relay PDF content.
+    if (url.indexOf("blob:") === 0) {
+      var isLearnBlob = learnRunId && learnRuns[learnRunId];
+      var isReplayBlob = replayRunId && replayRuns[replayRunId];
+      var blobRunId = learnRunId || replayRunId || runId;
+      var blobTabId = isLearnBlob ? learnRuns[learnRunId].tabId :
+                      isReplayBlob ? replayRuns[replayRunId].tabId : null;
+      console.log("[FiBuKI] Blob download detected for run:", blobRunId, "tabId:", blobTabId, "isLearn:", !!isLearnBlob);
+
+      // Cancel download during replay/pull (learn mode: let user see the file)
+      if (!isLearnBlob) {
+        try {
+          chrome.downloads.cancel(item.id, function () {
+            chrome.downloads.erase({ id: item.id }, function () {});
+          });
+        } catch (err) {}
+      }
+
+      // Inject MAIN world script to fetch the blob URL and relay content
+      if (blobTabId && blobRunId) {
+        var blobUrl = url;
+        console.log("[FiBuKI] Injecting blob fetch into tab:", blobTabId, "url:", blobUrl.slice(0, 60));
+        try {
+          chrome.scripting.executeScript({
+            target: { tabId: blobTabId },
+            world: "MAIN",
+            args: [blobUrl],
+            func: function (blobUrl) {
+              try {
+                fetch(blobUrl)
+                  .then(function (r) { return r.arrayBuffer(); })
+                  .then(function (buf) {
+                    var bytes = new Uint8Array(buf);
+                    // Check PDF magic bytes
+                    if (bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+                      var binary = "";
+                      for (var i = 0; i < bytes.length; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                      }
+                      var base64 = btoa(binary);
+                      console.log("[FiBuKI-MAIN] Blob fetch success, PDF size:", bytes.length);
+                      window.postMessage({ type: "TS_BLOB_PDF", base64: base64, blobUrl: blobUrl }, "*");
+                    } else {
+                      console.log("[FiBuKI-MAIN] Blob is not a PDF, magic:", bytes[0], bytes[1], bytes[2], bytes[3]);
+                    }
+                  })
+                  .catch(function (e) {
+                    console.warn("[FiBuKI-MAIN] Blob fetch failed:", e);
+                  });
+              } catch (e) {
+                console.warn("[FiBuKI-MAIN] Blob fetch error:", e);
+              }
+            },
+          });
+        } catch (err) {
+          console.warn("[FiBuKI] Blob fetch injection failed:", err);
+        }
+      }
+      return;
+    }
+    if (url.indexOf("http") !== 0) return;
     if (seenDownloadUrls[url]) return;
     seenDownloadUrls[url] = true;
     console.log("[FiBuKI] Intercepting download for run:", runId, url);
@@ -937,15 +1171,8 @@
         }
         return resp.arrayBuffer().then(function (buf) {
           var filename = guessFilename(url, disposition) || item.filename || "invoice.pdf";
+          // uploadBuffer now handles learn/replay notifications internally
           uploadBuffer(runId, buf, filename, mime || "application/pdf", url, learnTransactionId);
-          // If this was a learn mode download, notify the content tab
-          if (learnRunId && learnRuns[learnRunId]) {
-            learnRuns[learnRunId].pdfCount = (learnRuns[learnRunId].pdfCount || 0) + 1;
-            sendToTab(learnRuns[learnRunId].tabId, { type: "TS_LEARN_PDF_DETECTED", runId: learnRunId, sourceUrl: url });
-            if (learnRuns[learnRunId].appTabId) {
-              sendToTab(learnRuns[learnRunId].appTabId, { type: "TS_LEARN_PDF", runId: learnRunId, sourceUrl: url });
-            }
-          }
         });
       })
       .catch(function (err) {
@@ -1064,9 +1291,20 @@
   }
 
   function uploadBuffer(runId, buffer, filename, mimeType, sourceUrl, transactionId) {
-    console.log("[FiBuKI] uploadBuffer called:", {runId: runId, filename: filename, mimeType: mimeType, bufferSize: buffer.byteLength, sourceUrl: sourceUrl.slice(0, 100)});
+    // Convert plain Array to Uint8Array (message passing serializes ArrayBuffer to Array)
+    var binaryData;
+    if (buffer instanceof ArrayBuffer) {
+      binaryData = new Uint8Array(buffer);
+    } else if (ArrayBuffer.isView(buffer)) {
+      binaryData = buffer;
+    } else if (Array.isArray(buffer)) {
+      binaryData = new Uint8Array(buffer);
+    } else {
+      binaryData = buffer;
+    }
+    console.log("[FiBuKI] uploadBuffer called:", {runId: runId, filename: filename, mimeType: mimeType, bufferSize: binaryData.byteLength || binaryData.length, sourceUrl: sourceUrl.slice(0, 100)});
     try {
-      var blob = new Blob([buffer], { type: mimeType });
+      var blob = new Blob([binaryData], { type: mimeType });
       var form = new FormData();
       form.append("file", blob, filename);
       form.append("sourceUrl", sourceUrl);
@@ -1076,9 +1314,25 @@
         form.append("transactionId", transactionId);
       }
 
-      console.log("[FiBuKI] Uploading to localhost:3000/api/browser/upload...");
-      fetch("http://localhost:3000/api/browser/upload", {
+      // Get auth token from learnRuns, replayRuns, or runs
+      var token = null;
+      if (learnRuns[runId] && learnRuns[runId].authToken) {
+        token = learnRuns[runId].authToken;
+      } else if (replayRuns[runId] && replayRuns[runId].authToken) {
+        token = replayRuns[runId].authToken;
+      } else if (runs[runId] && runs[runId].authToken) {
+        token = runs[runId].authToken;
+      }
+
+      var headers = {};
+      if (token) {
+        headers["Authorization"] = "Bearer " + token;
+      }
+
+      console.log("[FiBuKI] Uploading to " + appBaseUrl + "/api/browser/upload..." + (token ? " (with auth)" : " (NO auth)"));
+      fetch(getApiUrl("/api/browser/upload"), {
         method: "POST",
+        headers: headers,
         body: form,
       })
         .then(function (resp) {
@@ -1115,6 +1369,21 @@
             filename: filename,
             sourceUrl: sourceUrl,
           });
+          // Notify learn mode if this upload belongs to an active learn run
+          if (learnRuns[runId]) {
+            learnRuns[runId].pdfCount = (learnRuns[runId].pdfCount || 0) + 1;
+            sendToTab(learnRuns[runId].tabId, { type: "TS_LEARN_PDF_DETECTED", runId: runId, sourceUrl: sourceUrl });
+            if (learnRuns[runId].appTabId) {
+              sendToTab(learnRuns[runId].appTabId, { type: "TS_LEARN_PDF", runId: runId, sourceUrl: sourceUrl });
+            }
+          }
+          // Notify replay mode if this upload belongs to an active replay run
+          if (replayRuns[runId]) {
+            sendToTab(replayRuns[runId].tabId, { type: "TS_REPLAY_PDF_DOWNLOADED", runId: runId, sourceUrl: sourceUrl });
+            if (replayRuns[runId].appTabId) {
+              sendToTab(replayRuns[runId].appTabId, { type: "TS_REPLAY_PDF_DOWNLOADED", runId: runId, sourceUrl: sourceUrl });
+            }
+          }
         })
         .catch(function (err) {
           console.warn("[FiBuKI] Upload error:", err);
@@ -1163,6 +1432,14 @@
     return matches;
   }
 
+  // Clean up runs[]/activeTabRuns[] entries for a replay or learn runId
+  function cleanupRunRegistration(runId) {
+    if (!runs[runId]) return;
+    if (runs[runId].tabId) delete activeTabRuns[runs[runId].tabId];
+    (runs[runId].downloadTabIds || []).forEach(function(tid) { delete activeTabRuns[tid]; });
+    delete runs[runId];
+  }
+
   // ============================================================================
   // LEARN MODE handlers
   // ============================================================================
@@ -1170,18 +1447,23 @@
   function findLearnRunByTab(tabId) {
     var ids = Object.keys(learnRuns);
     for (var i = 0; i < ids.length; i++) {
-      if (learnRuns[ids[i]].tabId === tabId) return ids[i];
+      var run = learnRuns[ids[i]];
+      if (run.tabId === tabId) return ids[i];
+      // Also check child tabs (opened from the learn tab for downloads)
+      if (run.childTabIds && run.childTabIds.indexOf(tabId) !== -1) return ids[i];
     }
     return null;
   }
 
   // TS_START_LEARN: App tab asks to start learn mode
-  chrome.runtime.onMessage.addListener(function (message, sender) {
+  chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!message || message.type !== "TS_START_LEARN") return;
+    if (message.appOrigin) setAppBaseUrl(message.appOrigin);
     var partnerId = message.partnerId;
     var partnerName = message.partnerName || "";
     var transactionId = message.transactionId || null;
     var startUrl = message.startUrl || null;
+    var authToken = message.authToken || null;
     if (!partnerId) return;
 
     var runId = "learn_" + Date.now();
@@ -1194,15 +1476,29 @@
       partnerName: partnerName,
       transactionId: transactionId,
       pdfCount: 0,
+      childTabIds: [],
+      authToken: authToken,
     };
 
     console.log("[FiBuKI] TS_START_LEARN", runId, partnerId, partnerName);
+
+    // Acknowledge receipt so content script knows background is alive
+    sendResponse({ ok: true, runId: runId });
 
     // Open a new tab for the user to navigate
     var openUrl = startUrl || "about:blank";
     chrome.tabs.create({ url: openUrl, active: true }, function (tab) {
       if (!tab || typeof tab.id !== "number") return;
       learnRuns[runId].tabId = tab.id;
+
+      // Register in runs[] so findRunIdByTab() and download attribution work
+      runs[runId] = {
+        tabId: tab.id, downloadTabIds: [], attemptedUrls: {},
+        openedDownloadUrls: {}, appTabId: appTabId,
+        foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false,
+        isLearnRun: true,
+      };
+      activeTabRuns[tab.id] = runId;
 
       // Notify the app tab that learn mode started
       if (appTabId) {
@@ -1261,12 +1557,517 @@
         transactionId: learnRuns[runId].transactionId,
         actions: message.actions || [],
         pdfCount: message.pdfCount || 0,
+        invoiceListUrl: message.invoiceListUrl || null,
       });
     }
 
+    // Auto-close the learn tab
+    var learnTabId = learnRuns[runId].tabId;
+    setTimeout(function () {
+      try { chrome.tabs.remove(learnTabId); } catch (e) {}
+    }, 500);
+
     // Clean up
+    cleanupRunRegistration(runId);
     delete learnRuns[runId];
   });
+
+  // Track child tabs opened from learn tabs (e.g. PDF download in new tab)
+  chrome.webNavigation.onCreatedNavigationTarget.addListener(function (details) {
+    var sourceTabId = details.sourceTabId;
+    var newTabId = details.tabId;
+    var learnRunId = findLearnRunByTab(sourceTabId);
+    if (!learnRunId || !learnRuns[learnRunId]) return;
+    console.log("[FiBuKI] Learn child tab opened:", newTabId, "from:", sourceTabId, "url:", details.url);
+    learnRuns[learnRunId].childTabIds.push(newTabId);
+    activeTabRuns[newTabId] = learnRunId;
+    if (runs[learnRunId]) {
+      if (!runs[learnRunId].downloadTabIds) runs[learnRunId].downloadTabIds = [];
+      runs[learnRunId].downloadTabIds.push(newTabId);
+    }
+  });
+
+  // Detect learn tab or child tab closed
+  chrome.tabs.onRemoved.addListener(function (tabId) {
+    var runId = findLearnRunByTab(tabId);
+    if (!runId || !learnRuns[runId]) return;
+
+    // If it's a child tab closing, just remove it from the list (not the main learn tab)
+    var childIdx = learnRuns[runId].childTabIds.indexOf(tabId);
+    if (childIdx !== -1) {
+      learnRuns[runId].childTabIds.splice(childIdx, 1);
+      console.log("[FiBuKI] Learn child tab closed:", tabId);
+      return;
+    }
+
+    // Main learn tab closed — notify app and clean up
+    console.log("[FiBuKI] Learn tab closed:", runId);
+    if (learnRuns[runId].appTabId) {
+      sendToTab(learnRuns[runId].appTabId, {
+        type: "TS_LEARN_COMPLETE",
+        runId: runId,
+        partnerId: learnRuns[runId].partnerId,
+        transactionId: learnRuns[runId].transactionId,
+        actions: [],
+        pdfCount: 0,
+        tabClosed: true,
+      });
+    }
+    cleanupRunRegistration(runId);
+    delete learnRuns[runId];
+  });
+
+  // ============================================================================
+  // REPLAY MODE handlers
+  // ============================================================================
+
+  function findReplayRunByTab(tabId) {
+    var ids = Object.keys(replayRuns);
+    for (var i = 0; i < ids.length; i++) {
+      var run = replayRuns[ids[i]];
+      if (run.tabId === tabId) return ids[i];
+      if (run.childTabIds && run.childTabIds.indexOf(tabId) !== -1) return ids[i];
+    }
+    return null;
+  }
+
+  // TS_START_REPLAY: App tab asks to start replay mode
+  chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (!message || message.type !== "TS_START_REPLAY") return;
+    if (message.appOrigin) setAppBaseUrl(message.appOrigin);
+    var partnerId = message.partnerId;
+    var partnerName = message.partnerName || "";
+    var transactionId = message.transactionId || null;
+    var recipe = message.recipe || null;
+    var transactionAmount = message.transactionAmount || 0;
+    var transactionDate = message.transactionDate || null;
+    var transactionCurrency = message.transactionCurrency || "EUR";
+    var authToken = message.authToken || null;
+    if (!partnerId || !recipe) return;
+
+    var runId = "replay_" + Date.now();
+    var appTabId = sender.tab ? sender.tab.id : null;
+
+    replayRuns[runId] = {
+      tabId: null,
+      appTabId: appTabId,
+      partnerId: partnerId,
+      partnerName: partnerName,
+      transactionId: transactionId,
+      recipe: recipe,
+      transactionAmount: transactionAmount,
+      transactionDate: transactionDate,
+      transactionCurrency: transactionCurrency,
+      childTabIds: [],
+      status: "starting",
+      authToken: authToken,
+    };
+
+    console.log("[FiBuKI] TS_START_REPLAY", runId, partnerId, partnerName);
+
+    sendResponse({ ok: true, runId: runId });
+
+    // Open a new tab at the recipe start URL
+    var openUrl = recipe.startUrl || "about:blank";
+    chrome.tabs.create({ url: openUrl, active: true }, function (tab) {
+      if (!tab || typeof tab.id !== "number") return;
+      replayRuns[runId].tabId = tab.id;
+
+      // Register in runs[] so findRunIdByTab() and download attribution work
+      runs[runId] = {
+        tabId: tab.id, downloadTabIds: [], attemptedUrls: {},
+        openedDownloadUrls: {}, appTabId: appTabId,
+        foundCount: 0, downloadedCount: 0, urls: [], overlaySent: false,
+        isReplayRun: true,
+      };
+      activeTabRuns[tab.id] = runId;
+
+      // Notify the app tab
+      if (appTabId) {
+        sendToTab(appTabId, {
+          type: "TS_REPLAY_STARTED",
+          runId: runId,
+          partnerId: partnerId,
+        });
+      }
+
+      // Wait for tab to load, then tell it to start replaying
+      setTimeout(function () {
+        sendToTab(tab.id, {
+          type: "TS_START_REPLAY_TAB",
+          runId: runId,
+          partnerId: partnerId,
+          partnerName: partnerName,
+          transactionId: transactionId,
+          recipe: recipe,
+          transactionAmount: transactionAmount,
+          transactionDate: transactionDate,
+          transactionCurrency: transactionCurrency,
+        });
+      }, 2000);
+    });
+  });
+
+  // TS_REPLAY_PROGRESS: Content script reports progress
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || message.type !== "TS_REPLAY_PROGRESS") return;
+    var tabId = sender.tab ? sender.tab.id : null;
+    var runId = tabId ? findReplayRunByTab(tabId) : null;
+    if (!runId || !replayRuns[runId]) return;
+
+    // Track the current step for resume-after-navigation
+    if (typeof message.step === "number") {
+      replayRuns[runId].currentStep = message.step;
+    }
+
+    if (replayRuns[runId].appTabId) {
+      sendToTab(replayRuns[runId].appTabId, {
+        type: "TS_REPLAY_PROGRESS",
+        runId: runId,
+        step: message.step,
+        total: message.total,
+        message: message.message,
+      });
+    }
+  });
+
+  // TS_REPLAY_SUCCESS: Content script reports success
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || message.type !== "TS_REPLAY_SUCCESS") return;
+    var tabId = sender.tab ? sender.tab.id : null;
+    var runId = tabId ? findReplayRunByTab(tabId) : null;
+    if (!runId || !replayRuns[runId]) return;
+
+    console.log("[FiBuKI] TS_REPLAY_SUCCESS", runId);
+    replayRuns[runId].status = "success";
+
+    if (replayRuns[runId].appTabId) {
+      sendToTab(replayRuns[runId].appTabId, {
+        type: "TS_REPLAY_SUCCESS",
+        runId: runId,
+        result: message.result || {},
+      });
+    }
+
+    // Auto-close replay tab after success (3s delay)
+    var replayTabId = replayRuns[runId].tabId;
+    setTimeout(function () {
+      try { chrome.tabs.remove(replayTabId); } catch (e) {}
+    }, 3000);
+
+    // Clean up after a delay (let download complete)
+    setTimeout(function () {
+      cleanupRunRegistration(runId);
+      delete replayRuns[runId];
+    }, 10000);
+  });
+
+  // TS_REPLAY_FAILED: Content script reports failure
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || message.type !== "TS_REPLAY_FAILED") return;
+    var tabId = sender.tab ? sender.tab.id : null;
+    var runId = tabId ? findReplayRunByTab(tabId) : null;
+    if (!runId || !replayRuns[runId]) return;
+
+    console.log("[FiBuKI] TS_REPLAY_FAILED", runId, message.result);
+    replayRuns[runId].status = "failed";
+
+    if (replayRuns[runId].appTabId) {
+      sendToTab(replayRuns[runId].appTabId, {
+        type: "TS_REPLAY_FAILED",
+        runId: runId,
+        result: message.result || {},
+      });
+    }
+
+    // Auto-close replay tab after failure (10s delay so user can inspect)
+    var failedTabId = replayRuns[runId].tabId;
+    setTimeout(function () {
+      try { chrome.tabs.remove(failedTabId); } catch (e) {}
+    }, 10000);
+
+    cleanupRunRegistration(runId);
+    delete replayRuns[runId];
+  });
+
+  // TS_REPLAY_AUTH_REQUIRED: Content script needs user to log in
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || message.type !== "TS_REPLAY_AUTH_REQUIRED") return;
+    var tabId = sender.tab ? sender.tab.id : null;
+    var runId = tabId ? findReplayRunByTab(tabId) : null;
+    if (!runId || !replayRuns[runId]) return;
+
+    replayRuns[runId].status = "auth_required";
+    showLoginNotification(runId, message.url || "");
+
+    if (replayRuns[runId].appTabId) {
+      sendToTab(replayRuns[runId].appTabId, {
+        type: "TS_REPLAY_AUTH_REQUIRED",
+        runId: runId,
+      });
+    }
+  });
+
+  // TS_REPLAY_TIER2_NEEDED: Content script in replay tab needs LLM agent help
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || message.type !== "TS_REPLAY_TIER2_NEEDED") return;
+    var tabId = sender.tab ? sender.tab.id : null;
+    var runId = tabId ? findReplayRunByTab(tabId) : null;
+    if (!runId || !replayRuns[runId]) return;
+
+    // Track agent iterations centrally (survives page navigations that recreate the state machine)
+    if (typeof replayRuns[runId].agentIterations !== "number") {
+      replayRuns[runId].agentIterations = 0;
+    }
+    replayRuns[runId].agentIterations++;
+
+    console.log("[FiBuKI] TS_REPLAY_TIER2_NEEDED", runId, "step:", message.failedAtStep, "iteration:", replayRuns[runId].agentIterations);
+
+    // Hard cap: stop after 15 Tier 2 iterations across all navigations
+    if (replayRuns[runId].agentIterations > 15) {
+      console.log("[FiBuKI] Tier 2 iteration limit reached, failing replay:", runId);
+      replayRuns[runId].status = "failed";
+      if (replayRuns[runId].appTabId) {
+        sendToTab(replayRuns[runId].appTabId, {
+          type: "TS_REPLAY_FAILED",
+          runId: runId,
+          result: {
+            status: "failed_timeout",
+            tier: 2,
+            durationMs: 0,
+            transactionId: replayRuns[runId].transactionId,
+            agentIterations: replayRuns[runId].agentIterations,
+          },
+        });
+      }
+      // Tell replay tab to stop
+      if (replayRuns[runId].tabId) {
+        sendToTab(replayRuns[runId].tabId, {
+          type: "TS_REPLAY_FAILED",
+          runId: runId,
+          result: { status: "failed_timeout", tier: 2 },
+        });
+      }
+      return;
+    }
+
+    replayRuns[runId].status = "tier2";
+
+    // Forward to app tab so the frontend hook can call the replay-agent API
+    if (replayRuns[runId].appTabId) {
+      sendToTab(replayRuns[runId].appTabId, {
+        type: "TS_REPLAY_TIER2_NEEDED",
+        runId: runId,
+        failedAtStep: message.failedAtStep,
+        snapshot: message.snapshot,
+        transactionId: message.transactionId,
+        transactionAmount: message.transactionAmount,
+        transactionDate: message.transactionDate,
+        transactionCurrency: message.transactionCurrency,
+        partnerName: message.partnerName,
+        recipe: message.recipe,
+      });
+    }
+  });
+
+  // TS_REPLAY_TIER2_COMMANDS: App tab sends LLM agent commands to replay tab
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || message.type !== "TS_REPLAY_TIER2_COMMANDS") return;
+    var runId = message.runId;
+    if (!runId || !replayRuns[runId]) return;
+
+    console.log("[FiBuKI] TS_REPLAY_TIER2_COMMANDS", runId, (message.commands || []).length, "commands");
+
+    // Forward commands to the replay tab
+    if (replayRuns[runId].tabId) {
+      sendToTab(replayRuns[runId].tabId, {
+        type: "TS_REPLAY_TIER2_COMMANDS",
+        commands: message.commands || [],
+        isDone: message.isDone || false,
+      });
+    }
+  });
+
+  // TS_REPLAY_NO_MATCH: Content script reports no matching invoice found
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || message.type !== "TS_REPLAY_NO_MATCH") return;
+    var tabId = sender.tab ? sender.tab.id : null;
+    var runId = tabId ? findReplayRunByTab(tabId) : null;
+
+    var notifId = "ts_nomatch_" + (runId || Date.now());
+    chrome.notifications.create(notifId, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon48.png"),
+      title: "FiBuKI: Invoice Not Found",
+      message: "No matching invoice found for this transaction.",
+      buttons: [{ title: "Show Page" }, { title: "Dismiss" }],
+      priority: 2,
+      requireInteraction: true,
+    });
+  });
+
+  // Handle notification button clicks (both login and no-match)
+  chrome.notifications.onButtonClicked.addListener(function (notifId, btnIndex) {
+    if (notifId.indexOf("ts_nomatch_") === 0) {
+      var noMatchRunId = notifId.replace("ts_nomatch_", "");
+      if (btnIndex === 0 && replayRuns[noMatchRunId] && replayRuns[noMatchRunId].tabId) {
+        // "Show Page" — focus the replay tab
+        try { chrome.tabs.update(replayRuns[noMatchRunId].tabId, { active: true }); } catch (e) {}
+      }
+      chrome.notifications.clear(notifId);
+    }
+  });
+
+  // Track child tabs opened from replay tabs
+  chrome.webNavigation.onCreatedNavigationTarget.addListener(function (details) {
+    var sourceTabId = details.sourceTabId;
+    var newTabId = details.tabId;
+    var replayRunId = findReplayRunByTab(sourceTabId);
+    if (!replayRunId || !replayRuns[replayRunId]) return;
+    console.log("[FiBuKI] Replay child tab opened:", newTabId, "from:", sourceTabId);
+    replayRuns[replayRunId].childTabIds.push(newTabId);
+    activeTabRuns[newTabId] = replayRunId;
+    if (runs[replayRunId]) {
+      if (!runs[replayRunId].downloadTabIds) runs[replayRunId].downloadTabIds = [];
+      runs[replayRunId].downloadTabIds.push(newTabId);
+    }
+  });
+
+  // Detect replay tab closed
+  chrome.tabs.onRemoved.addListener(function (tabId) {
+    var runId = findReplayRunByTab(tabId);
+    if (!runId || !replayRuns[runId]) return;
+
+    // Child tab closing
+    var childIdx = replayRuns[runId].childTabIds.indexOf(tabId);
+    if (childIdx !== -1) {
+      replayRuns[runId].childTabIds.splice(childIdx, 1);
+      return;
+    }
+
+    // Main replay tab closed
+    console.log("[FiBuKI] Replay tab closed:", runId);
+    if (replayRuns[runId].appTabId) {
+      sendToTab(replayRuns[runId].appTabId, {
+        type: "TS_REPLAY_FAILED",
+        runId: runId,
+        result: { status: "failed_timeout", tier: 1, durationMs: 0, transactionId: replayRuns[runId].transactionId, tabClosed: true },
+      });
+    }
+    cleanupRunRegistration(runId);
+    delete replayRuns[runId];
+  });
+
+  // Re-send replay config when replay tab navigates
+  chrome.webNavigation.onCompleted.addListener(function (details) {
+    if (details.frameId !== 0) return;
+    var tabId = details.tabId;
+    var replayRunId = findReplayRunByTab(tabId);
+    if (!replayRunId || !replayRuns[replayRunId]) return;
+    if (replayRuns[replayRunId].tabId !== tabId) return;
+
+    // Only re-send if status is not already done
+    if (replayRuns[replayRunId].status === "success" || replayRuns[replayRunId].status === "failed") return;
+
+    // Calculate resumeFromStep: navigation means the current step's click succeeded
+    var resumeFromStep = 0;
+    if (typeof replayRuns[replayRunId].currentStep === "number") {
+      resumeFromStep = replayRuns[replayRunId].currentStep + 1;
+    }
+
+    sendToTab(tabId, {
+      type: "TS_START_REPLAY_TAB",
+      runId: replayRunId,
+      partnerId: replayRuns[replayRunId].partnerId,
+      partnerName: replayRuns[replayRunId].partnerName,
+      transactionId: replayRuns[replayRunId].transactionId,
+      recipe: replayRuns[replayRunId].recipe,
+      transactionAmount: replayRuns[replayRunId].transactionAmount,
+      transactionDate: replayRuns[replayRunId].transactionDate,
+      transactionCurrency: replayRuns[replayRunId].transactionCurrency,
+      resumeFromStep: resumeFromStep,
+      agentIterations: replayRuns[replayRunId].agentIterations || 0,
+    });
+  });
+
+  // Intercept downloads during replay — upload with transactionId
+  // (Piggyback on existing download listener: check learnRunId first, then replayRunId)
+
+  // Network-level PDF detection for learn/replay mode (catches inline PDF responses before download)
+  chrome.webRequest.onHeadersReceived.addListener(
+    function (details) {
+      if (details.type !== "main_frame" && details.type !== "sub_frame") return;
+      var tabId = details.tabId;
+      if (tabId < 0) return;
+
+      var learnRunId = findLearnRunByTab(tabId);
+      var replayRunId = findReplayRunByTab(tabId);
+      if ((!learnRunId || !learnRuns[learnRunId]) && (!replayRunId || !replayRuns[replayRunId])) return;
+
+      // Check Content-Type for PDF
+      var headers = details.responseHeaders || [];
+      var isPdf = false;
+      for (var i = 0; i < headers.length; i++) {
+        if (headers[i].name.toLowerCase() === "content-type") {
+          isPdf = (headers[i].value || "").toLowerCase().indexOf("pdf") !== -1;
+          break;
+        }
+      }
+      if (!isPdf) return;
+
+      var url = details.url;
+      if (seenDownloadUrls[url]) return;
+
+      // For learn tabs: proactively fetch and upload the PDF
+      if (learnRunId && learnRuns[learnRunId]) {
+        console.log("[FiBuKI] Network PDF detected in learn tab:", url.slice(0, 100));
+        var learnTxId = learnRuns[learnRunId].transactionId;
+
+        // Create a temp runs entry so uploadBuffer works (fallback if not already registered)
+        if (!runs[learnRunId]) {
+          runs[learnRunId] = {
+            tabId: learnRuns[learnRunId].tabId,
+            downloadTabIds: [],
+            attemptedUrls: {},
+            openedDownloadUrls: {},
+            appTabId: learnRuns[learnRunId].appTabId,
+            foundCount: 0,
+            downloadedCount: 0,
+            urls: [],
+            overlaySent: false,
+            isLearnRun: true,
+          };
+        }
+
+        fetchAndUploadPdfDirect(learnRunId, url, learnTxId);
+      }
+
+      // For replay tabs: proactively fetch and upload the PDF
+      if (replayRunId && replayRuns[replayRunId]) {
+        console.log("[FiBuKI] Network PDF detected in replay tab:", url.slice(0, 100));
+        var transactionId = replayRuns[replayRunId].transactionId;
+        fetchAndUploadPdfDirect(replayRunId, url, transactionId);
+
+        // Also create a temp runs entry so uploadBuffer works (fallback if not already registered)
+        if (!runs[replayRunId]) {
+          runs[replayRunId] = {
+            tabId: replayRuns[replayRunId].tabId,
+            downloadTabIds: [],
+            attemptedUrls: {},
+            openedDownloadUrls: {},
+            appTabId: replayRuns[replayRunId].appTabId,
+            foundCount: 0,
+            downloadedCount: 0,
+            urls: [],
+            overlaySent: false,
+            isReplayRun: true,
+          };
+        }
+      }
+    },
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"]
+  );
 
   // Intercept downloads during learn mode — upload with transactionId
   // Piggyback on existing download listener by checking if the tab belongs to a learn run

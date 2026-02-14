@@ -7,6 +7,7 @@ exports.connectFileToTransactionCallable = void 0;
 const firestore_1 = require("firebase-admin/firestore");
 const createCallable_1 = require("../utils/createCallable");
 const cancelWorkers_1 = require("../utils/cancelWorkers");
+const activityLevel_1 = require("../utils/activityLevel");
 exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)({ name: "connectFileToTransaction" }, async (ctx, request) => {
     const { fileId, transactionId, connectionType = "manual", matchConfidence, sourceInfo, } = request;
     if (!fileId || !transactionId) {
@@ -121,10 +122,22 @@ exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)(
         updatedAt: now,
     };
     // 3. Update transaction's fileIds array and mark as complete
+    const actor = connectionType === "manual" ? "manual" : "auto";
     const transactionUpdate = {
         fileIds: firestore_1.FieldValue.arrayUnion(fileId),
         isComplete: true,
         updatedAt: now,
+        automationHistory: firestore_1.FieldValue.arrayUnion({
+            type: "file_connected",
+            ranAt: now,
+            status: "completed",
+            actor,
+            level: (0, activityLevel_1.deriveActivityLevel)({ type: "file_connected", actor }),
+            fileId,
+            fileName: fileData.fileName || null,
+            confidence: matchConfidence ?? null,
+            summary: `File "${fileData.fileName || fileId}" connected`,
+        }),
     };
     // 4. Partner sync logic - FILE TAKES PRECEDENCE (it's the actual document)
     // Exception: Manual assignments on transaction are respected

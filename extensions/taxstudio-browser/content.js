@@ -22,7 +22,8 @@
   var originalPullUrl = null;
   var loginCheckInterval = null;
   var devExtractorCalls = [];
-  var DEV_EXTRACTOR_FALLBACK_URL = "http://localhost:3000/api/browser/extractor";
+  var appBaseUrl = "https://fibuki.com";
+  var DEV_EXTRACTOR_FALLBACK_URL = appBaseUrl + "/api/browser/extractor";
   var DEV_EXTRACTOR_MAX_CALLS = 6;
   var DEV_EXTRACTOR_WINDOW_MS = 60 * 1000;
   var clickGooglePaymentsRetryCount = 0;
@@ -30,12 +31,15 @@
   // Learn mode state
   var LEARN_OVERLAY_ID = "taxstudio-learn-overlay";
   var learnMode = false;
+  var learnRunId = null;
   var learnSessionStart = 0;
   var learnPartnerName = "";
   var learnTransactionId = null;
   var learnActions = [];
   var learnPdfCount = 0;
   var learnLastUrl = "";
+  var learnInvoiceListUrl = null;
+  var learnExpectingInvoiceSelect = false;
 
   var overlayState = {
     items: [],
@@ -56,6 +60,16 @@
   } catch (err) {
     // Ignore DOM errors
   }
+
+  // Load persisted app base URL from storage
+  try {
+    chrome.storage.local.get(["ts_app_base_url"], function (result) {
+      if (result && result.ts_app_base_url) {
+        appBaseUrl = result.ts_app_base_url;
+        DEV_EXTRACTOR_FALLBACK_URL = appBaseUrl + "/api/browser/extractor";
+      }
+    });
+  } catch (err) {}
 
   if (isTopFrame) {
     console.log("[FiBuKI] Content script ready (TOP)", window.location.href, "name:", window.name);
@@ -115,18 +129,107 @@
         type: "TS_START_PULL",
         url: data.url,
         runId: data.runId,
+        appOrigin: window.location.origin,
+        authToken: data.authToken || null,
       });
+      return;
+    }
+    if (data.type === "TAXSTUDIO_START_REPLAY" && data.partnerId && data.recipe) {
+      console.log("[FiBuKI] Start replay mode:", data.partnerId, data.partnerName);
+      var replayPayload = {
+        type: "TS_START_REPLAY",
+        partnerId: data.partnerId,
+        partnerName: data.partnerName || "",
+        transactionId: data.transactionId || null,
+        recipe: data.recipe,
+        transactionAmount: data.transactionAmount || 0,
+        transactionDate: data.transactionDate || null,
+        transactionCurrency: data.transactionCurrency || "EUR",
+        appOrigin: window.location.origin,
+        authToken: data.authToken || null,
+      };
+      function sendReplayWithRetry(attempt) {
+        try {
+          chrome.runtime.sendMessage(replayPayload, function (response) {
+            var err = chrome.runtime.lastError;
+            if (err || !response || !response.ok) {
+              var errMsg = err ? err.message : "no response";
+              console.warn("[FiBuKI] Background not responsive for replay (attempt " + attempt + "):", errMsg);
+              if (errMsg && errMsg.indexOf("context invalidated") !== -1) {
+                window.postMessage({ type: "TAXSTUDIO_REPLAY_ERROR", error: "Extension was updated. Please refresh this page and try again." }, "*");
+                return;
+              }
+              if (attempt < 3) {
+                setTimeout(function () { sendReplayWithRetry(attempt + 1); }, 500);
+              } else {
+                window.postMessage({ type: "TAXSTUDIO_REPLAY_ERROR", error: "Extension background not responding. Try reloading the extension." }, "*");
+              }
+            } else {
+              console.log("[FiBuKI] Background acknowledged replay mode:", response.runId);
+            }
+          });
+        } catch (e) {
+          console.error("[FiBuKI] Extension context invalidated:", e.message);
+          window.postMessage({ type: "TAXSTUDIO_REPLAY_ERROR", error: "Extension was updated. Please refresh this page and try again." }, "*");
+        }
+      }
+      sendReplayWithRetry(1);
+      return;
+    }
+    if (data.type === "TAXSTUDIO_REPLAY_TIER2_COMMANDS" && data.commands) {
+      console.log("[FiBuKI] Forwarding Tier 2 commands to background:", (data.commands || []).length);
+      try {
+        chrome.runtime.sendMessage({
+          type: "TS_REPLAY_TIER2_COMMANDS",
+          runId: data.runId || "",
+          commands: data.commands || [],
+          isDone: data.isDone || false,
+          appOrigin: window.location.origin,
+        });
+      } catch (e) {
+        console.error("[FiBuKI] Failed to forward Tier 2 commands:", e.message);
+      }
       return;
     }
     if (data.type === "TAXSTUDIO_START_LEARN" && data.partnerId) {
       console.log("[FiBuKI] Start learn mode:", data.partnerId, data.partnerName);
-      chrome.runtime.sendMessage({
+      var learnPayload = {
         type: "TS_START_LEARN",
         partnerId: data.partnerId,
         partnerName: data.partnerName || "",
         transactionId: data.transactionId || null,
         startUrl: data.startUrl || null,
-      });
+        appOrigin: window.location.origin,
+        authToken: data.authToken || null,
+      };
+      // Send with response callback to detect dormant/invalidated service worker
+      function sendLearnWithRetry(attempt) {
+        try {
+          chrome.runtime.sendMessage(learnPayload, function (response) {
+            var err = chrome.runtime.lastError;
+            if (err || !response || !response.ok) {
+              var errMsg = err ? err.message : "no response";
+              console.warn("[FiBuKI] Background not responsive (attempt " + attempt + "):", errMsg);
+              if (errMsg && errMsg.indexOf("context invalidated") !== -1) {
+                window.postMessage({ type: "TAXSTUDIO_LEARN_ERROR", error: "Extension was updated. Please refresh this page and try again." }, "*");
+                return;
+              }
+              if (attempt < 3) {
+                setTimeout(function () { sendLearnWithRetry(attempt + 1); }, 500);
+              } else {
+                window.postMessage({ type: "TAXSTUDIO_LEARN_ERROR", error: "Extension background not responding. Try reloading the extension." }, "*");
+              }
+            } else {
+              console.log("[FiBuKI] Background acknowledged learn mode:", response.runId);
+            }
+          });
+        } catch (e) {
+          // chrome.runtime may throw synchronously if context is invalidated
+          console.error("[FiBuKI] Extension context invalidated:", e.message);
+          window.postMessage({ type: "TAXSTUDIO_LEARN_ERROR", error: "Extension was updated. Please refresh this page and try again." }, "*");
+        }
+      }
+      sendLearnWithRetry(1);
       return;
     }
     if (data.type === "TAXSTUDIO_DEV_EXTRACT") {
@@ -144,11 +247,22 @@
     );
   });
 
+  // Diagnostic: log ALL TS_ messages from MAIN world hooks
+  window.addEventListener("message", function (event) {
+    if (event.source !== window) return;
+    var data = event.data || {};
+    if (typeof data.type === "string" && data.type.indexOf("TS_") === 0) {
+      console.log("[FiBuKI] MAIN→CS message:", data.type, data.url ? data.url.slice(0, 80) : "", data.base64 ? "(base64:" + data.base64.length + ")" : "", data.href ? data.href.slice(0, 60) : "");
+    }
+  });
+
   window.addEventListener("message", function (event) {
     if (event.source !== window) return;
     var data = event.data || {};
     if (data.type !== "TS_NETWORK_PDF" || !data.url) return;
-    if (!currentRunId) return;
+    var runId = currentRunId || learnRunId;
+    console.log("[FiBuKI] TS_NETWORK_PDF handler: url:", data.url.slice(0, 80), "runId:", runId, "learnRunId:", learnRunId);
+    if (!runId) return;
     var url = data.url;
     if (seenNetworkUrls[url]) return;
     try {
@@ -163,14 +277,103 @@
     }
     chrome.runtime.sendMessage({
       type: "TS_DOWNLOAD_URLS",
-      runId: currentRunId,
+      runId: runId,
       urls: [url],
       pageOrigin: window.location.origin,
     });
   });
 
+  // Handle TS_BLOB_PDF — blob URL createObjectURL with PDF content
+  window.addEventListener("message", function (event) {
+    if (event.source !== window) return;
+    var data = event.data || {};
+    if (data.type !== "TS_BLOB_PDF" || !data.base64) return;
+    var runId = currentRunId || learnRunId || replayRunId;
+    console.log("[FiBuKI] TS_BLOB_PDF received, base64 size:", data.base64.length, "runId:", runId, "learnRunId:", learnRunId, "currentRunId:", currentRunId, "replayRunId:", replayRunId);
+    if (!runId) {
+      console.warn("[FiBuKI] TS_BLOB_PDF dropped — no active runId");
+      return;
+    }
+
+    try {
+      // Decode base64 to Uint8Array
+      var binary = atob(data.base64);
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      // Verify PDF magic bytes
+      if (bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+        console.log("[FiBuKI] TS_BLOB_PDF is valid PDF, uploading...", bytes.length, "bytes");
+        chrome.runtime.sendMessage({
+          type: "TS_UPLOAD_FILE",
+          runId: runId,
+          buffer: Array.from(bytes),
+          filename: "invoice.pdf",
+          mimeType: "application/pdf",
+          sourceUrl: data.blobUrl || "blob-capture",
+        });
+      } else {
+        console.warn("[FiBuKI] TS_BLOB_PDF not a PDF, magic bytes:", bytes[0], bytes[1], bytes[2], bytes[3]);
+      }
+    } catch (e) {
+      console.warn("[FiBuKI] TS_BLOB_PDF decode error:", e);
+    }
+  });
+
+  // Handle TS_ANCHOR_DOWNLOAD — anchor.click() with blob: or data: href
+  window.addEventListener("message", function (event) {
+    if (event.source !== window) return;
+    var data = event.data || {};
+    if (data.type !== "TS_ANCHOR_DOWNLOAD" || !data.href) return;
+    var runId = currentRunId || learnRunId || replayRunId;
+    if (!runId) return;
+
+    var href = data.href;
+    var filename = data.filename || "download.pdf";
+    console.log("[FiBuKI] TS_ANCHOR_DOWNLOAD captured:", href.slice(0, 60), filename);
+
+    if (href.indexOf("blob:") === 0) {
+      // Blob URLs can't be fetched from content script (different execution context).
+      // Blob PDFs are already captured by TS_BLOB_PDF handler via URL.createObjectURL hook.
+      console.log("[FiBuKI] TS_ANCHOR_DOWNLOAD: blob URL skipped (handled by TS_BLOB_PDF)");
+    } else if (href.indexOf("data:") === 0) {
+      // data: URI — check for PDF content type and decode
+      try {
+        var isPdfData = href.indexOf("data:application/pdf") === 0;
+        if (!isPdfData) return;
+        var base64Match = href.match(/;base64,(.+)/);
+        if (!base64Match) return;
+        var binary = atob(base64Match[1]);
+        var bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        chrome.runtime.sendMessage({
+          type: "TS_UPLOAD_FILE",
+          runId: runId,
+          buffer: Array.from(bytes),
+          filename: filename.indexOf(".pdf") !== -1 ? filename : filename + ".pdf",
+          mimeType: "application/pdf",
+          sourceUrl: "data-uri-capture",
+        });
+      } catch (e) {
+        console.warn("[FiBuKI] TS_ANCHOR_DOWNLOAD data URI decode error:", e);
+      }
+    }
+  });
+
   function ensureOverlay() {
     if (document.getElementById(OVERLAY_ID)) return;
+
+    // Save original padding/box-sizing on documentElement so we can restore later
+    if (!window.__tsOriginalPadding) {
+      window.__tsOriginalPadding = document.documentElement.style.padding || "";
+      window.__tsOriginalBoxSizing = document.documentElement.style.boxSizing || "";
+    }
+    // Push page content inward so it's not hidden behind the 16px border
+    document.documentElement.style.setProperty('padding', '16px', 'important');
+    document.documentElement.style.setProperty('box-sizing', 'border-box', 'important');
 
     // Inject animation styles for gradient border with hue shift and breathing
     var styleId = "ts-overlay-styles";
@@ -218,7 +421,7 @@
           "mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0) !important; " +
           "-webkit-mask-composite: xor !important; " +
           "mask-composite: exclude !important; " +
-          "padding: 4px !important; " +
+          "padding: 16px !important; " +
           "transition: transform 0.8s ease-out !important; " +
         "}";
       (document.head || document.documentElement).appendChild(style);
@@ -412,11 +615,14 @@
   }
 
   // Login page detection patterns
+  // Use [/\-_\.] prefix to catch hyphenated compounds like /mein-magenta-login/
   var LOGIN_URL_PATTERNS = [
-    /\/signin/i,
-    /\/sign-in/i,
-    /\/login/i,
-    /\/log-in/i,
+    /[/\-_.]signin/i,
+    /[/\-_.]sign-in/i,
+    /[/\-_.]login/i,
+    /[/\-_.]log-in/i,
+    /[/\-_.]anmeld/i,        // German: anmelden, anmeldung
+    /[/\-_.]einloggen/i,     // German: einloggen
     /\/auth\//i,
     /\/authenticate/i,
     /\/oauth\//i,
@@ -542,6 +748,29 @@
     }
   }
 
+  function removePullOverlay() {
+    [OVERLAY_ID, OVERLAY_ID + "-border", OVERLAY_ID + "-glow", LOGIN_PROMPT_ID].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.remove();
+    });
+
+    // Restore original padding on documentElement
+    if (window.__tsOriginalPadding !== undefined) {
+      if (window.__tsOriginalPadding) {
+        document.documentElement.style.padding = window.__tsOriginalPadding;
+      } else {
+        document.documentElement.style.removeProperty('padding');
+      }
+      if (window.__tsOriginalBoxSizing) {
+        document.documentElement.style.boxSizing = window.__tsOriginalBoxSizing;
+      } else {
+        document.documentElement.style.removeProperty('box-sizing');
+      }
+      delete window.__tsOriginalPadding;
+      delete window.__tsOriginalBoxSizing;
+    }
+  }
+
   function resumeAfterLogin() {
     console.log("[FiBuKI] Resuming after login, original URL:", originalPullUrl);
     pausedForLogin = false;
@@ -574,6 +803,8 @@
   function checkForLoginRedirect() {
     if (!currentRunId) return;
     if (pausedForLogin) return;
+    // Don't run login check during replay or learn mode
+    if (replayMode || learnMode) return;
 
     var currentUrl = window.location.href;
 
@@ -917,7 +1148,7 @@
           break;
 
         case "sendDebugLog":
-          fetch("http://localhost:3000/api/browser/log", {
+          fetch(appBaseUrl + "/api/browser/log", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -990,7 +1221,7 @@
         case "refreshSnapshot":
           // Re-collect page data after DOM changes and send debug log
           var freshData = collectPageData();
-          fetch("http://localhost:3000/api/browser/log", {
+          fetch(appBaseUrl + "/api/browser/log", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1080,6 +1311,8 @@
 
   chrome.runtime.onMessage.addListener(function (message) {
     if (!message || message.type !== "TS_SHOW_OVERLAY") return;
+    // Don't show pull overlay when in replay or learn mode
+    if (replayMode || learnMode) return;
     var frameType = isTopFrame ? "TOP" : "IFRAME";
     console.log("[FiBuKI] TS_SHOW_OVERLAY (" + frameType + ")", message.runId || "", window.location.origin);
     if (isTopFrame) {
@@ -2936,6 +3169,33 @@
   // LEARN MODE — Record user navigation to teach invoice fetching
   // ============================================================================
 
+  function buildUniqueSelector(el) {
+    if (!el) return null;
+    if (el.id) return "#" + el.id;
+    var path = [];
+    var current = el;
+    while (current && current !== document.body && current !== document.documentElement) {
+      var tag = (current.tagName || "").toLowerCase();
+      if (current.id) {
+        path.unshift("#" + current.id);
+        break;
+      }
+      var parent = current.parentElement;
+      if (parent) {
+        var siblings = parent.children;
+        var index = 0;
+        for (var i = 0; i < siblings.length; i++) {
+          if (siblings[i] === current) { index = i + 1; break; }
+        }
+        path.unshift(tag + ":nth-child(" + index + ")");
+      } else {
+        path.unshift(tag);
+      }
+      current = parent;
+    }
+    return path.join(" > ") || null;
+  }
+
   function buildClickTarget(el) {
     if (!el) return null;
     var text = (el.textContent || "").trim().slice(0, 120);
@@ -3003,7 +3263,16 @@
   function ensureLearnOverlay() {
     if (document.getElementById(LEARN_OVERLAY_ID)) return;
 
-    // Amber/gold gradient styles for learn mode
+    // Save original padding/box-sizing on documentElement so we can restore later
+    if (!window.__tsOriginalPadding) {
+      window.__tsOriginalPadding = document.documentElement.style.padding || "";
+      window.__tsOriginalBoxSizing = document.documentElement.style.boxSizing || "";
+    }
+    // Push page content inward so it's not hidden behind the 16px border
+    document.documentElement.style.setProperty('padding', '16px', 'important');
+    document.documentElement.style.setProperty('box-sizing', 'border-box', 'important');
+
+    // Reuse the same rainbow gradient border as pull mode
     var styleId = "ts-learn-overlay-styles";
     if (!document.getElementById(styleId)) {
       var style = document.createElement("style");
@@ -3014,31 +3283,78 @@
           "50% { background-position: 100% 50%; } " +
           "100% { background-position: 0% 50%; } " +
         "} " +
+        "@keyframes ts-learn-hue-shift { " +
+          "0% { filter: hue-rotate(0deg); } " +
+          "100% { filter: hue-rotate(360deg); } " +
+        "} " +
+        "@keyframes ts-learn-glow-breathe { " +
+          "0%, 100% { opacity: 0.35; filter: blur(12px) hue-rotate(0deg); } " +
+          "50% { opacity: 0.6; filter: blur(16px) hue-rotate(180deg); } " +
+        "} " +
         "@keyframes ts-learn-pulse { " +
           "0%, 100% { opacity: 0.8; } " +
           "50% { opacity: 1; } " +
         "} " +
+        "#" + LEARN_OVERLAY_ID + "-glow { " +
+          "position: fixed !important; " +
+          "inset: -20px !important; " +
+          "background: linear-gradient(90deg, #10b981, #06b6d4, #8b5cf6, #ec4899, #f59e0b, #10b981) !important; " +
+          "background-size: 300% 300% !important; " +
+          "animation: ts-learn-gradient 3s ease infinite, ts-learn-glow-breathe 6s ease-in-out infinite !important; " +
+          "pointer-events: none !important; " +
+          "z-index: 2147483645 !important; " +
+          "-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0) !important; " +
+          "mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0) !important; " +
+          "-webkit-mask-composite: xor !important; " +
+          "mask-composite: exclude !important; " +
+          "padding: 24px !important; " +
+          "transition: transform 0.8s ease-out !important; " +
+        "} " +
         "#" + LEARN_OVERLAY_ID + "-border { " +
           "position: fixed !important; " +
           "inset: 0 !important; " +
-          "background: linear-gradient(90deg, #f59e0b, #ef4444, #f59e0b, #eab308) !important; " +
+          "background: linear-gradient(90deg, #10b981, #06b6d4, #8b5cf6, #ec4899, #f59e0b, #10b981) !important; " +
           "background-size: 300% 300% !important; " +
-          "animation: ts-learn-gradient 3s ease infinite !important; " +
+          "animation: ts-learn-gradient 3s ease infinite, ts-learn-hue-shift 12s linear infinite !important; " +
           "pointer-events: none !important; " +
           "z-index: 2147483646 !important; " +
           "-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0) !important; " +
           "mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0) !important; " +
           "-webkit-mask-composite: xor !important; " +
           "mask-composite: exclude !important; " +
-          "padding: 4px !important; " +
+          "padding: 16px !important; " +
+          "transition: transform 0.8s ease-out !important; " +
         "}";
       (document.head || document.documentElement).appendChild(style);
     }
 
-    // Amber border
+    // Glow layer (behind border, with breathing)
+    var glowEl = document.createElement("div");
+    glowEl.id = LEARN_OVERLAY_ID + "-glow";
+    document.body.appendChild(glowEl);
+
+    // Animated gradient border
     var borderEl = document.createElement("div");
     borderEl.id = LEARN_OVERLAY_ID + "-border";
     document.body.appendChild(borderEl);
+
+    // Subtle organic drift (same as pull mode)
+    var moveX = 0, moveY = 0, targetX = 0, targetY = 0;
+    setInterval(function () {
+      targetX = (Math.random() - 0.5) * 3;
+      targetY = (Math.random() - 0.5) * 3;
+    }, 2000);
+    function animateMove() {
+      moveX += (targetX - moveX) * 0.02;
+      moveY += (targetY - moveY) * 0.02;
+      var transform = "translate(" + moveX + "px, " + moveY + "px)";
+      var b = document.getElementById(LEARN_OVERLAY_ID + "-border");
+      var g = document.getElementById(LEARN_OVERLAY_ID + "-glow");
+      if (b) b.style.transform = transform;
+      if (g) g.style.transform = transform;
+      if (b || g) requestAnimationFrame(animateMove);
+    }
+    animateMove();
 
     // Panel
     var panel = document.createElement("div");
@@ -3141,9 +3457,9 @@
     btnRow.style.display = "flex";
     btnRow.style.gap = "6px";
 
-    // "This is the invoice" button
+    // "Mark invoice list" button
     var markBtn = document.createElement("button");
-    markBtn.textContent = "This is the invoice";
+    markBtn.textContent = "Mark invoice list";
     markBtn.style.padding = "5px 12px";
     markBtn.style.borderRadius = "6px";
     markBtn.style.border = "1px solid rgba(245, 158, 11, 0.4)";
@@ -3152,20 +3468,61 @@
     markBtn.style.font = "600 11px/1 sans-serif";
     markBtn.style.cursor = "pointer";
     markBtn.addEventListener("click", function () {
+      // Capture the invoice list URL
+      learnInvoiceListUrl = window.location.href;
+
+      // Extract structured list data from the page
+      var invoiceRows = [];
+      var containerSelector = null;
+      if (window.__tsReplayEngine) {
+        var rows = window.__tsReplayEngine.extractInvoiceLikeRows();
+        if (rows && rows.length > 0) {
+          invoiceRows = rows.map(function (r) {
+            return { text: r.description || "", date: r.date || undefined, amount: r.amount || undefined };
+          });
+        }
+        var tableData = window.__tsReplayEngine.parseInvoiceTable(null);
+        if (tableData && tableData.tableElement) {
+          containerSelector = buildUniqueSelector(tableData.tableElement);
+        }
+      }
+
+      // Determine selectionType from data
+      var hasDates = invoiceRows.some(function (r) { return r.date; });
+      var hasAmounts = invoiceRows.some(function (r) { return r.amount; });
+      var selectionType = "month";
+      if (hasAmounts && hasDates) selectionType = "amount_and_date";
+      else if (hasAmounts) selectionType = "amount";
+      else if (hasDates) selectionType = "exact_date";
+
       recordLearnAction("mark_invoice_page", {
         pageContext: {
           title: document.title,
           surroundingText: (document.body.innerText || "").slice(0, 500),
         },
+        invoiceListSnapshot: {
+          items: invoiceRows.slice(0, 10),
+          containerSelector: containerSelector,
+          selectionType: selectionType,
+        },
       });
+
+      learnExpectingInvoiceSelect = true;
+
+      // Update status text
+      var status = document.getElementById(LEARN_OVERLAY_ID + "-status");
+      if (status) {
+        status.textContent = "Now click one invoice and download it.";
+        status.style.color = "#67e8f9";
+      }
+
+      // Disable the button
       markBtn.textContent = "Marked!";
       markBtn.style.background = "rgba(34, 197, 94, 0.2)";
       markBtn.style.color = "#86efac";
-      setTimeout(function () {
-        markBtn.textContent = "This is the invoice";
-        markBtn.style.background = "rgba(245, 158, 11, 0.15)";
-        markBtn.style.color = "#fbbf24";
-      }, 2000);
+      markBtn.disabled = true;
+      markBtn.style.cursor = "default";
+      markBtn.style.opacity = "0.6";
     });
 
     // "Done" button
@@ -3228,8 +3585,26 @@
     if (el) el.remove();
     var border = document.getElementById(LEARN_OVERLAY_ID + "-border");
     if (border) border.remove();
+    var glow = document.getElementById(LEARN_OVERLAY_ID + "-glow");
+    if (glow) glow.remove();
     var style = document.getElementById("ts-learn-overlay-styles");
     if (style) style.remove();
+
+    // Restore original padding on documentElement
+    if (window.__tsOriginalPadding !== undefined) {
+      if (window.__tsOriginalPadding) {
+        document.documentElement.style.padding = window.__tsOriginalPadding;
+      } else {
+        document.documentElement.style.removeProperty('padding');
+      }
+      if (window.__tsOriginalBoxSizing) {
+        document.documentElement.style.boxSizing = window.__tsOriginalBoxSizing;
+      } else {
+        document.documentElement.style.removeProperty('box-sizing');
+      }
+      delete window.__tsOriginalPadding;
+      delete window.__tsOriginalBoxSizing;
+    }
   }
 
   function startLearnListeners() {
@@ -3286,7 +3661,18 @@
     if (overlayEl && overlayEl.contains(target)) return;
 
     var clickTarget = buildClickTarget(el);
-    recordLearnAction("click", { clickTarget: clickTarget });
+    if (learnExpectingInvoiceSelect) {
+      learnExpectingInvoiceSelect = false;
+      recordLearnAction("selectInvoice", { clickTarget: clickTarget });
+      // Update status
+      var statusEl = document.getElementById(LEARN_OVERLAY_ID + "-status");
+      if (statusEl) {
+        statusEl.textContent = "Invoice selected! Continue to download, then click Done.";
+        statusEl.style.color = "#86efac";
+      }
+    } else {
+      recordLearnAction("click", { clickTarget: clickTarget });
+    }
   }
 
   function learnNavHandler() {
@@ -3310,6 +3696,7 @@
       type: "TS_LEARN_COMPLETE",
       actions: learnActions,
       pdfCount: learnPdfCount,
+      invoiceListUrl: learnInvoiceListUrl,
     });
 
     removeLearnOverlay();
@@ -3319,7 +3706,10 @@
     learnPdfCount = 0;
     learnPartnerName = "";
     learnTransactionId = null;
+    learnRunId = null;
     learnSessionStart = 0;
+    learnInvoiceListUrl = null;
+    learnExpectingInvoiceSelect = false;
   }
 
   // Forward learn events from background to window (app tab receives these)
@@ -3354,6 +3744,8 @@
         transactionId: message.transactionId,
         actions: message.actions,
         pdfCount: message.pdfCount,
+        tabClosed: message.tabClosed || false,
+        invoiceListUrl: message.invoiceListUrl || null,
       }, "*");
     }
   });
@@ -3362,13 +3754,25 @@
   chrome.runtime.onMessage.addListener(function (message) {
     if (!message || message.type !== "TS_START_LEARN_TAB") return;
     if (learnMode) return; // Already in learn mode
-    console.log("[FiBuKI] Starting learn mode in tab:", message.partnerName);
+
+    // Clean up any active pull mode state to prevent overlay conflicts
+    if (currentRunId) {
+      currentRunId = null;
+      stopLoginCheck();
+      pausedForLogin = false;
+    }
+    removePullOverlay();
+
+    console.log("[FiBuKI] Starting learn mode in tab:", message.partnerName, "runId:", message.runId);
     learnMode = true;
+    learnRunId = message.runId || null;
     learnSessionStart = Date.now();
     learnPartnerName = message.partnerName || "";
     learnTransactionId = message.transactionId || null;
     learnActions = [];
     learnPdfCount = 0;
+    learnInvoiceListUrl = null;
+    learnExpectingInvoiceSelect = false;
     learnLastUrl = window.location.href;
     if (isTopFrame) {
       ensureLearnOverlay();
@@ -3394,6 +3798,251 @@
     if (status) {
       status.textContent = "PDF detected and uploaded! (" + learnPdfCount + " file" + (learnPdfCount > 1 ? "s" : "") + ")";
       status.style.color = "#86efac";
+    }
+  });
+
+  // ============================================================================
+  // REPLAY MODE — Automated invoice download using recorded recipes
+  // ============================================================================
+
+  var replayMode = false;
+  var replayStateMachine = null;
+  var replayRunId = null;
+
+  // Forward replay events from background to window (app tab receives these)
+  chrome.runtime.onMessage.addListener(function (message) {
+    if (!message) return;
+    if (message.type === "TS_REPLAY_STARTED") {
+      window.postMessage({
+        type: "TAXSTUDIO_REPLAY_STARTED",
+        runId: message.runId,
+        partnerId: message.partnerId,
+      }, "*");
+    }
+    if (message.type === "TS_REPLAY_PROGRESS") {
+      window.postMessage({
+        type: "TAXSTUDIO_REPLAY_PROGRESS",
+        runId: message.runId,
+        step: message.step,
+        total: message.total,
+        message: message.message,
+      }, "*");
+    }
+    if (message.type === "TS_REPLAY_SUCCESS") {
+      window.postMessage({
+        type: "TAXSTUDIO_REPLAY_SUCCESS",
+        runId: message.runId,
+        result: message.result,
+      }, "*");
+    }
+    if (message.type === "TS_REPLAY_FAILED") {
+      // Stop the replay state machine if it's running in this tab
+      if (replayMode && replayStateMachine) {
+        replayStateMachine.cancel();
+        replayMode = false;
+        replayStateMachine = null;
+        if (isTopFrame && window.__tsReplayEngine) {
+          window.__tsReplayEngine.updateReplayOverlay(0, 0, "Replay failed: " + ((message.result && message.result.status) || "timeout"));
+          setTimeout(function () { window.__tsReplayEngine.removeReplayOverlay(); }, 5000);
+        }
+      }
+      window.postMessage({
+        type: "TAXSTUDIO_REPLAY_FAILED",
+        runId: message.runId,
+        result: message.result,
+      }, "*");
+    }
+    if (message.type === "TS_REPLAY_AUTH_REQUIRED") {
+      window.postMessage({
+        type: "TAXSTUDIO_REPLAY_AUTH_REQUIRED",
+        runId: message.runId,
+      }, "*");
+    }
+    if (message.type === "TS_REPLAY_PDF_DOWNLOADED") {
+      window.postMessage({
+        type: "TAXSTUDIO_REPLAY_PDF_DOWNLOADED",
+        runId: message.runId,
+        sourceUrl: message.sourceUrl,
+      }, "*");
+    }
+    if (message.type === "TS_REPLAY_TIER2_NEEDED") {
+      window.postMessage({
+        type: "TAXSTUDIO_REPLAY_TIER2_NEEDED",
+        runId: message.runId,
+        failedAtStep: message.failedAtStep,
+        snapshot: message.snapshot,
+        transactionId: message.transactionId,
+        transactionAmount: message.transactionAmount,
+        transactionDate: message.transactionDate,
+        transactionCurrency: message.transactionCurrency,
+        partnerName: message.partnerName,
+        recipe: message.recipe,
+      }, "*");
+    }
+  });
+
+  // Handle TS_START_REPLAY_TAB from background (in the opened target tab)
+  chrome.runtime.onMessage.addListener(function (message) {
+    if (!message || message.type !== "TS_START_REPLAY_TAB") return;
+    if (replayMode) return; // Already in replay mode
+    if (!window.__tsReplayEngine) {
+      console.warn("[FiBuKI] Replay engine not loaded");
+      return;
+    }
+
+    // Clean up any active pull mode state to prevent overlay conflicts
+    if (currentRunId) {
+      currentRunId = null;
+      stopLoginCheck();
+      pausedForLogin = false;
+    }
+    removePullOverlay();
+
+    var resumeFromStep = message.resumeFromStep || 0;
+    console.log("[FiBuKI] Starting replay mode in tab:", message.partnerName, "resumeFromStep:", resumeFromStep);
+    replayMode = true;
+    replayRunId = message.runId;
+
+    var engine = window.__tsReplayEngine;
+
+    if (isTopFrame) {
+      engine.ensureReplayOverlay(message.partnerName || "");
+    }
+
+    // Parse transaction date if provided as string
+    var txDate = null;
+    if (message.transactionDate) {
+      txDate = new Date(message.transactionDate);
+      if (isNaN(txDate.getTime())) txDate = null;
+    }
+
+    replayStateMachine = new engine.ReplayStateMachine({
+      recipe: message.recipe,
+      transactionAmount: message.transactionAmount || 0,
+      transactionDate: txDate,
+      transactionId: message.transactionId || "",
+      transactionCurrency: message.transactionCurrency || "EUR",
+      initialAgentIterations: message.agentIterations || 0,
+
+      onProgress: function (step, total, msg) {
+        if (isTopFrame) {
+          engine.updateReplayOverlay(step, total, msg);
+        }
+        chrome.runtime.sendMessage({
+          type: "TS_REPLAY_PROGRESS",
+          step: step,
+          total: total,
+          message: msg,
+        });
+      },
+
+      onSuccess: function (result) {
+        console.log("[FiBuKI] Replay SUCCESS:", result);
+        replayMode = false;
+        if (isTopFrame) {
+          engine.updateReplayOverlay(result.tier === 2 ? "Agent" : "Done", "", "Invoice downloaded!");
+          setTimeout(function () { engine.removeReplayOverlay(); }, 3000);
+        }
+        chrome.runtime.sendMessage({
+          type: "TS_REPLAY_SUCCESS",
+          result: result,
+        });
+        replayStateMachine = null;
+      },
+
+      onFailed: function (result) {
+        console.log("[FiBuKI] Replay FAILED:", result);
+        replayMode = false;
+        if (isTopFrame) {
+          engine.updateReplayOverlay(0, 0, "Replay failed: " + result.status);
+          setTimeout(function () { engine.removeReplayOverlay(); }, 5000);
+        }
+        chrome.runtime.sendMessage({
+          type: "TS_REPLAY_FAILED",
+          result: result,
+        });
+        replayStateMachine = null;
+      },
+
+      onAuthRequired: function () {
+        console.log("[FiBuKI] Replay: Auth required");
+        if (isTopFrame) {
+          engine.updateReplayOverlay(0, 0, "Login required — please sign in");
+        }
+        chrome.runtime.sendMessage({
+          type: "TS_REPLAY_AUTH_REQUIRED",
+          url: window.location.href,
+        });
+      },
+
+      onTier2Needed: function (failedAtStep, snapshot) {
+        console.log("[FiBuKI] Replay: Tier 2 needed at step", failedAtStep);
+        if (isTopFrame) {
+          engine.updateReplayOverlay(failedAtStep, replayStateMachine._totalSteps, "Calling AI agent...");
+        }
+        // Send snapshot to app for Tier 2 processing
+        // The app tab will call the replay-agent API and send commands back
+        chrome.runtime.sendMessage({
+          type: "TS_REPLAY_TIER2_NEEDED",
+          failedAtStep: failedAtStep,
+          snapshot: snapshot,
+          transactionId: message.transactionId,
+          transactionAmount: message.transactionAmount,
+          transactionDate: message.transactionDate,
+          transactionCurrency: message.transactionCurrency,
+          partnerName: message.partnerName,
+          recipe: message.recipe,
+        });
+      },
+    });
+
+    // Start the replay (resume from step if navigating back)
+    replayStateMachine.start(resumeFromStep);
+  });
+
+  // Handle Tier 2 commands from app tab (via background)
+  chrome.runtime.onMessage.addListener(function (message) {
+    if (!message || message.type !== "TS_REPLAY_TIER2_COMMANDS") return;
+    if (!replayStateMachine || !replayMode) return;
+
+    var commands = message.commands || [];
+    console.log("[FiBuKI] Executing Tier 2 commands:", commands.length);
+
+    replayStateMachine.executeTier2Commands(commands, function (success) {
+      if (success) {
+        // After agent commands, try to find invoice again
+        replayStateMachine.findAndDownloadInvoice();
+      }
+    });
+  });
+
+  // Handle PDF downloaded during replay
+  chrome.runtime.onMessage.addListener(function (message) {
+    if (!message || message.type !== "TS_REPLAY_PDF_DOWNLOADED") return;
+    if (!replayMode || !replayStateMachine) return;
+
+    console.log("[FiBuKI] Replay: PDF downloaded", message.sourceUrl);
+    // The download was intercepted and uploaded by background.js
+    // Trigger success
+    if (replayStateMachine.state !== "success") {
+      var engine = window.__tsReplayEngine;
+      replayStateMachine.state = engine.STATES.SUCCESS;
+      replayMode = false;
+      if (isTopFrame) {
+        engine.updateReplayOverlay(0, 0, "Invoice downloaded!");
+        setTimeout(function () { engine.removeReplayOverlay(); }, 3000);
+      }
+      chrome.runtime.sendMessage({
+        type: "TS_REPLAY_SUCCESS",
+        result: {
+          status: "success",
+          tier: replayStateMachine.tier,
+          durationMs: Date.now() - replayStateMachine.startTime,
+          transactionId: replayStateMachine.config.transactionId,
+          agentIterations: replayStateMachine.agentIterations,
+        },
+      });
+      replayStateMachine = null;
     }
   });
 

@@ -19,7 +19,8 @@ type AIFunction =
   | "searchQueryGeneration"
   | "emailAnalysis"
   | "batchMatching"
-  | "fileSearchQuery";
+  | "fileSearchQuery"
+  | "patternCoverageRetry";
 
 // Pricing per million tokens (USD) — used for internal cost tracking
 const AI_MODEL_PRICING: Record<string, { input: number; output: number }> = {

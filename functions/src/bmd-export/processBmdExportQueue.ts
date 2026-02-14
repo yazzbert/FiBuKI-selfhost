@@ -100,11 +100,14 @@ async function processBmdExport(
       date: Timestamp;
       amount: number;
       name?: string;
+      partner?: string;
       partnerId?: string;
       fileIds?: string[];
       vatRate?: number;
       vatAmount?: number;
       vatId?: string;
+      noReceiptCategoryId?: string | null;
+      noReceiptCategoryTemplateId?: string | null;
     }
 
     const txSnapshot = await txQuery.get();
@@ -113,14 +116,13 @@ async function processBmdExport(
       ...(doc.data() as Omit<TransactionDoc, "id">),
     }));
 
-    // Filter to only transactions with files if requested
+    // Filter to only complete transactions (files OR no-receipt category)
     if (onlyWithFiles) {
-      transactions = transactions.filter(
-        (tx) =>
-          tx.fileIds &&
-          Array.isArray(tx.fileIds) &&
-          (tx.fileIds as string[]).length > 0
-      );
+      transactions = transactions.filter((tx) => {
+        const hasFiles = tx.fileIds && Array.isArray(tx.fileIds) && tx.fileIds.length > 0;
+        const hasCategory = !!tx.noReceiptCategoryId;
+        return hasFiles || hasCategory;
+      });
     }
 
     await exportRef.update({
@@ -224,11 +226,17 @@ async function processBmdExport(
         date: tx.date as Timestamp,
         amount: tx.amount as number,
         name: tx.name as string | undefined,
+        partner: tx.partner as string | undefined,
+        partnerName: tx.partnerId
+          ? (partnersMap.get(tx.partnerId)?.name as string | undefined)
+          : undefined,
         partnerId: tx.partnerId as string | undefined,
         fileIds: tx.fileIds as string[] | undefined,
         vatRate: tx.vatRate as number | undefined,
         vatAmount: tx.vatAmount as number | undefined,
         vatId: tx.vatId as string | undefined,
+        noReceiptCategoryId: tx.noReceiptCategoryId,
+        noReceiptCategoryTemplateId: tx.noReceiptCategoryTemplateId,
       })
     );
 

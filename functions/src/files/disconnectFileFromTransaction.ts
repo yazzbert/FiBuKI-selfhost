@@ -82,9 +82,20 @@ export const disconnectFileFromTransactionCallable = createCallable<
     });
 
     // 3. Update transaction's fileIds array and potentially mark incomplete
+    const fileName = fileSnap.data()!.fileName || null;
     const transactionUpdate: Record<string, unknown> = {
       fileIds: FieldValue.arrayRemove(fileId),
       updatedAt: now,
+      automationHistory: FieldValue.arrayUnion({
+        type: "file_disconnected",
+        ranAt: now,
+        status: "completed",
+        actor: "manual" as const,
+        level: "decision" as const,
+        fileId,
+        fileName,
+        summary: `File "${fileName || fileId}" disconnected`,
+      }),
     };
 
     // Mark incomplete only if no files remain AND no no-receipt category

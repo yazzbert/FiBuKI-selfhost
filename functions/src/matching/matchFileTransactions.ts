@@ -34,6 +34,7 @@ import {
 } from "./transactionScoring";
 import { AutomationMeta } from "../automation/types";
 import { checkAIBudget } from "../billing/checkAIBudget";
+import { isPassiveMode } from "../utils/checkAutomationMode";
 
 // =============================================================================
 // AUTOMATION METADATA
@@ -560,6 +561,33 @@ export async function runTransactionMatching(
     } else {
       console.log(`[TxMatch] No matches found.`);
     }
+  }
+
+  // In passive mode: store suggestions but skip auto-connecting and agentic workers
+  const passive = await isPassiveMode(userId);
+  if (passive) {
+    console.log(`[TxMatch] Passive mode for user ${userId} — storing suggestions only, skipping auto-connect`);
+
+    const suggestions: TransactionSuggestion[] = matches.map((m) => ({
+      transactionId: m.transactionId,
+      confidence: m.confidence,
+      matchSources: m.matchSources,
+      preview: m.preview,
+    }));
+
+    await db.collection("files").doc(fileId).update({
+      transactionMatchComplete: true,
+      transactionMatchedAt: Timestamp.now(),
+      transactionSuggestions: suggestions,
+      updatedAt: Timestamp.now(),
+    });
+
+    const elapsed = Date.now() - t0;
+    console.log(
+      `[TxMatch] Passive mode complete for ${fileData.fileName || fileId}: ` +
+        `${suggestions.length} suggestions stored (${elapsed}ms)`
+    );
+    return;
   }
 
   // Separate auto-matches from suggestions

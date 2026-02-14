@@ -16,8 +16,15 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "all_frames": false,
+      "js": ["main-world-hooks.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
       "all_frames": true,
-      "js": ["content.js"],
+      "js": ["lib/amount-parser.js", "lib/date-parser.js", "lib/replay-engine.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

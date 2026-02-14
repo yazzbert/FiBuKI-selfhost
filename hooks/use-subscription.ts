@@ -84,5 +84,7 @@ export function useSubscription() {
     adminOverride: subscription?.adminOverride ?? null,
     isFreePlanOverride: subscription?.adminOverride === "free_plan",
     isPlanTester: subscription?.adminOverride === "plan_tester",
+    // Automation mode
+    automationMode: (subscription?.automationMode as "active" | "passive") ?? "active",
   };
 }

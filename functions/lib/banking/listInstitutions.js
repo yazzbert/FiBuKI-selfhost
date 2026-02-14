@@ -46,7 +46,7 @@ exports.listBankInstitutionsCallable = (0, createCallable_1.createCallable)({
     const accessToken = tokenData.access_token;
     // List banks from finAPI
     const banksUrl = new URL("https://sandbox.finapi.io/api/v2/banks");
-    banksUrl.searchParams.set("countryCode", country.toUpperCase());
+    banksUrl.searchParams.set("location", country.toUpperCase());
     banksUrl.searchParams.set("perPage", "500");
     banksUrl.searchParams.set("isSupported", "true");
     const banksResponse = await fetch(banksUrl.toString(), {

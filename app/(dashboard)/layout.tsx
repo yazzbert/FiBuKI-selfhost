@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Receipt, Building2, Users, Settings, Activity, Globe, Files, Tag, Link2, User, LogOut, UserPlus, Palette, Shield, Zap, FileText, FlaskConical, Download, CreditCard } from "lucide-react";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import Link from "next/link";
 import { FibukiMascot } from "@/components/ui/fibuki-mascot";
 import { cn } from "@/lib/utils";
@@ -199,6 +200,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
             <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded truncate max-w-[200px]">
               {user?.email}
             </span>
+            <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon">

@@ -42,16 +42,16 @@ function formatValue(value: number, dataKey: string): string {
 }
 
 const CHART_COLORS: Record<string, string> = {
-  calls: "#3b82f6", // blue
-  cost: "#22c55e", // green
-  inputTokens: "#f59e0b", // amber
-  outputTokens: "#8b5cf6", // violet
-  errorCount: "#ef4444", // red
-  successCount: "#22c55e", // green
+  calls: "var(--color-chart-1)",
+  cost: "var(--color-chart-2)",
+  inputTokens: "var(--color-chart-3)",
+  outputTokens: "var(--color-chart-4)",
+  errorCount: "var(--color-chart-5)",
+  successCount: "var(--color-chart-2)",
 };
 
 export function UsageChart({ data, type, dataKey }: UsageChartProps) {
-  const color = CHART_COLORS[dataKey] || "#3b82f6";
+  const color = CHART_COLORS[dataKey] || "var(--color-chart-1)";
 
   const formattedData = data.map((item) => ({
     ...item,

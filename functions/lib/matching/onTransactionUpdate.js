@@ -37,6 +37,7 @@ exports.onTransactionUpdate = exports.AUTOMATION_META = void 0;
 const firestore_1 = require("firebase-functions/v2/firestore");
 const firestore_2 = require("firebase-admin/firestore");
 const category_matcher_1 = require("../utils/category-matcher");
+const checkAutomationMode_1 = require("../utils/checkAutomationMode");
 // =============================================================================
 // AUTOMATION METADATA
 // =============================================================================
@@ -158,34 +159,82 @@ exports.onTransactionUpdate = (0, firestore_1.onDocumentUpdated)({
     if (!partnerWasAssigned && !partnerChanged) {
         return;
     }
+    // Skip automations for auto-matched transactions — pattern learning pipeline
+    // (rematchUnassignedTransactions) handles these in bulk. Running receipt search
+    // and category matching for each auto-assigned tx would create N redundant invocations.
+    if (after.partnerMatchedBy === "auto") {
+        console.log(`[onTransactionUpdate] Skipping automations for auto-matched tx ${transactionId}`);
+        return;
+    }
     const userId = after.userId;
     const hasFiles = after.fileIds && after.fileIds.length > 0;
     const hasCategory = !!after.noReceiptCategoryId;
     console.log(`Partner ${after.partnerId} assigned to transaction ${transactionId}, triggering automations`);
-    // Queue receipt search if transaction has no files AND no no-receipt category
-    // Transactions with a no-receipt category are considered complete
-    if (!hasFiles && !hasCategory) {
-        try {
-            const { queueReceiptSearchForTransaction } = await Promise.resolve().then(() => __importStar(require("../workers/runReceiptSearchForTransaction")));
-            queueReceiptSearchForTransaction({
-                transactionId,
-                userId,
-                partnerId: after.partnerId,
-            })
-                .then((result) => {
-                if (result.skipped) {
-                    console.log(`[onTransactionUpdate] Receipt search skipped: ${result.skipReason}`);
-                }
-                else {
-                    console.log(`[onTransactionUpdate] Receipt search queued for ${transactionId}`);
-                }
+    // Fetch partner doc once — reused by reconciliation check + category matching
+    let partnerDoc = null;
+    try {
+        partnerDoc = await db.collection("partners").doc(after.partnerId).get();
+    }
+    catch (err) {
+        console.error(`[onTransactionUpdate] Failed to fetch partner ${after.partnerId}:`, err);
+    }
+    // === RECONCILIATION CHECK ===
+    // When a source partner is assigned, check if this bank tx pays a linked card
+    if (partnerDoc?.exists) {
+        const identitySourceField = partnerDoc.data().identitySourceField;
+        if (identitySourceField?.startsWith("source:")) {
+            const cardSourceId = identitySourceField.replace("source:", "");
+            console.log(`[onTransactionUpdate] Source partner detected for tx ${transactionId}, ` +
+                `checking reconciliation with card source ${cardSourceId}`);
+            // Fire-and-forget reconciliation (don't block other automations)
+            Promise.resolve().then(() => __importStar(require("../reconciliation/processReconciliation"))).then(({ tryReconcileTransaction }) => tryReconcileTransaction(userId, transactionId, {
+                amount: after.amount,
+                date: after.date,
+                name: after.name || "",
+                sourceId: after.sourceId,
+                noReceiptCategoryTemplateId: after.noReceiptCategoryTemplateId || null,
+                partnerId: after.partnerId || null,
+            }, cardSourceId))
+                .then(() => {
+                console.log(`[onTransactionUpdate] Reconciliation check complete for ${transactionId}`);
             })
                 .catch((err) => {
-                console.error(`[onTransactionUpdate] Failed to queue receipt search:`, err);
+                console.error(`[onTransactionUpdate] Reconciliation check failed:`, err);
             });
         }
-        catch (err) {
-            console.error(`[onTransactionUpdate] Failed to import receipt search module:`, err);
+    }
+    // === END RECONCILIATION CHECK ===
+    // Queue receipt search if transaction has no files AND no no-receipt category
+    // Transactions with a no-receipt category are considered complete
+    // Skip in passive mode (AI-powered search is opt-in only)
+    if (!hasFiles && !hasCategory) {
+        const passive = await (0, checkAutomationMode_1.isPassiveMode)(userId);
+        if (passive) {
+            console.log(`[onTransactionUpdate] Passive mode — skipping receipt search for ${transactionId}`);
+        }
+        else {
+            try {
+                const { queueReceiptSearchForTransaction } = await Promise.resolve().then(() => __importStar(require("../workers/runReceiptSearchForTransaction")));
+                queueReceiptSearchForTransaction({
+                    transactionId,
+                    userId,
+                    partnerId: after.partnerId,
+                })
+                    .then((result) => {
+                    if (result.skipped) {
+                        console.log(`[onTransactionUpdate] Receipt search skipped: ${result.skipReason}`);
+                    }
+                    else {
+                        console.log(`[onTransactionUpdate] Receipt search queued for ${transactionId}`);
+                    }
+                })
+                    .catch((err) => {
+                    console.error(`[onTransactionUpdate] Failed to queue receipt search:`, err);
+                });
+            }
+            catch (err) {
+                console.error(`[onTransactionUpdate] Failed to import receipt search module:`, err);
+            }
         }
     }
     // Skip category matching if already has category or files
@@ -236,21 +285,13 @@ exports.onTransactionUpdate = (0, firestore_1.onDocumentUpdated)({
         if (!(0, category_matcher_1.isEligibleForCategoryMatching)(transaction)) {
             return;
         }
-        // Fetch partner's category match rules if partner is assigned
+        // Use partner's category match rules (from already-fetched partnerDoc)
         const options = {};
-        if (after.partnerId) {
-            try {
-                const partnerDoc = await db.collection("partners").doc(after.partnerId).get();
-                if (partnerDoc.exists) {
-                    const partnerData = partnerDoc.data();
-                    if (partnerData?.categoryMatchRules && partnerData.categoryMatchRules.length > 0) {
-                        options.partnerCategoryRules = partnerData.categoryMatchRules;
-                        console.log(`Loaded ${options.partnerCategoryRules.length} category rules for partner ${after.partnerId}`);
-                    }
-                }
-            }
-            catch (err) {
-                console.error(`Failed to fetch partner category rules:`, err);
+        if (partnerDoc?.exists) {
+            const partnerData = partnerDoc.data();
+            if (partnerData?.categoryMatchRules && partnerData.categoryMatchRules.length > 0) {
+                options.partnerCategoryRules = partnerData.categoryMatchRules;
+                console.log(`Loaded ${options.partnerCategoryRules.length} category rules for partner ${after.partnerId}`);
             }
         }
         // Match transaction to categories
@@ -281,6 +322,17 @@ exports.onTransactionUpdate = (0, firestore_1.onDocumentUpdated)({
                     });
                     console.log(`Linked partner ${after.partnerId} to category ${topMatch.templateId}`);
                 }
+                // Log category auto-match to activity log
+                updates.automationHistory = firestore_2.FieldValue.arrayUnion({
+                    type: "category_matched",
+                    ranAt: firestore_2.Timestamp.now(),
+                    status: "completed",
+                    actor: "auto",
+                    level: "outcome",
+                    categoryName: topMatch.templateId,
+                    confidence: topMatch.confidence,
+                    summary: `Category "${topMatch.templateId}" auto-assigned (${topMatch.confidence}%)`,
+                });
                 console.log(`Auto-matched transaction ${transactionId} to category ${topMatch.templateId} (${topMatch.confidence}%)`);
             }
             else {

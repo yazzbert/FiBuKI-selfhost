@@ -59,7 +59,7 @@ function IntegrationsContent() {
         : `${gmailIntegrations.length} accounts`;
 
   const gmailNeedsAttention = gmailIntegrations.some(
-    (i) => i.needsReauth || (i.tokenExpiresAt?.toDate() && i.tokenExpiresAt.toDate() < new Date()) || i.lastSyncStatus === "failed"
+    (i) => i.needsReauth || i.lastSyncStatus === "failed"
   );
 
   const gmailBadge = gmailNeedsAttention
@@ -116,9 +116,7 @@ function IntegrationsContent() {
 
     // Gmail accounts needing reauth or with failed syncs
     for (const i of gmailIntegrations) {
-      const tokenExpiry = i.tokenExpiresAt?.toDate();
-      const isExpired = tokenExpiry && tokenExpiry < new Date();
-      if (i.needsReauth || isExpired) {
+      if (i.needsReauth) {
         items.push({
           message: `Gmail (${i.email}) needs to be reconnected`,
           href: `/integrations/${i.id}`,
@@ -184,32 +182,32 @@ function IntegrationsContent() {
           </h3>
           <div className="space-y-2">
             <IntegrationCard
-              icon={<Globe className="h-4 w-4 text-emerald-700" />}
-              iconBg="bg-emerald-100"
+              icon={<Globe className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />}
+              iconBg="bg-emerald-100 dark:bg-emerald-900/40"
               name="Browser Plugin"
               status={extensionStatus}
               badge={extensionBadge}
               href="/integrations/browser"
             />
             <IntegrationCard
-              icon={<Mail className="h-4 w-4 text-red-600" />}
-              iconBg="bg-red-100"
+              icon={<Mail className="h-4 w-4 text-red-600 dark:text-red-400" />}
+              iconBg="bg-red-100 dark:bg-red-900/40"
               name="Gmail"
               status={gmailStatus}
               badge={gmailBadge}
               href="/integrations/gmail"
             />
             <IntegrationCard
-              icon={<Inbox className="h-4 w-4 text-purple-600" />}
-              iconBg="bg-purple-100"
+              icon={<Inbox className="h-4 w-4 text-purple-600 dark:text-purple-400" />}
+              iconBg="bg-purple-100 dark:bg-purple-900/40"
               name="Email Forwarding"
               status={emailForwardingStatus}
               badge={emailForwardingBadge}
               href="/integrations/email-inbound"
             />
             <IntegrationCard
-              icon={<Mail className="h-4 w-4 text-blue-600" />}
-              iconBg="bg-blue-100"
+              icon={<Mail className="h-4 w-4 text-blue-600 dark:text-blue-400" />}
+              iconBg="bg-blue-100 dark:bg-blue-900/40"
               name="Microsoft Outlook"
               status="Connect your Outlook account"
               badge={{ label: "Coming Soon", variant: "muted" }}
@@ -226,16 +224,16 @@ function IntegrationsContent() {
           </h3>
           <div className="space-y-2">
             <IntegrationCard
-              icon={<FileArchive className="h-4 w-4 text-orange-600" />}
-              iconBg="bg-orange-100"
+              icon={<FileArchive className="h-4 w-4 text-orange-600 dark:text-orange-400" />}
+              iconBg="bg-orange-100 dark:bg-orange-900/40"
               name="BMD NTCS Export"
               status="Export transactions for BMD"
               href="/integrations/bmd-export"
             />
             {isAdmin && (
               <IntegrationCard
-                icon={<FileText className="h-4 w-4 text-blue-600" />}
-                iconBg="bg-blue-100"
+                icon={<FileText className="h-4 w-4 text-blue-600 dark:text-blue-400" />}
+                iconBg="bg-blue-100 dark:bg-blue-900/40"
                 name="FinanzOnline"
                 status={finanzonlineStatus}
                 badge={finanzonlineBadge}
@@ -252,8 +250,8 @@ function IntegrationsContent() {
           </h3>
           <div className="space-y-2">
             <IntegrationCard
-              icon={<Bot className="h-4 w-4 text-violet-600" />}
-              iconBg="bg-violet-100"
+              icon={<Bot className="h-4 w-4 text-violet-600 dark:text-violet-400" />}
+              iconBg="bg-violet-100 dark:bg-violet-900/40"
               name="AI Agents"
               status={apiKeysStatus}
               badge={apiKeysBadge}

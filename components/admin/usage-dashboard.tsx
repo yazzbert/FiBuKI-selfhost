@@ -304,7 +304,7 @@ export function UsageDashboard() {
               <div className="space-y-3">
                 {functionBreakdown.map((item) => {
                   const Icon = FUNCTION_ICONS[item.function] || Activity;
-                  const color = FUNCTION_COLORS[item.function] || "bg-gray-500";
+                  const color = FUNCTION_COLORS[item.function] || "bg-muted-foreground";
                   const percentage = summary.totalCalls > 0
                     ? (item.calls / summary.totalCalls) * 100
                     : 0;

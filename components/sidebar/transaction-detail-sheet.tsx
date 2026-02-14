@@ -59,15 +59,9 @@ export function TransactionDetailSheet({
 
                 <Separator />
 
-                {/* Edit History Section */}
+                {/* Activity Log Section */}
                 <div>
-                  <TransactionHistory
-                    transactionId={transaction.id}
-                    onRollback={() => {
-                      // Trigger a refresh of the transaction data
-                      // The parent component will handle this via its own update mechanism
-                    }}
-                  />
+                  <TransactionHistory transaction={transaction} />
                 </div>
               </div>
             </div>

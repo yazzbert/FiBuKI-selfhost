@@ -3,10 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
+import { auth } from "@/lib/firebase/config";
 import {
   AlertCircle,
   ArrowLeft,
+  Bot,
   Check,
+  CheckCircle2,
   Clock,
   ExternalLink,
   FileCheck,
@@ -14,9 +17,12 @@ import {
   FileWarning,
   Globe,
   Loader2,
+  Lock,
   Plug,
   RefreshCw,
   Building2,
+  XCircle,
+  Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,19 +30,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useBrowserExtensionStatus } from "@/hooks/use-browser-extension";
 import { cn } from "@/lib/utils";
 import { usePartners } from "@/hooks/use-partners";
-import { InvoiceSource } from "@/types/partner";
+import { BrowserRecipe } from "@/types/partner";
 import Link from "next/link";
-
-type SourceStatus = "active" | "login_required" | "error";
-
-interface BrowserSource {
-  id: string;
-  url: string;
-  status: SourceStatus;
-  lastRunAt?: Date;
-  lastRunFiles?: number;
-  lastError?: string;
-}
 
 type PullStatus = "completed" | "error" | "login_required";
 type PullStatusUpdate = "running" | PullStatus;
@@ -61,8 +56,8 @@ function createId(prefix: string, index: number) {
   return `${prefix}_${Date.now()}_${index}`;
 }
 
-// Extended source with partner info for display
-interface PartnerInvoiceSource extends InvoiceSource {
+// Extended recipe with partner info for display
+interface PartnerBrowserRecipe extends BrowserRecipe {
   partnerId: string;
   partnerName: string;
 }
@@ -81,21 +76,21 @@ export default function BrowserIntegrationPage() {
   const loadingHistoryRef = useRef(false);
   const timeoutsRef = useRef<Record<string, number>>({});
 
-  // Aggregate all invoice sources from all partners
-  const allSources = useMemo(() => {
-    const sources: PartnerInvoiceSource[] = [];
+  // Aggregate all browser recipes from all partners (includes bookmarks + recorded recipes)
+  const allRecipes = useMemo(() => {
+    const recipes: PartnerBrowserRecipe[] = [];
     for (const partner of partners) {
-      if (partner.invoiceSources) {
-        for (const source of partner.invoiceSources) {
-          sources.push({
-            ...source,
+      if (partner.browserRecipes) {
+        for (const recipe of partner.browserRecipes) {
+          recipes.push({
+            ...recipe,
             partnerId: partner.id,
             partnerName: partner.name,
           });
         }
       }
     }
-    return sources;
+    return recipes;
   }, [partners]);
 
   useEffect(() => {
@@ -128,24 +123,26 @@ export default function BrowserIntegrationPage() {
     const totalDownloads = history.reduce((sum, record) => sum + record.filesDownloaded, 0);
     const successfulRuns = history.filter((record) => record.status === "completed").length;
     const errorRuns = history.filter((record) => record.status !== "completed").length;
-    return { totalDownloads, successfulRuns, errorRuns, sourceCount: allSources.length };
-  }, [history, allSources]);
+    const bookmarkCount = allRecipes.filter((r) => !r.recordedActions || r.recordedActions.length === 0).length;
+    const recipeCount = allRecipes.length - bookmarkCount;
+    return { totalDownloads, successfulRuns, errorRuns, bookmarkCount, recipeCount, totalCount: allRecipes.length };
+  }, [history, allRecipes]);
 
   const clearRunning = () => {
     setHistory((prev) => prev.filter((record) => record.status !== "running"));
     setRunningIds(new Set());
   };
 
-  const handleManualPull = (source: PartnerInvoiceSource) => {
-    if (runningIds.has(source.id)) return;
+  const handleManualPull = async (recipe: PartnerBrowserRecipe) => {
+    if (runningIds.has(recipe.id)) return;
     const runId = createId("run", history.length);
     const startedAt = new Date();
-    setRunningIds((prev) => new Set(prev).add(source.id));
+    setRunningIds((prev) => new Set(prev).add(recipe.id));
     setHistory((prev) => [
       {
         id: runId,
-        sourceId: source.id,
-        sourceUrl: source.url,
+        sourceId: recipe.id,
+        sourceUrl: recipe.startUrl,
         status: "running",
         filesFound: 0,
         filesDownloaded: 0,
@@ -154,20 +151,24 @@ export default function BrowserIntegrationPage() {
       },
       ...prev,
     ]);
-    let visibleUrl = source.url;
+    let visibleUrl = recipe.startUrl;
     try {
-      const parsed = new URL(source.url);
+      const parsed = new URL(recipe.startUrl);
       parsed.hash = `ts_run=${runId}`;
       visibleUrl = parsed.toString();
     } catch {
-      visibleUrl = source.url;
+      visibleUrl = recipe.startUrl;
     }
+    const idToken = auth.currentUser
+      ? await auth.currentUser.getIdToken()
+      : null;
     window.open(visibleUrl, `ts_pull_${runId}`, "noopener,noreferrer");
     window.postMessage(
       {
         type: "TAXSTUDIO_VISIBLE_PULL",
         runId,
-        url: source.url,
+        url: recipe.startUrl,
+        authToken: idToken,
       },
       "*"
     );
@@ -189,7 +190,7 @@ export default function BrowserIntegrationPage() {
       );
       setRunningIds((prev) => {
         const next = new Set(prev);
-        next.delete(source.id);
+        next.delete(recipe.id);
         return next;
       });
     }, 30000);
@@ -343,7 +344,7 @@ export default function BrowserIntegrationPage() {
                 <CardTitle className="text-base">Import Statistics</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <div className="text-center p-4 rounded-lg bg-muted">
                     <FileText className="h-5 w-5 mx-auto mb-2 text-muted-foreground" />
                     <div className="text-2xl font-semibold">{totals.totalDownloads}</div>
@@ -368,67 +369,65 @@ export default function BrowserIntegrationPage() {
                     <div className="text-xs text-muted-foreground">Errors</div>
                   </div>
                   <div className="text-center p-4 rounded-lg bg-muted">
-                    <Clock className="h-5 w-5 mx-auto mb-2 text-muted-foreground" />
-                    <div className="text-2xl font-semibold">{totals.sourceCount}</div>
-                    <div className="text-xs text-muted-foreground">Sources</div>
+                    <Globe className="h-5 w-5 mx-auto mb-2 text-muted-foreground" />
+                    <div className="text-2xl font-semibold">{totals.bookmarkCount}</div>
+                    <div className="text-xs text-muted-foreground">Bookmarks</div>
+                  </div>
+                  <div className="text-center p-4 rounded-lg bg-muted">
+                    <Bot className="h-5 w-5 mx-auto mb-2 text-muted-foreground" />
+                    <div className="text-2xl font-semibold">{totals.recipeCount}</div>
+                    <div className="text-xs text-muted-foreground">Recipes</div>
                   </div>
                 </div>
               </CardContent>
             </Card>
 
+          {/* Browser Automations Card — unified list of bookmarks + recipes */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Invoice Sources</CardTitle>
-              <Button size="sm" variant="outline" asChild>
-                <Link href="/partners">
-                  <Building2 className="h-4 w-4 mr-2" />
-                  Manage in Partners
-                </Link>
-              </Button>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Bot className="h-4 w-4" />
+                Browser Automations
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary" className="text-xs">
+                  {allRecipes.length}
+                </Badge>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href="/partners">
+                    <Building2 className="h-4 w-4 mr-2" />
+                    Manage in Partners
+                  </Link>
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="mb-4 rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                Invoice sources are now managed per-partner. Open a partner to add or edit their invoice sources.
-              </div>
-              {allSources.length === 0 ? (
+              {allRecipes.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
-                  <Globe className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p>No invoice sources configured</p>
-                  <p className="text-sm mt-1">Add sources to partners to enable invoice pulling</p>
+                  <Bot className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p>No browser automations configured</p>
+                  <p className="text-sm mt-1">Add sources to partners or use Learn Mode to create recipes</p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {allSources.map((source) => {
-                    let domain = source.url;
-                    let pathname = "";
-                    try {
-                      const parsed = new URL(source.url);
-                      domain = parsed.hostname.replace(/^www\./, "");
-                      pathname = parsed.pathname + parsed.search;
-                    } catch {
-                      // Keep original URL if parsing fails
-                    }
-                    const statusMap: Record<string, SourceStatus> = {
-                      active: "active",
-                      paused: "active",
-                      error: "error",
-                      needs_login: "login_required",
-                    };
-                    const displayStatus = statusMap[source.status] || "active";
+                  {allRecipes.map((recipe) => {
+                    const isBookmark = !recipe.recordedActions || recipe.recordedActions.length === 0;
+                    const statusResult = recipe.lastReplayResult;
+                    const recipeStatus = recipe.status || "active";
                     return (
                       <div
-                        key={source.id}
+                        key={`${recipe.partnerId}_${recipe.id}`}
                         className={cn(
-                          "group relative rounded-lg border bg-card transition-colors hover:bg-muted/50",
-                          displayStatus === "login_required" && "border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-900",
-                          displayStatus === "error" && "border-red-200 bg-red-50/50 dark:bg-red-950/20 dark:border-red-900"
+                          "rounded-lg border bg-card transition-colors hover:bg-muted/50",
+                          recipeStatus === "needs_login" && "border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-900",
+                          recipeStatus === "error" && "border-red-200 bg-red-50/50 dark:bg-red-950/20 dark:border-red-900"
                         )}
                       >
                         <div className="flex items-center gap-3 p-3">
                           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted overflow-hidden">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
+                              src={`https://www.google.com/s2/favicons?domain=${recipe.domain}&sz=32`}
                               alt=""
                               className="h-5 w-5"
                               onError={(e) => {
@@ -440,68 +439,87 @@ export default function BrowserIntegrationPage() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm truncate">{domain}</span>
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "shrink-0 text-[10px] px-1.5 py-0",
-                                  source.status === "active" && "border-green-500/50 text-green-600 bg-green-50 dark:bg-green-950/30",
-                                  source.status === "paused" && "border-gray-500/50 text-gray-600 bg-gray-50 dark:bg-gray-950/30",
-                                  source.status === "needs_login" && "border-amber-500/50 text-amber-600 bg-amber-50 dark:bg-amber-950/30",
-                                  source.status === "error" && "border-red-500/50 text-red-600 bg-red-50 dark:bg-red-950/30"
-                                )}
-                              >
-                                {source.status === "active" && "Active"}
-                                {source.status === "paused" && "Paused"}
-                                {source.status === "needs_login" && "Login required"}
-                                {source.status === "error" && "Error"}
-                              </Badge>
+                              <span className="font-medium text-sm truncate">
+                                {recipe.label || recipe.domain}
+                              </span>
+                              {isBookmark ? (
+                                <Badge variant="outline" className="shrink-0 text-[10px] px-1.5 py-0">
+                                  Bookmark
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary" className="shrink-0 text-[10px] px-1.5 py-0">
+                                  {recipe.recordedActions.length} steps
+                                </Badge>
+                              )}
+                              {recipe.requiresAuth && (
+                                <Lock className="h-3 w-3 text-orange-500 flex-shrink-0" />
+                              )}
+                              {recipeStatus !== "active" && (
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "shrink-0 text-[10px] px-1.5 py-0",
+                                    recipeStatus === "paused" && "border-gray-500/50 text-gray-600",
+                                    recipeStatus === "needs_login" && "border-amber-500/50 text-amber-600",
+                                    recipeStatus === "error" && "border-red-500/50 text-red-600"
+                                  )}
+                                >
+                                  {recipeStatus === "paused" && "Paused"}
+                                  {recipeStatus === "needs_login" && "Login required"}
+                                  {recipeStatus === "error" && "Error"}
+                                </Badge>
+                              )}
+                              {!isBookmark && statusResult && (
+                                statusResult.status === "success" ? (
+                                  <Badge variant="outline" className="shrink-0 text-[10px] px-1.5 py-0 border-green-500/50 text-green-600 bg-green-50 dark:bg-green-950/30">
+                                    <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
+                                    Success
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="shrink-0 text-[10px] px-1.5 py-0 border-red-500/50 text-red-600 bg-red-50 dark:bg-red-950/30">
+                                    <XCircle className="h-2.5 w-2.5 mr-0.5" />
+                                    Failed
+                                  </Badge>
+                                )
+                              )}
+                              {!isBookmark && recipe.autoRun && (
+                                <span className="flex items-center gap-0.5 text-[10px] text-green-600">
+                                  <Zap className="h-2.5 w-2.5" />
+                                  Auto
+                                </span>
+                              )}
                             </div>
-                            <p className="text-xs text-muted-foreground truncate mt-0.5" title={source.url}>
-                              {pathname || "/"}
-                            </p>
                             <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                               <Link
-                                href={`/partners?id=${source.partnerId}`}
+                                href={`/partners?id=${recipe.partnerId}`}
                                 className="text-primary hover:underline"
                               >
-                                {source.partnerName}
+                                {recipe.partnerName}
                               </Link>
-                              <span className="text-muted-foreground/50">·</span>
-                              <span>
-                                {source.lastFetchedAt
-                                  ? `Last: ${formatDistanceToNow(source.lastFetchedAt.toDate(), { addSuffix: true })}`
-                                  : "Never pulled"}
-                              </span>
+                              {!isBookmark && (
+                                <>
+                                  <span className="text-muted-foreground/50">·</span>
+                                  <span>{recipe.recordedActions.length} steps</span>
+                                </>
+                              )}
+                              {recipe.useCount > 0 && (
+                                <>
+                                  <span className="text-muted-foreground/50">·</span>
+                                  <span>Used {recipe.useCount}x</span>
+                                </>
+                              )}
+                              {recipe.lastUsedAt && (
+                                <>
+                                  <span className="text-muted-foreground/50">·</span>
+                                  <span>Last: {formatDistanceToNow(recipe.lastUsedAt.toDate(), { addSuffix: true })}</span>
+                                </>
+                              )}
                             </div>
-                            {source.lastError && (
+                            {recipe.lastError && (
                               <p className="text-[11px] text-amber-600 dark:text-amber-500 mt-1">
-                                {source.lastError}
+                                {recipe.lastError}
                               </p>
                             )}
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            {source.status === "needs_login" && (
-                              <Button variant="ghost" size="sm" className="h-8 px-2" asChild>
-                                <a href={source.url} target="_blank" rel="noreferrer">
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                </a>
-                              </Button>
-                            )}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8"
-                              onClick={() => handleManualPull(source)}
-                              disabled={runningIds.has(source.id) || source.status === "paused"}
-                            >
-                              {runningIds.has(source.id) ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <RefreshCw className="h-3.5 w-3.5" />
-                              )}
-                              <span className="ml-1.5">Pull</span>
-                            </Button>
                           </div>
                         </div>
                       </div>

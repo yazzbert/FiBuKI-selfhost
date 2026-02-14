@@ -444,14 +444,10 @@ export interface UserPartner {
   invoiceLinksUpdatedAt?: Timestamp;
 
   /**
-   * Invoice sources for automated periodic fetching.
-   * URLs where this partner's invoices can be downloaded.
-   * Managed in the partner detail panel's Files tab.
+   * @deprecated Migrated to browserRecipes[]. Kept temporarily for migration.
+   * Use the migrateInvoiceSources callable to convert these to bookmark recipes.
    */
   invoiceSources?: InvoiceSource[];
-
-  /** When invoice sources were last updated */
-  invoiceSourcesUpdatedAt?: Timestamp;
 
   /**
    * Browser recipes for automated invoice fetching.
@@ -728,7 +724,8 @@ export interface RecordedAction {
     | "type"
     | "scroll"
     | "pdf_detected"
-    | "mark_invoice_page";
+    | "mark_invoice_page"
+    | "selectInvoice";
   url: string;
   /** Target URL for navigate actions */
   targetUrl?: string;
@@ -756,6 +753,14 @@ export interface RecordedAction {
   };
   /** Milliseconds since learn session start */
   relativeTimeMs: number;
+  /** Whether this action was recorded by the user or by the Tier 2 agent */
+  source?: "user" | "agent";
+  /** Snapshot of the invoice list at time of marking (for replay matching) */
+  invoiceListSnapshot?: {
+    items: { text: string; date?: string; amount?: string; selector?: string }[];
+    containerSelector?: string;
+    selectionType?: "month" | "exact_date" | "amount" | "amount_and_date";
+  };
 }
 
 /**
@@ -788,7 +793,7 @@ export interface BrowserRecipe {
   domain: string;
   /** Human-readable label (e.g., "Google Cloud Billing") */
   label?: string;
-  /** Raw recorded user actions from learn mode */
+  /** Raw recorded user actions from learn mode (empty array = simple bookmark) */
   recordedActions: RecordedAction[];
   /** AI-generated strategy for replay (generated after save) */
   strategy?: BrowserStrategy;
@@ -804,8 +809,112 @@ export interface BrowserRecipe {
   lastFailedAt?: Timestamp;
   /** Whether to automatically run this recipe on new transactions */
   autoRun: boolean;
+  /** Detected invoice table metadata (for faster invoice matching during replay) */
+  invoiceTableMeta?: InvoiceTableMeta;
+  /** URL of the invoice list page (for direct navigation during replay) */
+  invoiceListUrl?: string;
+  /** Result of the last replay attempt */
+  lastReplayResult?: ReplayResult;
+  /** Actions learned by the Tier 2 LLM agent (appended to recordedActions during replay) */
+  agentActions?: RecordedAction[];
   createdAt: Timestamp;
   updatedAt: Timestamp;
+
+  // === Scheduling fields (absorbed from InvoiceSource) ===
+
+  /** Current status of this recipe/bookmark */
+  status?: InvoiceSourceStatus;
+  /** Inferred invoice frequency in days (e.g., 30 for monthly) */
+  inferredFrequencyDays?: number;
+  /** How frequency was determined */
+  frequencySource?: FrequencySource;
+  /** Number of invoices used to infer frequency */
+  frequencyDataPoints?: number;
+  /** When the next fetch should occur (calculated from frequency) */
+  nextExpectedAt?: Timestamp;
+  /** Number of successful fetches */
+  successfulFetches?: number;
+  /** Number of failed fetch attempts */
+  failedFetches?: number;
+  /** How this recipe was created */
+  sourceType?: "manual" | "email_link" | "browser_detected" | "learn_mode";
+  /** If converted from an email invoice link, the original message ID */
+  fromInvoiceLinkMessageId?: string;
+  /** Last error message if status is error */
+  lastError?: string;
+}
+
+// ============================================================================
+// Invoice Table Metadata (Replay)
+// ============================================================================
+
+/**
+ * Metadata about an invoice table detected during recording or replay.
+ * Used to speed up invoice matching in subsequent replays.
+ */
+export interface InvoiceTableMeta {
+  /** CSS selector for the table container */
+  containerSelector: string;
+  /** CSS selector for individual rows */
+  rowSelector: string;
+  /** Column classification */
+  columns: InvoiceTableColumn[];
+  /** URL where the table was found */
+  url: string;
+  /** How invoices are best matched in this list */
+  selectionType?: "month" | "exact_date" | "amount" | "amount_and_date";
+  /** Sample items from the list at recording time (for debugging/cold start) */
+  sampleItems?: { text: string; date?: string; amount?: string }[];
+}
+
+export interface InvoiceTableColumn {
+  /** Column index (0-based) */
+  index: number;
+  /** Optional CSS selector for cells in this column */
+  selector?: string;
+  /** Semantic meaning of the column */
+  semantic:
+    | "amount"
+    | "date"
+    | "description"
+    | "downloadAction"
+    | "status"
+    | "unknown";
+  /** Example values from this column (for debugging) */
+  exampleValues?: string[];
+}
+
+// ============================================================================
+// Replay Result
+// ============================================================================
+
+/**
+ * Result of a browser recipe replay attempt.
+ * Stored on BrowserRecipe.lastReplayResult.
+ */
+export interface ReplayResult {
+  /** Outcome of the replay */
+  status:
+    | "success"
+    | "failed_element"
+    | "failed_match"
+    | "failed_auth"
+    | "failed_timeout"
+    | "failed_download";
+  /** Which tier succeeded (1 = deterministic, 2 = LLM agent) */
+  tier: 1 | 2;
+  /** Step number where replay failed (if applicable) */
+  failedAtStep?: number;
+  /** Total duration in milliseconds */
+  durationMs: number;
+  /** Transaction that triggered the replay */
+  transactionId: string;
+  /** File ID of the downloaded invoice (if successful) */
+  fileId?: string;
+  /** When the replay happened */
+  timestamp: Timestamp;
+  /** Number of Tier 2 agent iterations used (if applicable) */
+  agentIterations?: number;
 }
 
 // ============================================================================

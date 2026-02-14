@@ -45,13 +45,33 @@ export const removePartnerFromTransactionCallable = createCallable<
     const previousMatchedBy = txData.partnerMatchedBy;
     const previousPartnerType = txData.partnerType;
 
-    // Clear partner assignment
+    // Look up partner name for activity log
+    let partnerName: string | null = null;
+    if (previousPartnerId) {
+      try {
+        const collName = previousPartnerType === "global" ? "globalPartners" : "partners";
+        const pSnap = await ctx.db.collection(collName).doc(previousPartnerId).get();
+        partnerName = pSnap.data()?.name || null;
+      } catch { /* best effort */ }
+    }
+
+    // Clear partner assignment + activity log
     await transactionRef.update({
       partnerId: null,
       partnerType: null,
       partnerMatchedBy: null,
       partnerMatchConfidence: null,
       updatedAt: FieldValue.serverTimestamp(),
+      automationHistory: FieldValue.arrayUnion({
+        type: "partner_removed",
+        ranAt: Timestamp.now(),
+        status: "completed",
+        actor: "manual" as const,
+        level: "decision" as const,
+        partnerName: partnerName || previousPartnerId || null,
+        forPartnerId: previousPartnerId || null,
+        summary: `Partner "${partnerName || previousPartnerId}" removed`,
+      }),
     });
 
     console.log(`[removePartnerFromTransaction] Removed partner from transaction ${transactionId}`, {

@@ -59,13 +59,33 @@ exports.removePartnerFromTransactionCallable = (0, createCallable_1.createCallab
     const previousPartnerId = txData.partnerId;
     const previousMatchedBy = txData.partnerMatchedBy;
     const previousPartnerType = txData.partnerType;
-    // Clear partner assignment
+    // Look up partner name for activity log
+    let partnerName = null;
+    if (previousPartnerId) {
+        try {
+            const collName = previousPartnerType === "global" ? "globalPartners" : "partners";
+            const pSnap = await ctx.db.collection(collName).doc(previousPartnerId).get();
+            partnerName = pSnap.data()?.name || null;
+        }
+        catch { /* best effort */ }
+    }
+    // Clear partner assignment + activity log
     await transactionRef.update({
         partnerId: null,
         partnerType: null,
         partnerMatchedBy: null,
         partnerMatchConfidence: null,
         updatedAt: firestore_1.FieldValue.serverTimestamp(),
+        automationHistory: firestore_1.FieldValue.arrayUnion({
+            type: "partner_removed",
+            ranAt: firestore_1.Timestamp.now(),
+            status: "completed",
+            actor: "manual",
+            level: "decision",
+            partnerName: partnerName || previousPartnerId || null,
+            forPartnerId: previousPartnerId || null,
+            summary: `Partner "${partnerName || previousPartnerId}" removed`,
+        }),
     });
     console.log(`[removePartnerFromTransaction] Removed partner from transaction ${transactionId}`, {
         userId: ctx.userId,
@@ -98,21 +118,30 @@ exports.removePartnerFromTransactionCallable = (0, createCallable_1.createCallab
                         updatedAt: firestore_1.FieldValue.serverTimestamp(),
                     });
                     console.log(`[removePartnerFromTransaction] Recorded false positive for partner ${previousPartnerId}`);
-                    // Trigger pattern relearning to exclude this transaction
-                    const { learnPatternsForPartnersBatch } = await Promise.resolve().then(() => __importStar(require("../matching/learnPartnerPatterns")));
-                    learnPatternsForPartnersBatch(ctx.userId, [previousPartnerId])
-                        .then((results) => {
-                        console.log(`[removePartnerFromTransaction] Pattern relearning completed:`, results);
-                    })
-                        .catch((err) => {
-                        console.error(`[removePartnerFromTransaction] Pattern relearning failed:`, err);
-                    });
                 }
             }
         }
         catch (err) {
             console.error(`[removePartnerFromTransaction] Failed to record false positive:`, err);
             // Don't fail the removal just because false positive recording failed
+        }
+    }
+    // Trigger pattern relearning for ANY user partner removal (not just auto-assigned)
+    // Manual assignments are the training data for patterns — removing them must trigger relearning
+    // so that stale auto-matches from the old patterns get cascade-unassigned
+    if (previousPartnerId && previousPartnerType === "user") {
+        try {
+            const { learnPatternsForPartnersBatch } = await Promise.resolve().then(() => __importStar(require("../matching/learnPartnerPatterns")));
+            learnPatternsForPartnersBatch(ctx.userId, [previousPartnerId])
+                .then((results) => {
+                console.log(`[removePartnerFromTransaction] Pattern relearning completed:`, results);
+            })
+                .catch((err) => {
+                console.error(`[removePartnerFromTransaction] Pattern relearning failed:`, err);
+            });
+        }
+        catch (err) {
+            console.error(`[removePartnerFromTransaction] Failed to trigger pattern relearning:`, err);
         }
     }
     return { success: true };

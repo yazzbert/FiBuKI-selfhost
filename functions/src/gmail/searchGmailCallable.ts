@@ -4,8 +4,17 @@
  */
 
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { defineSecret } from "firebase-functions/params";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import { decrypt, encrypt } from "../utils/encryption";
 import { classifyEmail, EmailClassification } from "../precision-search/shared-utils";
+
+// Secrets for token refresh
+const googleClientId = defineSecret("GOOGLE_CLIENT_ID");
+const googleClientSecret = defineSecret("GOOGLE_CLIENT_SECRET");
+const tokenEncryptionKey = defineSecret("GMAIL_TOKEN_ENCRYPTION_KEY");
+
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 const db = getFirestore();
 
@@ -58,6 +67,7 @@ interface SearchGmailResponse {
 interface EmailTokenDocument {
   accessToken: string;
   refreshToken: string;
+  refreshTokenIv?: string;
   expiresAt: Timestamp;
 }
 
@@ -262,6 +272,99 @@ async function gmailFetch<T>(
 }
 
 // ============================================================================
+// Token Refresh Helper
+// ============================================================================
+
+async function tryRefreshToken(
+  integrationId: string,
+  tokens: EmailTokenDocument,
+  integrationRef: FirebaseFirestore.DocumentReference
+): Promise<{ accessToken: string; expiresAt: Timestamp } | null> {
+  const refreshToken = tokens.refreshToken;
+  if (!refreshToken) return null;
+
+  const clientId = googleClientId.value();
+  const clientSecret = googleClientSecret.value();
+  const encryptionKey = tokenEncryptionKey.value();
+
+  if (!clientId || !clientSecret) {
+    console.error("[searchGmailCallable] OAuth credentials not configured");
+    return null;
+  }
+
+  // Decrypt refresh token if encrypted
+  let decryptedRefreshToken = refreshToken;
+  if (tokens.refreshTokenIv && encryptionKey) {
+    try {
+      decryptedRefreshToken = decrypt(refreshToken, tokens.refreshTokenIv, encryptionKey);
+    } catch (err) {
+      console.error("[searchGmailCallable] Failed to decrypt refresh token:", err);
+      return null;
+    }
+  }
+
+  try {
+    const response = await fetch(GOOGLE_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: decryptedRefreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error("[searchGmailCallable] Token refresh failed:", errorData);
+      return null;
+    }
+
+    const result = await response.json() as { access_token: string; expires_in: number; refresh_token?: string };
+    const expiresAt = Timestamp.fromDate(new Date(Date.now() + result.expires_in * 1000));
+
+    // Re-encrypt the refresh token for storage
+    const tokenToStore = result.refresh_token || decryptedRefreshToken;
+    let encryptedRefreshToken = tokenToStore;
+    let newRefreshTokenIv: string | undefined;
+
+    if (encryptionKey) {
+      try {
+        const { encrypted, iv } = encrypt(tokenToStore, encryptionKey);
+        encryptedRefreshToken = encrypted;
+        newRefreshTokenIv = iv;
+      } catch {
+        // Store unencrypted as fallback
+      }
+    }
+
+    // Update stored tokens
+    await db.collection("emailTokens").doc(integrationId).update({
+      accessToken: result.access_token,
+      refreshToken: encryptedRefreshToken,
+      ...(newRefreshTokenIv && { refreshTokenIv: newRefreshTokenIv }),
+      expiresAt,
+      updatedAt: Timestamp.now(),
+    });
+
+    // Update integration metadata
+    await integrationRef.update({
+      tokenExpiresAt: expiresAt,
+      needsReauth: false,
+      lastError: null,
+      updatedAt: Timestamp.now(),
+    });
+
+    console.log("[searchGmailCallable] Token refreshed successfully");
+    return { accessToken: result.access_token, expiresAt };
+  } catch (error) {
+    console.error("[searchGmailCallable] Token refresh error:", error);
+    return null;
+  }
+}
+
+// ============================================================================
 // Main Callable Function
 // ============================================================================
 
@@ -277,6 +380,7 @@ export const searchGmailCallable = onCall<
     region: "europe-west1",
     memory: "512MiB",
     timeoutSeconds: 60,
+    secrets: [googleClientId, googleClientSecret, tokenEncryptionKey],
   },
   async (request) => {
     if (!request.auth) {
@@ -338,16 +442,28 @@ export const searchGmailCallable = onCall<
       throw new HttpsError("failed-precondition", "Tokens not found. Please reconnect Gmail.");
     }
 
-    const tokens = tokenSnap.data() as EmailTokenDocument;
+    let tokens = tokenSnap.data() as EmailTokenDocument;
 
-    // Check if token is expired
+    // If access token is expired, attempt to refresh it
     if (tokens.expiresAt.toDate() < new Date()) {
-      await integrationRef.update({
-        needsReauth: true,
-        lastError: "Access token expired",
-        updatedAt: Timestamp.now(),
-      });
-      throw new HttpsError("failed-precondition", "Access token expired. Please reconnect Gmail.");
+      console.log("[searchGmailCallable] Access token expired, attempting refresh...");
+
+      const refreshed = await tryRefreshToken(
+        integrationId,
+        tokens,
+        integrationRef
+      );
+
+      if (refreshed) {
+        tokens = { ...tokens, accessToken: refreshed.accessToken, expiresAt: refreshed.expiresAt };
+      } else {
+        await integrationRef.update({
+          needsReauth: true,
+          lastError: "Access token expired and refresh failed",
+          updatedAt: Timestamp.now(),
+        });
+        throw new HttpsError("failed-precondition", "Access token expired. Please reconnect Gmail.");
+      }
     }
 
     // Build search query

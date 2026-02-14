@@ -50,8 +50,8 @@ import { format } from "date-fns";
 import Link from "next/link";
 import { removeEmailPatternFromPartner } from "@/lib/operations";
 import { useUserData } from "@/hooks/use-user-data";
-import { useInvoiceSources } from "@/hooks/use-invoice-sources";
-import { InvoiceSourcesSection } from "./invoice-sources-section";
+import { useBrowserRecipes } from "@/hooks/use-browser-recipes";
+import { BrowserAutomationsSection } from "./browser-automations-section";
 import { RuleCard } from "./rule-card";
 // Collapsible components used internally by CollapsibleListSection primitive
 import { cn } from "@/lib/utils";
@@ -134,7 +134,7 @@ export function PartnerDetailPanel({
   const { integrations } = useEmailIntegrations();
   const { isPartnerMarkedAsMe, userData, save: saveUserData } = useUserData();
   const { categories: allCategories } = useNoReceiptCategories();
-  const invoiceSourcesHook = useInvoiceSources({ partnerId: partner.id });
+  const browserRecipesHook = useBrowserRecipes(partner.id);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isMarkingAsMe, setIsMarkingAsMe] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackMessage | null>(null);
@@ -768,18 +768,18 @@ export function PartnerDetailPanel({
             </div>
           )}
 
-          {/* Invoice Sources Section */}
+          {/* Browser Automations Section */}
           <div className="space-y-3">
-            <SectionHeader>Invoice Sources</SectionHeader>
-            <InvoiceSourcesSection
+            <SectionHeader>Browser Automations</SectionHeader>
+            <BrowserAutomationsSection
               partner={partner}
-              onAddSource={invoiceSourcesHook.addSource}
-              onRemoveSource={invoiceSourcesHook.removeSource}
-              onToggleStatus={invoiceSourcesHook.toggleSourceStatus}
-              onFetchNow={invoiceSourcesHook.triggerFetch}
-              onPromoteLink={invoiceSourcesHook.promoteLink}
-              onInferFrequency={invoiceSourcesHook.inferFrequency}
-              isLoading={invoiceSourcesHook.isLoading}
+              onAddBookmark={browserRecipesHook.addBookmark}
+              onDeleteRecipe={browserRecipesHook.deleteRecipe}
+              onToggleStatus={browserRecipesHook.toggleStatus}
+              onToggleAutoRun={browserRecipesHook.toggleAutoRun}
+              onPromoteLink={browserRecipesHook.promoteLink}
+              onInferFrequency={browserRecipesHook.inferFrequency}
+              isLoading={browserRecipesHook.isLoading}
             />
           </div>
 

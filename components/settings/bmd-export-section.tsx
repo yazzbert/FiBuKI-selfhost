@@ -125,11 +125,11 @@ export function BmdExportSection() {
                     htmlFor="only-with-files"
                     className="font-medium cursor-pointer"
                   >
-                    Only transactions with receipts
+                    Only complete transactions
                   </Label>
                   <p className="text-sm text-muted-foreground">
-                    Recommended. Only export transactions that have connected
-                    files.
+                    Recommended. Only export transactions with receipts or
+                    no-receipt categories.
                   </p>
                 </div>
               </div>

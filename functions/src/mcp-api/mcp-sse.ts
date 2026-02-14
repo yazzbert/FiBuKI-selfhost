@@ -11,6 +11,7 @@
 import { onRequest } from "firebase-functions/v2/https";
 import { validateApiKey } from "../api-keys";
 import { handleToolInternal } from "./handlers";
+import { TOOL_DEFINITIONS } from "../tools/definitions";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -21,153 +22,8 @@ const CORS_HEADERS = {
 // MCP Protocol version
 const MCP_VERSION = "2024-11-05";
 
-// Tool definitions in MCP format
-const MCP_TOOLS = [
-  {
-    name: "list_sources",
-    description: "List all bank accounts/sources for the user",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "get_source",
-    description: "Get details of a specific bank account by ID",
-    inputSchema: {
-      type: "object",
-      properties: { sourceId: { type: "string", description: "The bank account ID" } },
-      required: ["sourceId"],
-    },
-  },
-  {
-    name: "list_transactions",
-    description: "List transactions with optional filters. Returns date, amount (cents), partner, completion status.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sourceId: { type: "string", description: "Filter by bank account ID" },
-        dateFrom: { type: "string", description: "Start date (ISO format)" },
-        dateTo: { type: "string", description: "End date (ISO format)" },
-        search: { type: "string", description: "Search in name, description, partner" },
-        isComplete: { type: "boolean", description: "Filter by completion status" },
-        limit: { type: "number", description: "Max results (default 50)" },
-      },
-    },
-  },
-  {
-    name: "get_transaction",
-    description: "Get full details of a transaction by ID",
-    inputSchema: {
-      type: "object",
-      properties: { transactionId: { type: "string", description: "The transaction ID" } },
-      required: ["transactionId"],
-    },
-  },
-  {
-    name: "update_transaction",
-    description: "Update a transaction's description or completion status",
-    inputSchema: {
-      type: "object",
-      properties: {
-        transactionId: { type: "string", description: "The transaction ID" },
-        description: { type: "string", description: "Description for tax purposes" },
-        isComplete: { type: "boolean", description: "Mark as complete/incomplete" },
-      },
-      required: ["transactionId"],
-    },
-  },
-  {
-    name: "list_files",
-    description: "List uploaded files (receipts/invoices) with match suggestions",
-    inputSchema: {
-      type: "object",
-      properties: {
-        hasConnections: { type: "boolean", description: "true = matched, false = unmatched" },
-        hasSuggestions: { type: "boolean", description: "Filter by suggestion availability" },
-        limit: { type: "number", description: "Max results (default 50)" },
-      },
-    },
-  },
-  {
-    name: "get_file",
-    description: "Get file details including extracted data and suggestions",
-    inputSchema: {
-      type: "object",
-      properties: { fileId: { type: "string", description: "The file ID" } },
-      required: ["fileId"],
-    },
-  },
-  {
-    name: "connect_file_to_transaction",
-    description: "Connect a file (receipt) to a transaction, marking it complete",
-    inputSchema: {
-      type: "object",
-      properties: {
-        fileId: { type: "string", description: "The file ID" },
-        transactionId: { type: "string", description: "The transaction ID" },
-      },
-      required: ["fileId", "transactionId"],
-    },
-  },
-  {
-    name: "disconnect_file_from_transaction",
-    description: "Disconnect a file from a transaction",
-    inputSchema: {
-      type: "object",
-      properties: {
-        fileId: { type: "string", description: "The file ID" },
-        transactionId: { type: "string", description: "The transaction ID" },
-      },
-      required: ["fileId", "transactionId"],
-    },
-  },
-  {
-    name: "list_transactions_needing_files",
-    description: "Find transactions without receipts (no files, no category)",
-    inputSchema: {
-      type: "object",
-      properties: {
-        minAmount: { type: "number", description: "Minimum amount in cents" },
-        limit: { type: "number", description: "Max results (default 50)" },
-      },
-    },
-  },
-  {
-    name: "auto_connect_file_suggestions",
-    description: "Auto-connect files to transactions above confidence threshold",
-    inputSchema: {
-      type: "object",
-      properties: {
-        fileId: { type: "string", description: "Specific file ID (optional)" },
-        minConfidence: { type: "number", description: "Min confidence 0-100 (default 89)" },
-      },
-    },
-  },
-  {
-    name: "list_no_receipt_categories",
-    description: "List categories for transactions that don't need receipts",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "assign_no_receipt_category",
-    description: "Assign a no-receipt category to a transaction",
-    inputSchema: {
-      type: "object",
-      properties: {
-        transactionId: { type: "string", description: "The transaction ID" },
-        categoryId: { type: "string", description: "The category ID" },
-      },
-      required: ["transactionId", "categoryId"],
-    },
-  },
-  {
-    name: "remove_no_receipt_category",
-    description: "Remove a no-receipt category from a transaction",
-    inputSchema: {
-      type: "object",
-      properties: { transactionId: { type: "string", description: "The transaction ID" } },
-      required: ["transactionId"],
-    },
-  },
-];
+// Tool definitions in MCP format (derived from central definitions)
+const MCP_TOOLS = TOOL_DEFINITIONS;
 
 /**
  * MCP SSE Endpoint

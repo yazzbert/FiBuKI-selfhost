@@ -68,9 +68,9 @@ function DataTableInner<TData extends { id: string }>(
           const glowClass = justCompleted ? "animate-row-complete" : "";
 
           if (isSelected) {
-            return `bg-[#b8e986] hover:bg-[#a8d976] dark:bg-green-900/40 dark:hover:bg-green-900/50 ${glowClass}`;
+            return `bg-complete-row-selected hover:bg-complete-row-selected/80 ${glowClass}`;
           }
-          return `bg-[#d9ffb2] hover:bg-[#c9f59f] dark:bg-green-950/20 dark:hover:bg-green-950/30 ${glowClass}`;
+          return `bg-complete-row hover:bg-complete-row/80 ${glowClass}`;
         }
       }
       return "";

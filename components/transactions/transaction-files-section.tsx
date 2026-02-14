@@ -16,6 +16,8 @@ import {
   ChevronDown,
   ChevronUp,
   Globe,
+  Play,
+  LogIn,
 } from "lucide-react";
 import { Transaction } from "@/types/transaction";
 import { TaxFile } from "@/types/file";
@@ -82,14 +84,33 @@ interface TransactionFilesSectionProps {
     actions: { step: number; actionType: string }[];
     pdfCount: number;
     isSaving: boolean;
+    error: string | null;
     startLearn: (params: {
       partnerId: string;
       partnerName: string;
       transactionId?: string;
+      startUrl?: string;
     }) => void;
   };
+  /** Browser replay mode handlers (optional — shown when recipe exists) */
+  replayMode?: {
+    isReplaying: boolean;
+    progress: { step: number; total: number; message: string } | null;
+    error: string | null;
+    startReplay: (params: {
+      partnerId: string;
+      partnerName: string;
+      transactionId: string;
+      recipe: import("@/types/partner").BrowserRecipe;
+      transaction: Transaction;
+    }) => void;
+  };
+  /** Browser recipes for this partner (if any) */
+  partnerRecipes?: import("@/types/partner").BrowserRecipe[];
   /** Partner name for display (needed for learn mode) */
   partnerName?: string;
+  /** Partner website URL for learn mode start page */
+  partnerWebsite?: string;
   /** Whether the browser extension is installed */
   extensionInstalled?: boolean;
 }
@@ -306,7 +327,7 @@ function SuggestedFileRow({
                   ? "bg-green-100 text-green-800 border-green-300 dark:bg-green-900/50 dark:text-green-200 dark:border-green-700"
                   : confidence >= 70
                   ? "bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-900/50 dark:text-yellow-200 dark:border-yellow-700"
-                  : "bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600"
+                  : "bg-muted text-muted-foreground border-border"
               )}
             >
               {Math.round(confidence)}%
@@ -354,7 +375,10 @@ export function TransactionFilesSection({
   onOpenConnectFile,
   isConnectFileOpen = false,
   learnMode,
+  replayMode,
+  partnerRecipes,
   partnerName,
+  partnerWebsite,
   extensionInstalled = false,
 }: TransactionFilesSectionProps) {
   const [isReceiptLostDialogOpen, setIsReceiptLostDialogOpen] = useState(false);
@@ -546,6 +570,38 @@ export function TransactionFilesSection({
         <div className="flex items-center justify-between relative z-10">
           <h3 className="text-sm font-medium">File</h3>
           <div className="flex items-center gap-1">
+            {/* Browser replay button — shown when recipe exists + extension installed + no files */}
+            {!hasFiles && !transaction.noReceiptCategoryId && extensionInstalled && transaction.partnerId && replayMode && partnerRecipes && partnerRecipes.length > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 relative z-10 pointer-events-auto"
+                    onClick={() => {
+                      const recipe = partnerRecipes[0];
+                      replayMode.startReplay({
+                        partnerId: transaction.partnerId!,
+                        partnerName: partnerName || transaction.partner || "",
+                        transactionId: transaction.id,
+                        recipe,
+                        transaction,
+                      });
+                    }}
+                    disabled={replayMode.isReplaying || (learnMode?.isLearning ?? false)}
+                  >
+                    {replayMode.isReplaying ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Play className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {replayMode.isReplaying ? "Replaying..." : "Download invoice (replay recipe)"}
+                </TooltipContent>
+              </Tooltip>
+            )}
             {/* Browser learn mode button — shown when extension installed + partner assigned + no files/category */}
             {!hasFiles && !transaction.noReceiptCategoryId && extensionInstalled && transaction.partnerId && learnMode && (
               <Tooltip>
@@ -555,10 +611,16 @@ export function TransactionFilesSection({
                     size="icon"
                     className="h-6 w-6 relative z-10 pointer-events-auto"
                     onClick={() => {
+                      const name = partnerName || transaction.partner || "";
+                      // Smart start URL: partner website > Google search for partner > Google search for description
+                      const startUrl = partnerWebsite
+                        ? (partnerWebsite.startsWith("http") ? partnerWebsite : `https://${partnerWebsite}`)
+                        : `https://www.google.com/search?q=${encodeURIComponent(name || transaction.description || "")}+invoice+login`;
                       learnMode.startLearn({
                         partnerId: transaction.partnerId!,
-                        partnerName: partnerName || transaction.partner || "",
+                        partnerName: name,
                         transactionId: transaction.id,
+                        startUrl,
                       });
                     }}
                     disabled={learnMode.isLearning || learnMode.isSaving}
@@ -624,11 +686,48 @@ export function TransactionFilesSection({
           </div>
         )}
 
+        {/* Learn mode error */}
+        {learnMode?.error && !learnMode.isLearning && !learnMode.isSaving && (
+          <div className="text-sm text-destructive py-1">
+            {learnMode.error}
+          </div>
+        )}
+
         {/* Learn mode saving indicator */}
         {learnMode?.isSaving && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-1">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span>Saving browser recipe...</span>
+          </div>
+        )}
+
+        {/* Replay mode status indicator */}
+        {replayMode?.isReplaying && (
+          <div className={`flex items-center gap-2 text-sm py-1 ${
+            replayMode.progress?.message?.includes("Login required")
+              ? "text-amber-600 dark:text-amber-400"
+              : "text-cyan-600 dark:text-cyan-400"
+          }`}>
+            {replayMode.progress?.message?.includes("Login required") ? (
+              <LogIn className="h-3.5 w-3.5" />
+            ) : (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            )}
+            <span>
+              {replayMode.progress?.message || "Replaying recipe..."}
+              {replayMode.progress && replayMode.progress.total > 0 && (
+                <span className="text-muted-foreground">
+                  {" "}({replayMode.progress.step}/{replayMode.progress.total})
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+
+        {/* Replay mode error */}
+        {replayMode?.error && !replayMode.isReplaying && (
+          <div className="text-sm text-destructive py-1">
+            {replayMode.error}
           </div>
         )}
 

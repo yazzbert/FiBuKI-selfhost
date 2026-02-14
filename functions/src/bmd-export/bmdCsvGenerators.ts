@@ -12,6 +12,22 @@ import {
 } from "../types/bmd-export";
 
 /**
+ * Maps no-receipt category templateIds to BMD Sachkonten.
+ * expense/income = null means the category doesn't apply for that direction.
+ */
+export const NO_RECEIPT_SACHKONTO_MAP: Record<string, { expense: string | null; income: string | null; symbol: string; name: string }> = {
+  "bank-fees":                    { expense: "7780", income: null,   symbol: "BK", name: "Bankspesen" },
+  "interest":                     { expense: "7810", income: "8100", symbol: "BK", name: "Zinsen" },
+  "internal-transfers":           { expense: "2800", income: "2800", symbol: "UM", name: "Umbuchung" },
+  "payment-provider-settlements": { expense: "7780", income: null,   symbol: "BK", name: "PSP-Spesen" },
+  "taxes-government":             { expense: "3520", income: null,   symbol: "BK", name: "Steuern/Abgaben" },
+  "payroll":                      { expense: "6200", income: null,   symbol: "GH", name: "Gehalt" },
+  "private-personal":             { expense: "9600", income: "9600", symbol: "PR", name: "Privat" },
+  "zero-value":                   { expense: null,   income: null,   symbol: "",   name: "" },
+  "receipt-lost":                 { expense: "7000", income: "4000", symbol: "ER", name: "Eigenbeleg" },
+};
+
+/**
  * Format date as YYYYMMDD for BMD
  */
 export function formatBmdDate(date: Timestamp | Date | undefined): string {
@@ -158,11 +174,15 @@ export interface TransactionForExport {
   date: Timestamp;
   amount: number; // in cents
   name?: string;
+  partner?: string; // raw counterparty from bank CSV
+  partnerName?: string; // resolved name from partnersMap
   partnerId?: string;
   fileIds?: string[];
   vatRate?: number;
   vatAmount?: number; // in cents
   vatId?: string;
+  noReceiptCategoryId?: string | null;
+  noReceiptCategoryTemplateId?: string | null;
 }
 
 /**
@@ -206,6 +226,16 @@ export function generateBuchungenCsv(
   for (const tx of transactions) {
     const isExpense = tx.amount < 0;
     const isKreditor = isExpense;
+    const hasFiles = tx.fileIds && tx.fileIds.length > 0;
+    const templateId = tx.noReceiptCategoryTemplateId;
+    const categoryMapping = templateId ? NO_RECEIPT_SACHKONTO_MAP[templateId] : undefined;
+    const isCategoryTransaction = !!templateId && !!categoryMapping;
+
+    // Skip zero-value category entirely
+    if (templateId === "zero-value") {
+      belegnrCounter++;
+      continue;
+    }
 
     // Get document date from first connected file, or use transaction date
     const firstFileId = tx.fileIds?.[0];
@@ -217,21 +247,8 @@ export function generateBuchungenCsv(
     const belegnr = `${year}${String(belegnrCounter).padStart(6, "0")}`;
     belegnrCounter++;
 
-    // Determine accounts
-    const personenkonto = tx.partnerId
-      ? generatePersonenkontoNumber(tx.partnerId, isKreditor, partnerIndex)
-      : isKreditor
-        ? String(KREDITOR_ACCOUNT_BASE + 1)
-        : String(DEBITOR_ACCOUNT_BASE + 1); // Default accounts
-
-    // Default contra accounts (generic expense/revenue)
-    const contraAccount = isExpense ? "7000" : "4000";
-
-    // VAT calculation
-    const vatRate = tx.vatRate ?? 20;
-    const vatAmount =
-      tx.vatAmount ??
-      Math.round((Math.abs(tx.amount) * vatRate) / (100 + vatRate));
+    // Preferred display name: resolved partner name > raw bank partner > tx name
+    const displayName = tx.partnerName || tx.partner || tx.name || "";
 
     // External document reference (file names)
     const extbelegnr =
@@ -241,22 +258,70 @@ export function generateBuchungenCsv(
         .join(", ")
         .substring(0, 50) || "";
 
-    const row: BmdBuchungRow = {
-      satzart: 0,
-      konto: personenkonto,
-      gkto: contraAccount,
-      belegnr,
-      buchdat: formatBmdDate(tx.date),
-      belegdat: formatBmdDate(belegdat),
-      betrag: formatBmdAmount(tx.amount),
-      bucod: isExpense ? 1 : 2, // 1=Soll (debit), 2=Haben (credit)
-      steuer: formatBmdAmount(vatAmount),
-      mwst: vatRate,
-      text: (tx.name || "").substring(0, 75),
-      extbelegnr,
-      symbol: isExpense ? "ER" : "AR", // Eingangsrechnung / Ausgangsrechnung
-      uidnr: (tx.vatId || "").substring(0, 20),
-    };
+    let row: BmdBuchungRow;
+
+    if (isCategoryTransaction && !hasFiles) {
+      // --- No-receipt category path ---
+      const sachkonto = (isExpense ? categoryMapping.expense : categoryMapping.income)
+        || (isExpense ? "7000" : "4000"); // fallback
+
+      // VAT: 0% for all categories except receipt-lost (keeps tx vatRate)
+      const isReceiptLost = templateId === "receipt-lost";
+      const vatRate = isReceiptLost ? (tx.vatRate ?? 20) : 0;
+      const vatAmount = isReceiptLost
+        ? (tx.vatAmount ?? Math.round((Math.abs(tx.amount) * vatRate) / (100 + vatRate)))
+        : 0;
+
+      const text = `${categoryMapping.name}: ${displayName}`.substring(0, 75);
+
+      row = {
+        satzart: 0,
+        konto: sachkonto,
+        gkto: "", // empty — BMD assigns bank side on import
+        belegnr,
+        buchdat: formatBmdDate(tx.date),
+        belegdat: formatBmdDate(belegdat),
+        betrag: formatBmdAmount(tx.amount),
+        bucod: isExpense ? 1 : 2,
+        steuer: formatBmdAmount(vatAmount),
+        mwst: vatRate,
+        text,
+        extbelegnr,
+        symbol: categoryMapping.symbol || (isExpense ? "ER" : "AR"),
+        uidnr: (tx.vatId || "").substring(0, 20),
+      };
+    } else {
+      // --- Standard transaction path (has files, or no category) ---
+      const personenkonto = tx.partnerId
+        ? generatePersonenkontoNumber(tx.partnerId, isKreditor, partnerIndex)
+        : isKreditor
+          ? String(KREDITOR_ACCOUNT_BASE + 1)
+          : String(DEBITOR_ACCOUNT_BASE + 1);
+
+      const contraAccount = isExpense ? "7000" : "4000";
+
+      const vatRate = tx.vatRate ?? 20;
+      const vatAmount =
+        tx.vatAmount ??
+        Math.round((Math.abs(tx.amount) * vatRate) / (100 + vatRate));
+
+      row = {
+        satzart: 0,
+        konto: personenkonto,
+        gkto: contraAccount,
+        belegnr,
+        buchdat: formatBmdDate(tx.date),
+        belegdat: formatBmdDate(belegdat),
+        betrag: formatBmdAmount(tx.amount),
+        bucod: isExpense ? 1 : 2,
+        steuer: formatBmdAmount(vatAmount),
+        mwst: vatRate,
+        text: displayName.substring(0, 75),
+        extbelegnr,
+        symbol: isExpense ? "ER" : "AR",
+        uidnr: (tx.vatId || "").substring(0, 20),
+      };
+    }
 
     rows.push(row);
   }

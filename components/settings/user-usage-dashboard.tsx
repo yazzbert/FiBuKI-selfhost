@@ -19,6 +19,7 @@ import { useFunctionCalls, formatFunctionDisplayName, formatDuration } from "@/h
 import { USER_TOKEN_RATE_PER_100K_EUR } from "@/types/billing";
 import { cn } from "@/lib/utils";
 import { SettingsPageHeader } from "@/components/ui/settings-page-header";
+import { AutomationModeButton } from "@/components/settings/automation-mode-card";
 
 function formatTokens(tokens: number): string {
   if (tokens >= 1000000) {
@@ -89,6 +90,7 @@ export function UserUsageDashboard() {
             <History className="h-4 w-4 mr-1" />
             History
           </Button>
+          <AutomationModeButton />
         </div>
       </SettingsPageHeader>
 

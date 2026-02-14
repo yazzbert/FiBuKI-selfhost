@@ -4,39 +4,40 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteSourceCallable = void 0;
+exports.deleteSourceInternal = deleteSourceInternal;
 const firestore_1 = require("firebase-admin/firestore");
 const createCallable_1 = require("../utils/createCallable");
 const BATCH_SIZE = 500;
-exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
-    name: "deleteSource",
-    timeoutSeconds: 300, // 5 minutes for large deletions
-    memory: "1GiB",
-}, async (ctx, request) => {
-    const { sourceId } = request;
+/**
+ * Internal implementation for deleting a source.
+ * Can be called directly from MCP handlers.
+ */
+async function deleteSourceInternal(dbRef, userId, sourceId) {
     if (!sourceId) {
         throw new createCallable_1.HttpsError("invalid-argument", "sourceId is required");
     }
     // Verify ownership
-    const sourceRef = ctx.db.collection("sources").doc(sourceId);
+    const sourceRef = dbRef.collection("sources").doc(sourceId);
     const sourceSnap = await sourceRef.get();
     if (!sourceSnap.exists) {
         throw new createCallable_1.HttpsError("not-found", "Source not found");
     }
     const sourceData = sourceSnap.data();
-    if (sourceData.userId !== ctx.userId) {
+    if (sourceData.userId !== userId) {
         throw new createCallable_1.HttpsError("permission-denied", "Access denied");
     }
     const now = firestore_1.Timestamp.now();
     let deletedImports = 0;
     let deletedTransactions = 0;
+    let deletedTrades = 0;
     // 1. Clear linkedSourceId on any credit cards that link to this bank account
-    const linkedCardsQuery = await ctx.db
+    const linkedCardsQuery = await dbRef
         .collection("sources")
-        .where("userId", "==", ctx.userId)
+        .where("userId", "==", userId)
         .where("linkedSourceId", "==", sourceId)
         .get();
     if (!linkedCardsQuery.empty) {
-        const batch = ctx.db.batch();
+        const batch = dbRef.batch();
         for (const cardDoc of linkedCardsQuery.docs) {
             batch.update(cardDoc.ref, {
                 linkedSourceId: null,
@@ -46,14 +47,14 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
         await batch.commit();
     }
     // 2. Delete all imports for this source
-    const importsQuery = await ctx.db
+    const importsQuery = await dbRef
         .collection("imports")
-        .where("userId", "==", ctx.userId)
+        .where("userId", "==", userId)
         .where("sourceId", "==", sourceId)
         .get();
     if (!importsQuery.empty) {
         for (let i = 0; i < importsQuery.docs.length; i += BATCH_SIZE) {
-            const batch = ctx.db.batch();
+            const batch = dbRef.batch();
             const chunk = importsQuery.docs.slice(i, i + BATCH_SIZE);
             for (const importDoc of chunk) {
                 batch.delete(importDoc.ref);
@@ -63,9 +64,9 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
         }
     }
     // 3. Delete all transactions for this source
-    const transactionsQuery = await ctx.db
+    const transactionsQuery = await dbRef
         .collection("transactions")
-        .where("userId", "==", ctx.userId)
+        .where("userId", "==", userId)
         .where("sourceId", "==", sourceId)
         .get();
     if (!transactionsQuery.empty) {
@@ -73,16 +74,16 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
             const chunk = transactionsQuery.docs.slice(i, i + BATCH_SIZE);
             // First, delete file connections for each transaction
             for (const txDoc of chunk) {
-                const connectionsQuery = await ctx.db
+                const connectionsQuery = await dbRef
                     .collection("fileConnections")
                     .where("transactionId", "==", txDoc.id)
                     .get();
                 if (!connectionsQuery.empty) {
-                    const connBatch = ctx.db.batch();
+                    const connBatch = dbRef.batch();
                     for (const connDoc of connectionsQuery.docs) {
                         connBatch.delete(connDoc.ref);
                         // Update file to remove transaction from transactionIds
-                        const fileRef = ctx.db.collection("files").doc(connDoc.data().fileId);
+                        const fileRef = dbRef.collection("files").doc(connDoc.data().fileId);
                         connBatch.update(fileRef, {
                             transactionIds: firestore_1.FieldValue.arrayRemove(txDoc.id),
                             updatedAt: now,
@@ -92,7 +93,7 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
                 }
             }
             // Then delete the transactions
-            const txBatch = ctx.db.batch();
+            const txBatch = dbRef.batch();
             for (const txDoc of chunk) {
                 txBatch.delete(txDoc.ref);
                 deletedTransactions++;
@@ -105,7 +106,7 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
         const apiConfig = sourceData.apiConfig;
         if (apiConfig.provider === "truelayer" && apiConfig.connectionId) {
             try {
-                const connectionRef = ctx.db.collection("truelayerConnections").doc(apiConfig.connectionId);
+                const connectionRef = dbRef.collection("truelayerConnections").doc(apiConfig.connectionId);
                 await connectionRef.delete();
             }
             catch (err) {
@@ -172,10 +173,46 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
             }
         }
     }
-    // 5. Delete the source document itself
+    // 5. Delete investment trades for depot sources
+    if (sourceData.accountKind === "depot") {
+        const tradesQuery = await dbRef
+            .collection("investmentTrades")
+            .where("userId", "==", userId)
+            .where("sourceId", "==", sourceId)
+            .get();
+        if (!tradesQuery.empty) {
+            for (let i = 0; i < tradesQuery.docs.length; i += BATCH_SIZE) {
+                const tradeBatch = dbRef.batch();
+                const chunk = tradesQuery.docs.slice(i, i + BATCH_SIZE);
+                for (const tradeDoc of chunk) {
+                    tradeBatch.delete(tradeDoc.ref);
+                    deletedTrades++;
+                }
+                await tradeBatch.commit();
+            }
+        }
+        if (deletedTrades > 0) {
+            console.log(`[deleteSource] Deleted ${deletedTrades} investment trades for depot ${sourceId}`);
+        }
+    }
+    // 6. Delete source partner if exists
+    if (sourceData.sourcePartnerId) {
+        try {
+            const partnerRef = dbRef.collection("partners").doc(sourceData.sourcePartnerId);
+            const partnerSnap = await partnerRef.get();
+            if (partnerSnap.exists && partnerSnap.data()?.userId === userId) {
+                await partnerRef.delete();
+                console.log(`[deleteSource] Deleted source partner ${sourceData.sourcePartnerId}`);
+            }
+        }
+        catch (err) {
+            console.warn(`[deleteSource] Failed to delete source partner:`, err);
+        }
+    }
+    // 7. Delete the source document itself
     await sourceRef.delete();
     console.log(`[deleteSource] Deleted source ${sourceId}`, {
-        userId: ctx.userId,
+        userId,
         deletedImports,
         deletedTransactions,
     });
@@ -183,6 +220,14 @@ exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
         success: true,
         deletedImports,
         deletedTransactions,
+        deletedTrades,
     };
+}
+exports.deleteSourceCallable = (0, createCallable_1.createCallable)({
+    name: "deleteSource",
+    timeoutSeconds: 300,
+    memory: "1GiB",
+}, async (ctx, request) => {
+    return deleteSourceInternal(ctx.db, ctx.userId, request.sourceId);
 });
 //# sourceMappingURL=deleteSource.js.map

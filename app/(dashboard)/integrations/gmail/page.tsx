@@ -169,8 +169,6 @@ function GmailAccountCard({
   const { stats, loading: statsLoading } = useIntegrationFileStats(integration.id);
 
   const needsReauth = integration.needsReauth;
-  const tokenExpiry = integration.tokenExpiresAt?.toDate();
-  const isExpired = tokenExpiry && tokenExpiry < new Date();
   const isPaused = integration.isPaused;
 
   const lastSyncAt = integration.lastSyncAt?.toDate();
@@ -179,7 +177,7 @@ function GmailAccountCard({
   const initialSyncStartedAt = integration.initialSyncStartedAt?.toDate();
 
   const isSyncingNow = !isPaused && (activeSync.isActive || (!initialSyncComplete && initialSyncStartedAt));
-  const showReconnect = needsReauth || isExpired;
+  const showReconnect = needsReauth;
 
   return (
     <div

@@ -16,9 +16,6 @@ export * from "./partner-ops";
 // Test data operations
 export * from "./test-data-ops";
 
-// Transaction history operations
-export * from "./transaction-history-ops";
-
 // Chat operations
 export * from "./chat-ops";
 
@@ -58,7 +55,7 @@ export * from "./user-data-ops";
 // Precision search operations (for automated receipt matching)
 export * from "./precision-search-ops";
 
-// Invoice source operations (for browser extension invoice fetching)
+// Frequency inference (kept from invoice-source-ops after merge to browser recipes)
 export * from "./invoice-source-ops";
 
 // Inbound email operations (for email forwarding integration)

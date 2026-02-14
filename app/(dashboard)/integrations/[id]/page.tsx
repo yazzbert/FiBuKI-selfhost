@@ -169,8 +169,7 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
   }
 
   const needsReauth = integration.needsReauth;
-  const tokenExpiry = integration.tokenExpiresAt?.toDate();
-  const isExpired = tokenExpiry && tokenExpiry < new Date();
+  const isExpired = needsReauth; // Only treat as expired when refresh token is truly invalid
   const isPaused = integration.isPaused;
   const lastSyncAt = integration.lastSyncAt?.toDate();
   const lastSyncStatus = integration.lastSyncStatus;

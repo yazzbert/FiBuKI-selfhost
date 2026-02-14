@@ -4,6 +4,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createUserPartnerCallable = void 0;
+exports.createUserPartnerInternal = createUserPartnerInternal;
 const firestore_1 = require("firebase-admin/firestore");
 const createCallable_1 = require("../utils/createCallable");
 /**
@@ -23,14 +24,17 @@ function normalizeUrl(url) {
     // Remove trailing slash
     return normalized.replace(/\/+$/, "");
 }
-exports.createUserPartnerCallable = (0, createCallable_1.createCallable)({ name: "createUserPartner" }, async (ctx, request) => {
-    const { data, skipAutoMatch } = request;
+/**
+ * Internal implementation for creating a user partner.
+ * Can be called directly from MCP handlers.
+ */
+async function createUserPartnerInternal(dbRef, userId, data, options) {
     if (!data?.name?.trim()) {
         throw new createCallable_1.HttpsError("invalid-argument", "Partner name is required");
     }
     const now = firestore_1.Timestamp.now();
     const newPartner = {
-        userId: ctx.userId,
+        userId,
         name: data.name.trim(),
         aliases: (data.aliases || []).map((a) => a.trim()).filter(Boolean),
         address: data.address || null,
@@ -44,27 +48,28 @@ exports.createUserPartnerCallable = (0, createCallable_1.createCallable)({ name:
         createdAt: now,
         updatedAt: now,
     };
-    // Link to global partner if creating from a global suggestion
     if (data.globalPartnerId) {
         newPartner.globalPartnerId = data.globalPartnerId;
     }
-    // Mark as "my company" if specified
     if (data.isMyCompany) {
         newPartner.isMyCompany = true;
     }
-    // Skip automatic matching if requested (used for manual assignment flow)
-    // This prevents race condition where onPartnerCreate auto-matches before manual assignment
-    if (skipAutoMatch) {
+    if (options?.skipAutoMatch) {
         newPartner.createdBy = "manual_assignment";
     }
-    const docRef = await ctx.db.collection("partners").add(newPartner);
+    const docRef = await dbRef.collection("partners").add(newPartner);
     console.log(`[createUserPartner] Created partner ${docRef.id}`, {
-        userId: ctx.userId,
+        userId,
         name: data.name,
     });
     return {
         success: true,
         partnerId: docRef.id,
     };
+}
+exports.createUserPartnerCallable = (0, createCallable_1.createCallable)({ name: "createUserPartner" }, async (ctx, request) => {
+    return createUserPartnerInternal(ctx.db, ctx.userId, request.data, {
+        skipAutoMatch: request.skipAutoMatch,
+    });
 });
 //# sourceMappingURL=createUserPartner.js.map

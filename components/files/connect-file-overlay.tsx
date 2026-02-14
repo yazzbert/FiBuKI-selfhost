@@ -52,7 +52,7 @@ import { addEmailDomainToPartner } from "@/lib/operations";
 import { db } from "@/lib/firebase/config";
 import { EmailMessage, EmailAttachment } from "@/types/email-integration";
 import { Transaction } from "@/types/transaction";
-import { InvoiceSource } from "@/types/partner";
+
 import { useAuth } from "@/components/auth";
 import { useBrowserExtensionStatus } from "@/hooks/use-browser-extension";
 import { IntegrationStatusBanner } from "@/components/automations/integration-status-banner";
@@ -93,8 +93,8 @@ function getSuggestionTypeLabelStyle(type: SuggestionType, isActive: boolean): s
     case "email_domain": return "bg-purple-100 text-purple-700";
     case "vat_id": return "bg-orange-100 text-orange-700";
     case "iban": return "bg-yellow-100 text-yellow-700";
-    case "pattern": return "bg-gray-100 text-gray-700";
-    default: return "bg-gray-100 text-gray-700";
+    case "pattern": return "bg-muted text-muted-foreground";
+    default: return "bg-muted text-muted-foreground";
   }
 }
 
@@ -1578,8 +1578,8 @@ export function ConnectFileOverlay({
                   >
                     <Globe className="h-3.5 w-3.5 shrink-0" />
                     <span className="hidden @min-[340px]:inline">Browser</span>
-                    {partner?.invoiceSources && partner.invoiceSources.length > 0 && (
-                      <span className="text-[10px] text-muted-foreground">({partner.invoiceSources.length})</span>
+                    {partner?.browserRecipes && partner.browserRecipes.length > 0 && (
+                      <span className="text-[10px] text-muted-foreground">({partner.browserRecipes.length})</span>
                     )}
                   </TabsTrigger>
                 </TooltipTrigger>
@@ -1880,12 +1880,12 @@ export function ConnectFileOverlay({
                     <p className="text-sm">Assign a partner first</p>
                     <p className="text-xs mt-1">Invoice sources are configured per partner</p>
                   </div>
-                ) : !partner.invoiceSources || partner.invoiceSources.length === 0 ? (
+                ) : !partner.browserRecipes || partner.browserRecipes.length === 0 ? (
                   <div className="p-8 text-center text-muted-foreground">
                     <Globe className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm font-medium mb-2">No Invoice Sources</p>
+                    <p className="text-sm font-medium mb-2">No Browser Automations</p>
                     <p className="text-xs mb-4">
-                      Configure invoice sources for {partner.name} to automatically collect invoices from their website.
+                      Configure browser automations for {partner.name} to collect invoices from their website.
                     </p>
                     <Button variant="outline" size="sm" asChild>
                       <a href={`/partners?id=${partner.id}`}>
@@ -1896,29 +1896,29 @@ export function ConnectFileOverlay({
                   </div>
                 ) : (
                   <div className="p-2 space-y-2">
-                    {partner.invoiceSources.map((source) => (
+                    {partner.browserRecipes.map((recipe) => (
                       <div
-                        key={source.id}
+                        key={recipe.id}
                         className="flex items-start gap-3 p-3 rounded-md border bg-card hover:bg-muted/50 transition-colors"
                       >
                         <div className="h-10 w-10 rounded bg-muted flex items-center justify-center flex-shrink-0">
                           <Globe className="h-5 w-5 text-muted-foreground" />
                         </div>
                         <div className="flex-1 min-w-0 overflow-hidden">
-                          <p className="text-sm font-medium truncate">{source.label || source.url}</p>
-                          <p className="text-xs text-muted-foreground truncate">{source.url}</p>
+                          <p className="text-sm font-medium truncate">{recipe.label || recipe.domain}</p>
+                          <p className="text-xs text-muted-foreground truncate">{recipe.startUrl}</p>
                           <div className="flex items-center gap-2 mt-1">
-                            <Badge variant={source.status === "active" ? "default" : "secondary"} className="text-xs">
-                              {source.status}
+                            <Badge variant={(recipe.status || "active") === "active" ? "default" : "secondary"} className="text-xs">
+                              {recipe.recordedActions.length > 0 ? `${recipe.recordedActions.length} steps` : "Bookmark"}
                             </Badge>
-                            {source.lastFetchedAt && (
+                            {recipe.lastUsedAt && (
                               <span className="text-xs text-muted-foreground">
-                                Last: {format(source.lastFetchedAt.toDate(), "MMM d")}
+                                Last: {format(recipe.lastUsedAt.toDate(), "MMM d")}
                               </span>
                             )}
-                            {source.successfulFetches > 0 && (
+                            {(recipe.useCount || 0) > 0 && (
                               <span className="text-xs text-muted-foreground">
-                                ({source.successfulFetches} fetches)
+                                ({recipe.useCount}x used)
                               </span>
                             )}
                           </div>
@@ -1927,8 +1927,7 @@ export function ConnectFileOverlay({
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            // Open the source URL in a new tab for manual collection
-                            window.open(source.url, "_blank", "noopener,noreferrer");
+                            window.open(recipe.startUrl, "_blank", "noopener,noreferrer");
                           }}
                         >
                           <ExternalLink className="h-3.5 w-3.5 mr-1" />

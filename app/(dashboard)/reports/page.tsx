@@ -630,11 +630,11 @@ export default function ReportsPage() {
                             <div className="text-xs text-muted-foreground">Total</div>
                           </div>
                           <div className="text-center">
-                            <div className="text-2xl font-bold text-green-600">{report.transactionCount.income}</div>
+                            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{report.transactionCount.income}</div>
                             <div className="text-xs text-muted-foreground">Income</div>
                           </div>
                           <div className="text-center">
-                            <div className="text-2xl font-bold text-red-600">{report.transactionCount.expense}</div>
+                            <div className="text-2xl font-bold text-red-600 dark:text-red-400">{report.transactionCount.expense}</div>
                             <div className="text-xs text-muted-foreground">Expenses</div>
                           </div>
                           <div className="text-center">
@@ -702,7 +702,7 @@ export default function ReportsPage() {
                                 <td className="text-right py-2 font-mono">
                                   {formatCurrency(ab.transactionSum, ab.currency)}
                                 </td>
-                                <td className={`text-right py-2 font-mono font-medium ${ab.balanceAtDate >= 0 ? "text-green-700" : "text-red-600"}`}>
+                                <td className={`text-right py-2 font-mono font-medium ${ab.balanceAtDate >= 0 ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
                                   {formatCurrency(ab.balanceAtDate, ab.currency)}
                                 </td>
                               </tr>
@@ -728,7 +728,7 @@ export default function ReportsPage() {
                                       currency
                                     )}
                                   </td>
-                                  <td className={`text-right py-2 font-mono ${total >= 0 ? "text-green-700" : "text-red-600"}`}>
+                                  <td className={`text-right py-2 font-mono ${total >= 0 ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
                                     {formatCurrency(total, currency)}
                                   </td>
                                 </tr>
@@ -763,7 +763,7 @@ export default function ReportsPage() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {!readiness?.isReady && (
-                      <div className="flex items-center gap-2 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800">
+                      <div className="flex items-center gap-2 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300">
                         <AlertCircle className="h-5 w-5 flex-shrink-0" />
                         <p className="text-sm">
                           Please complete all transactions before exporting. Missing documentation may cause issues with the Finanzamt.
@@ -772,7 +772,7 @@ export default function ReportsPage() {
                     )}
 
                     {exportError && (
-                      <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800">
+                      <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 dark:bg-red-950/30 dark:border-red-800 dark:text-red-300">
                         <AlertCircle className="h-5 w-5 flex-shrink-0" />
                         {exportError === "TAX_NUMBER_REQUIRED" ? (
                           <p className="text-sm">
@@ -830,8 +830,8 @@ export default function ReportsPage() {
                           <div
                             className={`text-sm p-2 rounded ${
                               submitResult.success
-                                ? "bg-green-50 text-green-700 border border-green-200"
-                                : "bg-red-50 text-red-700 border border-red-200"
+                                ? "bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800"
+                                : "bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-800"
                             }`}
                           >
                             {submitResult.message}

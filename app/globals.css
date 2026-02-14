@@ -28,6 +28,18 @@
   --color-ring: hsl(20 20% 14%);
   --radius: 0.5rem;
 
+  /* Semantic: completion rows */
+  --color-complete-row: #d9ffb2;
+  --color-complete-row-selected: #b8e986;
+  /* Semantic: highlight */
+  --color-highlight: #fef08a;
+  /* Chart palette */
+  --color-chart-1: hsl(28 80% 52%);
+  --color-chart-2: hsl(20 70% 40%);
+  --color-chart-3: hsl(35 90% 60%);
+  --color-chart-4: hsl(15 60% 55%);
+  --color-chart-5: hsl(40 85% 65%);
+
   /* Motion tokens */
   --duration-instant: 100ms;
   --duration-fast: 200ms;
@@ -39,6 +51,43 @@
   /* Completion glow */
   --color-complete-glow: hsl(100 80% 70% / 0.6);
   --color-complete-glow-dark: hsl(120 50% 30% / 0.4);
+}
+
+/* Dark mode overrides */
+.dark {
+  --color-background: hsl(20 10% 10%);
+  --color-foreground: hsl(28 15% 88%);
+  --color-card: hsl(20 10% 12%);
+  --color-card-foreground: hsl(28 15% 88%);
+  --color-popover: hsl(20 10% 13%);
+  --color-popover-foreground: hsl(28 15% 88%);
+  --color-primary: hsl(28 30% 70%);
+  --color-primary-foreground: hsl(20 15% 10%);
+  --color-secondary: hsl(20 12% 18%);
+  --color-secondary-foreground: hsl(28 15% 85%);
+  --color-muted: hsl(20 10% 18%);
+  --color-muted-foreground: hsl(20 10% 55%);
+  --color-accent: hsl(20 12% 18%);
+  --color-accent-foreground: hsl(28 15% 85%);
+  --color-destructive: hsl(0 62% 50%);
+  --color-destructive-foreground: hsl(0 0% 98%);
+  --color-info: hsl(45 40% 16%);
+  --color-info-foreground: hsl(45 80% 70%);
+  --color-info-border: hsl(45 50% 30%);
+  --color-amount-positive: #4ade80;
+  --color-amount-negative: #f87171;
+  --color-border: hsl(20 10% 22%);
+  --color-input: hsl(20 10% 20%);
+  --color-ring: hsl(28 30% 70%);
+  --color-complete-row: hsl(120 20% 16%);
+  --color-complete-row-selected: hsl(120 25% 22%);
+  --color-highlight: hsl(45 70% 30%);
+  --color-chart-1: hsl(28 70% 60%);
+  --color-chart-2: hsl(20 55% 50%);
+  --color-chart-3: hsl(35 75% 55%);
+  --color-chart-4: hsl(15 50% 50%);
+  --color-chart-5: hsl(40 70% 55%);
+  --color-complete-glow: hsl(120 50% 30% / 0.4);
 }
 
 @layer base {
@@ -215,10 +264,6 @@
   animation: row-complete-glow 600ms var(--ease-out-expo) forwards;
 }
 
-.dark .animate-row-complete {
-  --color-complete-glow: var(--color-complete-glow-dark);
-}
-
 /* Pill pop-in: scale from small with slight overshoot */
 @keyframes pill-pop-in {
   0% {
@@ -292,8 +337,8 @@
 
 /* Suggestion accept: amber → green → shrink away */
 @keyframes suggestion-accept {
-  0% { background-color: var(--color-amber-50, hsl(48 96% 89%)); opacity: 1; }
-  40% { background-color: hsl(100 80% 92%); }
+  0% { background-color: var(--color-info); opacity: 1; }
+  40% { background-color: var(--color-complete-row); }
   100% { opacity: 0; height: 0; padding: 0; margin: 0; overflow: hidden; }
 }
 

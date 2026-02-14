@@ -75,9 +75,10 @@ async function hasActiveEmailIntegration(userId: string): Promise<boolean> {
 
 // Get the app URL for server-to-server calls
 function getAppUrl(): string {
-  // Development: http://localhost:3000
-  // Production: https://your-app.vercel.app
-  return process.env.APP_URL || "http://localhost:3000";
+  if (process.env.APP_URL) return process.env.APP_URL;
+  // In the emulator, call the local Next.js dev server
+  if (process.env.FUNCTIONS_EMULATOR === "true") return "http://localhost:3000";
+  return "https://fibuki.com";
 }
 
 // ============================================================================
@@ -138,9 +139,12 @@ async function queueAsDocument(
     automationHistory: FieldValue.arrayUnion({
       type: "receipt_search",
       ranAt: Timestamp.now(),
-      forPartnerId: partnerId || null,
-      workerRequestId: requestRef.id,
       status: "pending",
+      actor: "auto",
+      level: "info" as const,
+      forPartnerId: partnerId || null,
+      workerRunId: requestRef.id,
+      summary: "Receipt search queued",
     }),
   });
 
@@ -282,28 +286,10 @@ export async function queueReceiptSearchForTransaction(
     };
   }
 
-  // Check if receipt search already ran for this partner
-  const automationHistory: Array<{
-    type: string;
-    forPartnerId?: string;
-    status: string;
-  }> = txData.automationHistory || [];
-
-  const alreadyRanForPartner = automationHistory.some(
-    (entry) =>
-      entry.type === "receipt_search" &&
-      entry.forPartnerId === partnerId &&
-      entry.status === "completed"
-  );
-
-  if (alreadyRanForPartner && !force) {
-    return {
-      success: true,
-      message: `Receipt search already ran for partner ${partnerId}`,
-      skipped: true,
-      skipReason: "already_ran",
-    };
-  }
+  // Note: we intentionally do NOT skip based on "already ran for this partner".
+  // The has_files and has_no_receipt_category checks above already handle resolved
+  // transactions. If a previous search ran but found nothing, a retry may succeed
+  // (new emails arrived, different queries generated, etc.).
 
   // Check if user has an active email integration
   // Skip receipt search if no Gmail is connected - avoids wasting resources
@@ -347,9 +333,12 @@ export async function queueReceiptSearchForTransaction(
       automationHistory: FieldValue.arrayUnion({
         type: "receipt_search",
         ranAt: Timestamp.now(),
+        status: directResult.status,
+        actor: "auto",
+        level: "info" as const,
         forPartnerId: partnerId || null,
         workerRunId: directResult.runId,
-        status: directResult.status,
+        summary: directResult.summary || "Receipt search completed",
       }),
     });
 

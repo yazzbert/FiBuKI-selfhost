@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
+import { decrypt, getEncryptionKey } from "@/lib/crypto/encryption";
 
 const db = getAdminDb();
 const TOKENS_COLLECTION = "emailTokens";
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     const tokenData = tokenSnap.data()!;
-    const refreshToken = tokenData.refreshToken;
+    let refreshToken = tokenData.refreshToken;
 
     if (!refreshToken) {
       // Mark integration as needing re-auth
@@ -69,6 +70,25 @@ export async function POST(request: NextRequest) {
         { error: "No refresh token available. User needs to re-authenticate." },
         { status: 401 }
       );
+    }
+
+    // Decrypt refresh token if it was stored encrypted
+    if (tokenData.refreshTokenIv) {
+      try {
+        const encryptionKey = getEncryptionKey();
+        refreshToken = decrypt(refreshToken, tokenData.refreshTokenIv, encryptionKey);
+      } catch (decryptError) {
+        console.error("Failed to decrypt refresh token:", decryptError);
+        await db.collection(INTEGRATIONS_COLLECTION).doc(integrationId).update({
+          needsReauth: true,
+          lastError: "Failed to decrypt refresh token",
+          updatedAt: Timestamp.now(),
+        });
+        return NextResponse.json(
+          { error: "Failed to decrypt refresh token. User needs to re-authenticate." },
+          { status: 401 }
+        );
+      }
     }
 
     // Refresh the token

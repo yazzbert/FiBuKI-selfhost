@@ -100,11 +100,13 @@ async function processBmdExport(exportId, exportData) {
             id: doc.id,
             ...doc.data(),
         }));
-        // Filter to only transactions with files if requested
+        // Filter to only complete transactions (files OR no-receipt category)
         if (onlyWithFiles) {
-            transactions = transactions.filter((tx) => tx.fileIds &&
-                Array.isArray(tx.fileIds) &&
-                tx.fileIds.length > 0);
+            transactions = transactions.filter((tx) => {
+                const hasFiles = tx.fileIds && Array.isArray(tx.fileIds) && tx.fileIds.length > 0;
+                const hasCategory = !!tx.noReceiptCategoryId;
+                return hasFiles || hasCategory;
+            });
         }
         await exportRef.update({
             "counts.transactions": transactions.length,
@@ -189,11 +191,17 @@ async function processBmdExport(exportId, exportData) {
             date: tx.date,
             amount: tx.amount,
             name: tx.name,
+            partner: tx.partner,
+            partnerName: tx.partnerId
+                ? partnersMap.get(tx.partnerId)?.name
+                : undefined,
             partnerId: tx.partnerId,
             fileIds: tx.fileIds,
             vatRate: tx.vatRate,
             vatAmount: tx.vatAmount,
             vatId: tx.vatId,
+            noReceiptCategoryId: tx.noReceiptCategoryId,
+            noReceiptCategoryTemplateId: tx.noReceiptCategoryTemplateId,
         }));
         // Convert filesMap to simple FileForExport map
         const simpleFilesMap = new Map();

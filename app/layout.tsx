@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/components/auth";
+import { ThemeProvider } from "@/components/theme/theme-provider";
 import { bodyFont, logoFont } from "@/app/fonts";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages, getLocale } from "next-intl/server";
@@ -19,13 +20,15 @@ export default async function RootLayout({
   const messages = await getMessages();
 
   return (
-    <html lang={locale} className="overflow-hidden">
+    <html lang={locale} className="overflow-hidden" suppressHydrationWarning>
       <body
         className={`${bodyFont.className} ${logoFont.variable} overflow-hidden`}
       >
-        <NextIntlClientProvider messages={messages}>
-          <AuthProvider>{children}</AuthProvider>
-        </NextIntlClientProvider>
+        <ThemeProvider>
+          <NextIntlClientProvider messages={messages}>
+            <AuthProvider>{children}</AuthProvider>
+          </NextIntlClientProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

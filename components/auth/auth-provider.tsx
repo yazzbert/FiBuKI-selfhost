@@ -142,7 +142,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    return () => unsubscribe();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && auth.currentUser) {
+        // Force token refresh when tab becomes visible after being in background
+        auth.currentUser.getIdToken(true).catch(() => {
+          // Refresh failed - token revoked or network issue
+          // onAuthStateChanged will handle the logout
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      unsubscribe();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {

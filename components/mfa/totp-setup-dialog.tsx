@@ -189,7 +189,7 @@ export function TotpSetupDialog({
               </div>
             ) : totpSecret ? (
               <>
-                <div className="flex justify-center p-4 bg-white rounded-lg">
+                <div className="flex justify-center p-4 bg-background rounded-lg">
                   <QRCodeSVG value={qrCodeUrl} size={200} />
                 </div>
 

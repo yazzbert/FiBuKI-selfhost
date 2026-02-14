@@ -8,19 +8,29 @@ import type { PlanId, TransactionQuotaResult } from "../config";
 
 // ============================================================================
 // Pure function extraction of quota logic for unit testing.
+// Mirrors the logic in checkTransactionQuota.ts without Firestore dependency.
 // ============================================================================
+
+type AdminOverride = "free_plan" | "plan_tester" | null;
 
 interface QuotaData {
   plan: PlanId;
   transactionCountCurrentMonth: number;
   transactionCountMonth: string; // "YYYY-MM"
+  adminOverride?: AdminOverride;
 }
 
 function checkQuotaPure(
   sub: QuotaData | null,
   countToAdd: number,
-  currentYearMonth: string
+  currentYearMonth: string,
+  isAdmin: boolean = false
 ): TransactionQuotaResult {
+  // Admin users have unlimited quota
+  if (isAdmin) {
+    return { allowed: true, currentCount: 0, limit: Infinity, remainingSlots: Infinity };
+  }
+
   if (!sub) {
     const freePlan = PLANS.free;
     return {
@@ -29,6 +39,11 @@ function checkQuotaPure(
       limit: freePlan.transactionLimit,
       remainingSlots: freePlan.transactionLimit,
     };
+  }
+
+  // Admin override: free_plan users have unlimited quota
+  if (sub.adminOverride === "free_plan") {
+    return { allowed: true, currentCount: 0, limit: Infinity, remainingSlots: Infinity };
   }
 
   const limit = PLANS[sub.plan]?.transactionLimit ?? PLANS.free.transactionLimit;
@@ -209,6 +224,109 @@ describe("checkTransactionQuota logic", () => {
       );
       expect(result.allowed).toBe(true);
       expect(result.currentCount).toBe(0);
+    });
+  });
+
+  describe("admin override: free_plan", () => {
+    it("should allow unlimited transactions for free_plan override", () => {
+      const result = checkQuotaPure(
+        {
+          plan: "free",
+          transactionCountCurrentMonth: 999,
+          transactionCountMonth: currentMonth,
+          adminOverride: "free_plan",
+        },
+        10000,
+        currentMonth
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.limit).toBe(Infinity);
+      expect(result.remainingSlots).toBe(Infinity);
+      expect(result.currentCount).toBe(0);
+    });
+
+    it("should bypass quota even when count exceeds any plan limit", () => {
+      const result = checkQuotaPure(
+        {
+          plan: "free",
+          transactionCountCurrentMonth: PLANS.pro.transactionLimit + 100,
+          transactionCountMonth: currentMonth,
+          adminOverride: "free_plan",
+        },
+        500,
+        currentMonth
+      );
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe("admin override: plan_tester", () => {
+    it("should use the tester's current plan limits normally", () => {
+      const result = checkQuotaPure(
+        {
+          plan: "starter",
+          transactionCountCurrentMonth: 0,
+          transactionCountMonth: currentMonth,
+          adminOverride: "plan_tester",
+        },
+        PLANS.starter.transactionLimit,
+        currentMonth
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.limit).toBe(PLANS.starter.transactionLimit);
+    });
+
+    it("should deny plan_tester when over plan limit", () => {
+      const result = checkQuotaPure(
+        {
+          plan: "starter",
+          transactionCountCurrentMonth: PLANS.starter.transactionLimit,
+          transactionCountMonth: currentMonth,
+          adminOverride: "plan_tester",
+        },
+        1,
+        currentMonth
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.remainingSlots).toBe(0);
+    });
+
+    it("should apply correct limits when tester switches to pro", () => {
+      const result = checkQuotaPure(
+        {
+          plan: "pro",
+          transactionCountCurrentMonth: 0,
+          transactionCountMonth: currentMonth,
+          adminOverride: "plan_tester",
+        },
+        PLANS.pro.transactionLimit,
+        currentMonth
+      );
+      expect(result.allowed).toBe(true);
+      expect(result.limit).toBe(PLANS.pro.transactionLimit);
+    });
+  });
+
+  describe("isAdmin flag", () => {
+    it("should allow unlimited for admin users regardless of subscription", () => {
+      const result = checkQuotaPure(null, 10000, currentMonth, true);
+      expect(result.allowed).toBe(true);
+      expect(result.limit).toBe(Infinity);
+      expect(result.remainingSlots).toBe(Infinity);
+    });
+
+    it("should bypass all checks for admin even with exhausted subscription", () => {
+      const result = checkQuotaPure(
+        {
+          plan: "free",
+          transactionCountCurrentMonth: PLANS.free.transactionLimit,
+          transactionCountMonth: currentMonth,
+        },
+        100,
+        currentMonth,
+        true
+      );
+      expect(result.allowed).toBe(true);
     });
   });
 });

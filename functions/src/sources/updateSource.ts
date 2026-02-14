@@ -4,6 +4,7 @@
 
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { createCallable, HttpsError } from "../utils/createCallable";
+import { buildSourcePartnerData } from "./sourcePartnerUtils";
 
 interface SourceUpdateData {
   name?: string;
@@ -112,6 +113,47 @@ export const updateSourceCallable = createCallable<
     }
 
     await sourceRef.update(updates);
+
+    // Sync source partner if partner-relevant fields changed
+    const partnerRelevantFields = ["name", "iban", "cardLast4", "cardBrand"];
+    const changedPartnerFields = partnerRelevantFields.filter((f) => f in updates);
+
+    if (changedPartnerFields.length > 0) {
+      const sourceData = sourceSnap.data()!;
+      const sourcePartnerId = sourceData.sourcePartnerId;
+
+      if (sourcePartnerId) {
+        try {
+          // Merge current source data with updates
+          const mergedSource = {
+            name: (updates.name as string) || sourceData.name || "",
+            accountKind: sourceData.accountKind || "bank_account",
+            iban: updates.iban !== undefined ? updates.iban : sourceData.iban,
+            cardLast4: updates.cardLast4 !== undefined ? updates.cardLast4 : sourceData.cardLast4,
+            cardBrand: updates.cardBrand !== undefined ? updates.cardBrand : sourceData.cardBrand,
+          };
+
+          const partnerData = buildSourcePartnerData(mergedSource);
+
+          const partnerRef = ctx.db.collection("partners").doc(sourcePartnerId);
+          const partnerSnap = await partnerRef.get();
+
+          if (partnerSnap.exists && partnerSnap.data()?.userId === ctx.userId) {
+            await partnerRef.update({
+              name: partnerData.name,
+              aliases: partnerData.aliases,
+              ibans: partnerData.ibans,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            console.log(`[updateSource] Synced source partner ${sourcePartnerId}`, {
+              changedFields: changedPartnerFields,
+            });
+          }
+        } catch (err) {
+          console.error(`[updateSource] Failed to sync source partner:`, err);
+        }
+      }
+    }
 
     console.log(`[updateSource] Updated source ${sourceId}`, {
       userId: ctx.userId,

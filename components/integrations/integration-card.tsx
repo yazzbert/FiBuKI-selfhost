@@ -17,9 +17,9 @@ interface IntegrationCardProps {
 }
 
 const badgeClasses: Record<string, string> = {
-  success: "border-green-500 text-green-600",
-  warning: "border-amber-500 text-amber-600",
-  destructive: "border-red-500 text-red-600",
+  success: "border-green-500 text-green-600 dark:border-green-600 dark:text-green-400",
+  warning: "border-amber-500 text-amber-600 dark:border-amber-600 dark:text-amber-400",
+  destructive: "border-red-500 text-red-600 dark:border-red-600 dark:text-red-400",
   muted: "",
 };
 

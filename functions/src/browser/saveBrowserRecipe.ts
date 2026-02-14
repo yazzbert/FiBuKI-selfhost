@@ -35,6 +35,23 @@ interface SaveBrowserRecipeRequest {
   requiresAuth: boolean;
   originTransactionId?: string;
   label?: string;
+  /** Optional status for the recipe (default: "active") */
+  status?: "active" | "paused" | "error" | "needs_login";
+  /** How this recipe was created */
+  sourceType?: "manual" | "email_link" | "browser_detected" | "learn_mode";
+  /** If converted from an email invoice link, the original message ID */
+  fromInvoiceLinkMessageId?: string;
+  /** URL of the invoice list page (for direct navigation during replay) */
+  invoiceListUrl?: string;
+  /** Invoice table metadata detected during recording */
+  invoiceTableMeta?: {
+    containerSelector: string;
+    rowSelector?: string;
+    columns?: Array<{ index: number; semantic: string }>;
+    url: string;
+    selectionType?: string;
+    sampleItems?: Array<{ text: string; date?: string; amount?: string }>;
+  };
 }
 
 interface SaveBrowserRecipeResponse {
@@ -56,6 +73,11 @@ export const saveBrowserRecipeCallable = createCallable<
       requiresAuth,
       originTransactionId,
       label,
+      status,
+      sourceType,
+      fromInvoiceLinkMessageId,
+      invoiceListUrl,
+      invoiceTableMeta,
     } = request;
 
     if (!partnerId) {
@@ -67,10 +89,10 @@ export const saveBrowserRecipeCallable = createCallable<
     if (!domain) {
       throw new HttpsError("invalid-argument", "domain is required");
     }
-    if (!recordedActions || recordedActions.length === 0) {
+    if (!recordedActions) {
       throw new HttpsError(
         "invalid-argument",
-        "recordedActions must not be empty"
+        "recordedActions is required (use empty array for bookmarks)"
       );
     }
 
@@ -104,11 +126,18 @@ export const saveBrowserRecipeCallable = createCallable<
       requiresAuth,
       useCount: 0,
       autoRun: false,
+      status: status || "active",
+      successfulFetches: 0,
+      failedFetches: 0,
       createdAt: now,
       updatedAt: now,
     };
     if (label) newRecipe.label = label;
     if (originTransactionId) newRecipe.originTransactionId = originTransactionId;
+    if (sourceType) newRecipe.sourceType = sourceType;
+    if (fromInvoiceLinkMessageId) newRecipe.fromInvoiceLinkMessageId = fromInvoiceLinkMessageId;
+    if (invoiceListUrl) newRecipe.invoiceListUrl = invoiceListUrl;
+    if (invoiceTableMeta) newRecipe.invoiceTableMeta = JSON.parse(JSON.stringify(invoiceTableMeta));
 
     // Upsert: replace existing recipe for the same domain, or append
     const existingRecipes: Array<{ domain: string }> =

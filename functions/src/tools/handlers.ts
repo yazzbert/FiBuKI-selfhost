@@ -11,46 +11,15 @@
  * via Cloud Function callables.
  */
 
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
+import { TOOL_NAMES } from "./definitions";
+import type { ToolName } from "./definitions";
+
+export { TOOL_NAMES };
+export type { ToolName };
 
 const db = getFirestore();
-
-// ============================================================================
-// Tool Registry
-// ============================================================================
-
-export type ToolName =
-  | "list_sources"
-  | "get_source"
-  | "list_transactions"
-  | "get_transaction"
-  | "update_transaction"
-  | "list_files"
-  | "get_file"
-  | "connect_file_to_transaction"
-  | "disconnect_file_from_transaction"
-  | "list_transactions_needing_files"
-  | "auto_connect_file_suggestions"
-  | "list_no_receipt_categories"
-  | "assign_no_receipt_category"
-  | "remove_no_receipt_category";
-
-export const TOOL_NAMES: ToolName[] = [
-  "list_sources",
-  "get_source",
-  "list_transactions",
-  "get_transaction",
-  "update_transaction",
-  "list_files",
-  "get_file",
-  "connect_file_to_transaction",
-  "disconnect_file_from_transaction",
-  "list_transactions_needing_files",
-  "auto_connect_file_suggestions",
-  "list_no_receipt_categories",
-  "assign_no_receipt_category",
-  "remove_no_receipt_category",
-];
 
 /**
  * Main tool dispatcher - routes tool calls to handlers
@@ -61,16 +30,29 @@ export async function handleTool(
   args: Record<string, unknown> = {}
 ): Promise<unknown> {
   switch (tool) {
+    // Sources
     case "list_sources":
       return listSources(userId);
     case "get_source":
       return getSource(userId, args.sourceId as string);
+    case "create_source":
+      return createSource(userId, args);
+    case "delete_source":
+      return deleteSource(userId, args);
+
+    // Transactions
     case "list_transactions":
       return listTransactions(userId, args);
     case "get_transaction":
       return getTransaction(userId, args.transactionId as string);
     case "update_transaction":
       return updateTransaction(userId, args);
+    case "list_transactions_needing_files":
+      return listTransactionsNeedingFiles(userId, args);
+    case "import_transactions":
+      return importTransactions(userId, args);
+
+    // Files
     case "list_files":
       return listFiles(userId, args);
     case "get_file":
@@ -79,16 +61,37 @@ export async function handleTool(
       return connectFileToTransaction(userId, args);
     case "disconnect_file_from_transaction":
       return disconnectFileFromTransaction(userId, args);
-    case "list_transactions_needing_files":
-      return listTransactionsNeedingFiles(userId, args);
     case "auto_connect_file_suggestions":
       return autoConnectFileSuggestions(userId, args);
+    case "upload_file":
+      return uploadFile(userId, args);
+    case "score_file_transaction_match":
+      return scoreFileTransactionMatch(userId, args);
+
+    // Partners
+    case "list_partners":
+      return listPartners(userId, args);
+    case "get_partner":
+      return getPartner(userId, args.partnerId as string);
+    case "create_partner":
+      return createPartner(userId, args);
+    case "assign_partner_to_transaction":
+      return assignPartnerToTx(userId, args);
+    case "remove_partner_from_transaction":
+      return removePartnerFromTx(userId, args);
+
+    // Categories
     case "list_no_receipt_categories":
       return listNoReceiptCategories(userId);
     case "assign_no_receipt_category":
       return assignNoReceiptCategory(userId, args);
     case "remove_no_receipt_category":
       return removeNoReceiptCategory(userId, args.transactionId as string);
+
+    // Status
+    case "get_automation_status":
+      return getAutomationStatus(userId);
+
     default:
       throw new Error(`Unknown tool: ${tool}`);
   }
@@ -518,4 +521,474 @@ export async function removeNoReceiptCategory(userId: string, transactionId: str
 
   await batch.commit();
   return { success: true, transactionId, isComplete: hasFiles };
+}
+
+// ============================================================================
+// Partners
+// ============================================================================
+
+export async function listPartners(userId: string, args: Record<string, unknown>) {
+  const snapshot = await db
+    .collection("partners")
+    .where("userId", "==", userId)
+    .where("isActive", "==", true)
+    .orderBy("name", "asc")
+    .get();
+
+  let partners = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      name: data.name,
+      aliases: data.aliases || [],
+      vatId: data.vatId || null,
+      ibans: data.ibans || [],
+      website: data.website || null,
+      country: data.country || null,
+      defaultCategoryId: data.defaultCategoryId || null,
+    };
+  });
+
+  if (args.search) {
+    const search = (args.search as string).toLowerCase();
+    partners = partners.filter(
+      (p) =>
+        p.name?.toLowerCase().includes(search) ||
+        p.aliases?.some((a: string) => a.toLowerCase().includes(search))
+    );
+  }
+
+  const limit = Math.min((args.limit as number) || 50, 100);
+  return partners.slice(0, limit);
+}
+
+export async function getPartner(userId: string, partnerId: string) {
+  if (!partnerId) throw new Error("partnerId is required");
+
+  const doc = await db.collection("partners").doc(partnerId).get();
+  if (!doc.exists || doc.data()?.userId !== userId) {
+    throw new Error("Partner not found");
+  }
+  return { id: doc.id, ...doc.data() };
+}
+
+export async function createPartner(userId: string, args: Record<string, unknown>) {
+  const { createUserPartnerInternal } = await import("../partners/createUserPartner");
+  return createUserPartnerInternal(db, userId, {
+    name: args.name as string,
+    aliases: args.aliases as string[] | undefined,
+    vatId: args.vatId as string | undefined,
+    ibans: args.ibans as string[] | undefined,
+    website: args.website as string | undefined,
+    country: args.country as string | undefined,
+  });
+}
+
+export async function assignPartnerToTx(userId: string, args: Record<string, unknown>) {
+  const { transactionId, partnerId } = args;
+  if (!transactionId) throw new Error("transactionId is required");
+  if (!partnerId) throw new Error("partnerId is required");
+
+  // Verify transaction ownership
+  const txDoc = await db.collection("transactions").doc(transactionId as string).get();
+  if (!txDoc.exists || txDoc.data()?.userId !== userId) {
+    throw new Error("Transaction not found");
+  }
+
+  // Verify partner ownership
+  const partnerDoc = await db.collection("partners").doc(partnerId as string).get();
+  if (!partnerDoc.exists || partnerDoc.data()?.userId !== userId) {
+    throw new Error("Partner not found");
+  }
+
+  const now = FieldValue.serverTimestamp();
+  await db.collection("transactions").doc(transactionId as string).update({
+    partnerId,
+    partnerType: "user",
+    partnerMatchedBy: "api",
+    partnerMatchConfidence: null,
+    updatedAt: now,
+    automationHistory: FieldValue.arrayUnion({
+      type: "partner_assigned",
+      ranAt: Timestamp.now(),
+      status: "completed",
+      actor: "manual",
+      level: "decision",
+      partnerName: partnerDoc.data()!.name || null,
+      forPartnerId: partnerId,
+      summary: `Partner "${partnerDoc.data()!.name}" assigned via API`,
+    }),
+  });
+
+  return { success: true, transactionId, partnerId };
+}
+
+export async function removePartnerFromTx(userId: string, args: Record<string, unknown>) {
+  const { transactionId } = args;
+  if (!transactionId) throw new Error("transactionId is required");
+
+  const txDoc = await db.collection("transactions").doc(transactionId as string).get();
+  if (!txDoc.exists || txDoc.data()?.userId !== userId) {
+    throw new Error("Transaction not found");
+  }
+
+  const txData = txDoc.data()!;
+  const previousPartnerId = txData.partnerId;
+
+  // Look up partner name for activity log
+  let partnerName: string | null = null;
+  if (previousPartnerId) {
+    try {
+      const pSnap = await db.collection("partners").doc(previousPartnerId).get();
+      partnerName = pSnap.data()?.name || null;
+    } catch { /* best effort */ }
+  }
+
+  const now = FieldValue.serverTimestamp();
+  await db.collection("transactions").doc(transactionId as string).update({
+    partnerId: null,
+    partnerType: null,
+    partnerMatchedBy: null,
+    partnerMatchConfidence: null,
+    updatedAt: now,
+    automationHistory: FieldValue.arrayUnion({
+      type: "partner_removed",
+      ranAt: Timestamp.now(),
+      status: "completed",
+      actor: "manual",
+      level: "decision",
+      partnerName: partnerName || previousPartnerId || null,
+      forPartnerId: previousPartnerId || null,
+      summary: `Partner "${partnerName || previousPartnerId}" removed via API`,
+    }),
+  });
+
+  return { success: true, transactionId };
+}
+
+// ============================================================================
+// Source Management
+// ============================================================================
+
+export async function createSource(userId: string, args: Record<string, unknown>) {
+  const { createSourceInternal } = await import("../sources/createSource");
+  return createSourceInternal(db, userId, {
+    name: args.name as string,
+    accountKind: (args.accountKind as "bank_account" | "credit_card") || "bank_account",
+    iban: args.iban as string | undefined,
+    currency: (args.currency as string) || "EUR",
+    type: "manual",
+  });
+}
+
+export async function deleteSource(userId: string, args: Record<string, unknown>) {
+  const { sourceId, confirm } = args;
+  if (!sourceId) throw new Error("sourceId is required");
+  if (confirm !== true) {
+    throw new Error("Must set confirm: true to delete a source. This will delete all associated transactions.");
+  }
+
+  const { deleteSourceInternal } = await import("../sources/deleteSource");
+  return deleteSourceInternal(db, userId, sourceId as string);
+}
+
+// ============================================================================
+// Import
+// ============================================================================
+
+export async function importTransactions(userId: string, args: Record<string, unknown>) {
+  const { sourceId, transactions: rawTxs } = args;
+  if (!sourceId) throw new Error("sourceId is required");
+  if (!rawTxs || !Array.isArray(rawTxs)) throw new Error("transactions array is required");
+
+  // Verify source ownership
+  const sourceDoc = await db.collection("sources").doc(sourceId as string).get();
+  if (!sourceDoc.exists || sourceDoc.data()?.userId !== userId) {
+    throw new Error("Source not found");
+  }
+
+  // Build transaction data with dedupeHashes
+  const crypto = await import("crypto");
+  const importJobId = `api_${Date.now()}`;
+
+  const transactions = (rawTxs as Array<Record<string, unknown>>).map((tx, index) => {
+    const date = tx.date as string;
+    const amount = tx.amount as number;
+    const name = tx.name as string;
+    const currency = (tx.currency as string) || "EUR";
+
+    // Generate dedupeHash from key fields
+    const hashInput = `${sourceId}|${date}|${amount}|${name}|${currency}`;
+    const dedupeHash = crypto.createHash("sha256").update(hashInput).digest("hex");
+
+    return {
+      sourceId: sourceId as string,
+      date,
+      amount,
+      currency,
+      name,
+      description: (tx.description as string) || null,
+      partner: (tx.partner as string) || null,
+      reference: (tx.reference as string) || null,
+      partnerIban: (tx.partnerIban as string) || null,
+      dedupeHash,
+      importJobId,
+      csvRowIndex: index,
+      _original: {
+        date: date,
+        amount: String(amount),
+        rawRow: tx as Record<string, string>,
+      },
+    };
+  });
+
+  // Use bulk create directly (not via callable to avoid double auth check)
+  const { Timestamp: AdminTimestamp } = await import("firebase-admin/firestore");
+  const { checkTransactionQuota, incrementTransactionCount } = await import("../billing/checkTransactionQuota");
+
+  const quota = await checkTransactionQuota(userId, transactions.length, false);
+  const overLimitStartIndex = quota.allowed ? transactions.length : quota.remainingSlots;
+
+  const now = AdminTimestamp.now();
+  const transactionIds: string[] = [];
+  const overLimitTransactionIds: string[] = [];
+  const BATCH_SIZE = 500;
+
+  let globalIndex = 0;
+  for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
+    const batch = db.batch();
+    const chunk = transactions.slice(i, i + BATCH_SIZE);
+
+    for (const txData of chunk) {
+      const docRef = db.collection("transactions").doc();
+      transactionIds.push(docRef.id);
+
+      const isOverLimit = globalIndex >= overLimitStartIndex;
+      if (isOverLimit) {
+        overLimitTransactionIds.push(docRef.id);
+      }
+
+      const dateObj = new Date(txData.date);
+      if (isNaN(dateObj.getTime())) {
+        throw new Error(`Invalid date: ${txData.date}`);
+      }
+
+      const transactionDoc: Record<string, unknown> = {
+        userId,
+        sourceId: txData.sourceId,
+        date: AdminTimestamp.fromDate(dateObj),
+        amount: txData.amount,
+        currency: txData.currency,
+        name: txData.name,
+        description: txData.description,
+        partner: txData.partner,
+        reference: txData.reference,
+        partnerIban: txData.partnerIban,
+        dedupeHash: txData.dedupeHash,
+        importJobId: txData.importJobId,
+        csvRowIndex: txData.csvRowIndex,
+        _original: txData._original,
+        fileIds: [],
+        isComplete: false,
+        partnerId: null,
+        partnerType: null,
+        partnerMatchConfidence: null,
+        partnerMatchedBy: null,
+        noReceiptCategoryId: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      if (isOverLimit) {
+        transactionDoc.quotaExceeded = true;
+      }
+
+      batch.set(docRef, transactionDoc);
+      globalIndex++;
+    }
+
+    await batch.commit();
+  }
+
+  const withinQuotaCount = transactionIds.length - overLimitTransactionIds.length;
+  if (withinQuotaCount > 0) {
+    incrementTransactionCount(userId, withinQuotaCount).catch((err) =>
+      console.error("[importTransactions] Failed to increment transaction count:", err)
+    );
+  }
+
+  return {
+    success: true,
+    transactionIds,
+    count: transactionIds.length,
+    quotaExceeded: overLimitTransactionIds.length > 0,
+    overLimitCount: overLimitTransactionIds.length,
+  };
+}
+
+// ============================================================================
+// File Upload & Scoring
+// ============================================================================
+
+export async function uploadFile(userId: string, args: Record<string, unknown>) {
+  const { url, base64, fileName, mimeType } = args;
+  if (!fileName) throw new Error("fileName is required");
+  if (!mimeType) throw new Error("mimeType is required");
+  if (!url && !base64) throw new Error("Either url or base64 is required");
+
+  let fileBuffer: Buffer;
+
+  if (base64) {
+    fileBuffer = Buffer.from(base64 as string, "base64");
+  } else {
+    // Download from URL
+    const response = await fetch(url as string);
+    if (!response.ok) {
+      throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    fileBuffer = Buffer.from(arrayBuffer);
+  }
+
+  // Upload to Storage
+  const bucket = getStorage().bucket();
+  const storagePath = `users/${userId}/files/${Date.now()}_${fileName}`;
+  const file = bucket.file(storagePath);
+
+  await file.save(fileBuffer, {
+    metadata: {
+      contentType: mimeType as string,
+      metadata: { userId },
+    },
+  });
+
+  // Get download URL
+  const [downloadUrl] = await file.getSignedUrl({
+    action: "read",
+    expires: "2099-01-01",
+  });
+
+  // Create file record in Firestore
+  const now = FieldValue.serverTimestamp();
+  const fileDoc = await db.collection("files").add({
+    userId,
+    fileName: fileName as string,
+    mimeType: mimeType as string,
+    storagePath,
+    downloadUrl,
+    fileSize: fileBuffer.length,
+    transactionIds: [],
+    isNotInvoice: false,
+    extractionComplete: false,
+    partnerMatchComplete: false,
+    transactionMatchComplete: false,
+    uploadedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    success: true,
+    fileId: fileDoc.id,
+    fileName,
+    storagePath,
+    fileSize: fileBuffer.length,
+  };
+}
+
+export async function scoreFileTransactionMatch(userId: string, args: Record<string, unknown>) {
+  const { fileId, transactionId } = args;
+  if (!fileId) throw new Error("fileId is required");
+  if (!transactionId) throw new Error("transactionId is required");
+
+  // Verify ownership
+  const [fileDoc, txDoc] = await Promise.all([
+    db.collection("files").doc(fileId as string).get(),
+    db.collection("transactions").doc(transactionId as string).get(),
+  ]);
+
+  if (!fileDoc.exists || fileDoc.data()?.userId !== userId) {
+    throw new Error("File not found");
+  }
+  if (!txDoc.exists || txDoc.data()?.userId !== userId) {
+    throw new Error("Transaction not found");
+  }
+
+  // Use the shared scoring logic
+  const { scoreTransaction, formatScoreBreakdown } = await import("../matching/transactionScoring");
+
+  const fileData = fileDoc.data()!;
+  const txData = txDoc.data()!;
+
+  const result = scoreTransaction(
+    {
+      extractedAmount: fileData.extractedAmount,
+      extractedCurrency: fileData.extractedCurrency,
+      extractedDate: fileData.extractedDate,
+      extractedPartner: fileData.extractedPartner,
+      extractedIban: fileData.extractedIban,
+      extractedText: fileData.extractedText,
+      partnerId: fileData.partnerId,
+    },
+    {
+      id: transactionId as string,
+      amount: txData.amount,
+      date: txData.date,
+      currency: txData.currency,
+      name: txData.name,
+      partner: txData.partner,
+      partnerName: txData.partnerName,
+      partnerId: txData.partnerId,
+      partnerIban: txData.partnerIban,
+      reference: txData.reference,
+    },
+    []
+  );
+
+  return {
+    fileId,
+    transactionId,
+    confidence: result.confidence,
+    matchSources: result.matchSources,
+    breakdown: formatScoreBreakdown(result.breakdown),
+  };
+}
+
+// ============================================================================
+// Automation Status
+// ============================================================================
+
+export async function getAutomationStatus(userId: string) {
+  const subDoc = await db.collection("subscriptions").doc(userId).get();
+
+  if (!subDoc.exists) {
+    return {
+      automationMode: "active",
+      plan: "free",
+      aiBudget: {
+        fairUseLimitEur: 0.5,
+        usageCurrentPeriodEur: 0,
+        creditsEur: 0,
+        paused: false,
+      },
+    };
+  }
+
+  const sub = subDoc.data()!;
+  return {
+    automationMode: sub.automationMode || "active",
+    plan: sub.plan || "free",
+    aiBudget: {
+      fairUseLimitEur: sub.aiFairUseLimitEur ?? 0.5,
+      usageCurrentPeriodEur: sub.aiUsageCurrentPeriodEur ?? 0,
+      creditsEur: sub.aiCreditsEur ?? 0,
+      overageCapEur: sub.aiOverageCapEur ?? 0,
+      overageUsedEur: sub.aiOverageCurrentPeriodEur ?? 0,
+      paused: sub.aiPaused ?? false,
+    },
+    transactionQuota: {
+      currentCount: sub.transactionCountCurrentMonth ?? 0,
+      month: sub.transactionCountMonth ?? null,
+    },
+  };
 }

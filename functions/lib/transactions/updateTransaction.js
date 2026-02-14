@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateTransactionCallable = void 0;
 const firestore_1 = require("firebase-admin/firestore");
 const createCallable_1 = require("../utils/createCallable");
+const activityLevel_1 = require("../utils/activityLevel");
 exports.updateTransactionCallable = (0, createCallable_1.createCallable)({ name: "updateTransaction" }, async (ctx, request) => {
     const { id, data } = request;
     if (!id) {
@@ -42,6 +43,48 @@ exports.updateTransactionCallable = (0, createCallable_1.createCallable)({ name:
             updateData.isComplete = false;
         }
         // If category removed but has files, keep isComplete=true (don't change)
+    }
+    // Log category changes to activity log
+    if (data.noReceiptCategoryId !== undefined) {
+        const previousCategoryId = transactionData?.noReceiptCategoryId;
+        const actor = (data.noReceiptCategoryMatchedBy === "suggestion" ? "suggestion" : data.noReceiptCategoryMatchedBy === "auto" ? "auto" : "manual");
+        if (data.noReceiptCategoryId && data.noReceiptCategoryId !== previousCategoryId) {
+            // Look up category name
+            let categoryName = null;
+            try {
+                const catSnap = await ctx.db.collection("noReceiptCategories").doc(data.noReceiptCategoryId).get();
+                categoryName = catSnap.data()?.name || null;
+            }
+            catch { /* best effort */ }
+            updateData.automationHistory = firestore_1.FieldValue.arrayUnion({
+                type: "category_assigned",
+                ranAt: firestore_1.Timestamp.now(),
+                status: "completed",
+                actor,
+                level: (0, activityLevel_1.deriveActivityLevel)({ type: "category_assigned", actor }),
+                categoryName: categoryName || data.noReceiptCategoryTemplateId || null,
+                confidence: data.noReceiptCategoryConfidence ?? null,
+                summary: `Category "${categoryName || data.noReceiptCategoryTemplateId || "unknown"}" assigned`,
+            });
+        }
+        else if (!data.noReceiptCategoryId && previousCategoryId) {
+            // Look up previous category name
+            let categoryName = null;
+            try {
+                const catSnap = await ctx.db.collection("noReceiptCategories").doc(previousCategoryId).get();
+                categoryName = catSnap.data()?.name || null;
+            }
+            catch { /* best effort */ }
+            updateData.automationHistory = firestore_1.FieldValue.arrayUnion({
+                type: "category_removed",
+                ranAt: firestore_1.Timestamp.now(),
+                status: "completed",
+                actor: "manual",
+                level: "decision",
+                categoryName: categoryName || null,
+                summary: `Category "${categoryName || "unknown"}" removed`,
+            });
+        }
     }
     // Always update timestamp
     updateData.updatedAt = firestore_1.FieldValue.serverTimestamp();

@@ -2,9 +2,10 @@
  * Assign a partner to a transaction
  */
 
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { createCallable, HttpsError } from "../utils/createCallable";
 import { cancelPartnerWorkersForTransaction } from "../utils/cancelWorkers";
+import { deriveActivityLevel } from "../utils/activityLevel";
 
 interface AssignPartnerToTransactionRequest {
   transactionId: string;
@@ -148,13 +149,25 @@ export const assignPartnerToTransactionCallable = createCallable<
     const previousPartnerType = txData.partnerType;
     const partnerChanged = previousPartnerId !== effectivePartnerId;
 
-    // Update transaction with partner assignment
+    // Update transaction with partner assignment + activity log
+    const actor = (matchedBy === "manual" ? "manual" : matchedBy === "suggestion" ? "suggestion" : matchedBy === "ai" ? "ai" : "auto") as "manual" | "suggestion" | "ai" | "auto";
     await transactionRef.update({
       partnerId: effectivePartnerId,
       partnerType: effectivePartnerType,
       partnerMatchedBy: matchedBy,
       partnerMatchConfidence: confidence ?? null,
       updatedAt: FieldValue.serverTimestamp(),
+      automationHistory: FieldValue.arrayUnion({
+        type: "partner_assigned",
+        ranAt: Timestamp.now(),
+        status: "completed",
+        actor,
+        level: deriveActivityLevel({ type: "partner_assigned", actor }),
+        partnerName: partnerData.name || null,
+        forPartnerId: effectivePartnerId,
+        confidence: confidence ?? null,
+        summary: `Partner "${partnerData.name || effectivePartnerId}" assigned`,
+      }),
     });
 
     console.log(`[assignPartnerToTransaction] Assigned partner ${effectivePartnerId} to transaction ${transactionId}`, {
@@ -211,34 +224,8 @@ export const assignPartnerToTransactionCallable = createCallable<
       }
     }
 
-    // Trigger receipt search if transaction has no files attached AND no no-receipt category
-    // This runs in background and creates a worker request for the frontend to process
-    const hasFiles = txData.fileIds && txData.fileIds.length > 0;
-    const hasNoReceiptCategory = !!txData.noReceiptCategoryId;
-
-    // Skip receipt search if transaction is already complete (has file or no-receipt category)
-    if (!hasFiles && !hasNoReceiptCategory && (partnerChanged || !previousPartnerId)) {
-      try {
-        const { queueReceiptSearchForTransaction } = await import(
-          "../workers/runReceiptSearchForTransaction"
-        );
-
-        // Queue receipt search in background (don't await)
-        queueReceiptSearchForTransaction({
-          transactionId,
-          userId: ctx.userId,
-          partnerId: effectivePartnerId,
-        })
-          .then((result) => {
-            console.log(`[assignPartnerToTransaction] Receipt search queued:`, result);
-          })
-          .catch((err) => {
-            console.error(`[assignPartnerToTransaction] Receipt search queue failed:`, err);
-          });
-      } catch (err) {
-        console.error(`[assignPartnerToTransaction] Failed to queue receipt search:`, err);
-      }
-    }
+    // Receipt search is handled by onTransactionUpdate trigger when it sees the
+    // partnerId change — no need to queue it here (would be a duplicate).
 
     return { success: true };
   }

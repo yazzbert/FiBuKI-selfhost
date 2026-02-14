@@ -140,6 +140,8 @@ export interface Subscription {
   };
   // Migration
   grandfatheredUntil?: Timestamp | null;
+  // Automation mode
+  automationMode?: "active" | "passive";
   // Admin overrides
   adminOverride?: "free_plan" | "plan_tester" | null;
   adminOverrideSetBy?: string | null;

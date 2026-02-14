@@ -28,6 +28,7 @@ import { usePrecisionSearch } from "@/hooks/use-precision-search";
 import { useAuth } from "@/components/auth";
 import { useChat } from "@/components/chat/chat-provider";
 import { useBrowserLearnMode } from "@/hooks/use-browser-learn-mode";
+import { useBrowserReplayMode } from "@/hooks/use-browser-replay-mode";
 import { useBrowserExtensionStatus } from "@/hooks/use-browser-extension";
 
 // Constants for file upload
@@ -80,18 +81,26 @@ export function TransactionDetailPanel({
 
   // Browser learn mode
   const learnMode = useBrowserLearnMode();
+  const replayMode = useBrowserReplayMode();
   const { status: extensionStatus } = useBrowserExtensionStatus();
   const extensionInstalled = extensionStatus === "installed";
 
-  // Get partner name for learn mode
-  const partnerName = useMemo(() => {
-    if (!transaction.partnerId) return "";
+  // Get partner name, website, and recipes for learn/replay mode
+  const { partnerName, partnerWebsite } = useMemo(() => {
+    if (!transaction.partnerId) return { partnerName: "", partnerWebsite: "" };
     const userPartner = partners.find((p) => p.id === transaction.partnerId);
-    if (userPartner) return userPartner.name;
+    if (userPartner) return { partnerName: userPartner.name, partnerWebsite: userPartner.website || "" };
     const globalPartner = globalPartners.find((p) => p.id === transaction.partnerId);
-    if (globalPartner) return globalPartner.name;
-    return transaction.partner || "";
+    if (globalPartner) return { partnerName: globalPartner.name, partnerWebsite: globalPartner.website || "" };
+    return { partnerName: transaction.partner || "", partnerWebsite: "" };
   }, [transaction.partnerId, transaction.partner, partners, globalPartners]);
+
+  // Get browser recipes for the current partner
+  const partnerRecipes = useMemo(() => {
+    if (!transaction.partnerId) return [];
+    const userPartner = partners.find((p) => p.id === transaction.partnerId);
+    return userPartner?.browserRecipes || [];
+  }, [transaction.partnerId, partners]);
 
   // Handler for assigning a partner to the transaction
   const handleAssignPartner = useCallback(
@@ -304,7 +313,10 @@ export function TransactionDetailPanel({
               onOpenConnectFile={onOpenConnectFile}
               isConnectFileOpen={isConnectFileOpen}
               learnMode={learnMode}
+              replayMode={replayMode}
+              partnerRecipes={partnerRecipes}
               partnerName={partnerName}
+              partnerWebsite={partnerWebsite}
               extensionInstalled={extensionInstalled}
             />
           </div>
@@ -328,23 +340,20 @@ export function TransactionDetailPanel({
           className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground"
         >
           <History className="h-4 w-4" />
-          <span>Edit History</span>
+          <span>Activity Log</span>
         </Button>
       </PanelFooter>
 
-      {/* Full-panel Edit History overlay */}
+      {/* Full-panel Activity Log overlay */}
       {showHistoryPanel && (
         <div className="absolute inset-0 z-40 bg-background flex flex-col">
           <PanelHeader
-            title="Edit History"
+            title="Activity Log"
             onClose={() => setShowHistoryPanel(false)}
           />
           <ScrollArea className="flex-1 px-4 py-4">
             <TransactionHistory
-              transactionId={transaction.id}
-              onRollback={() => {
-                // Trigger a refresh of the transaction data
-              }}
+              transaction={transaction}
               expandedByDefault
             />
           </ScrollArea>

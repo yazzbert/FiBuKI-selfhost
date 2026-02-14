@@ -54,9 +54,20 @@ exports.disconnectFileFromTransactionCallable = (0, createCallable_1.createCalla
         updatedAt: now,
     });
     // 3. Update transaction's fileIds array and potentially mark incomplete
+    const fileName = fileSnap.data().fileName || null;
     const transactionUpdate = {
         fileIds: firestore_1.FieldValue.arrayRemove(fileId),
         updatedAt: now,
+        automationHistory: firestore_1.FieldValue.arrayUnion({
+            type: "file_disconnected",
+            ranAt: now,
+            status: "completed",
+            actor: "manual",
+            level: "decision",
+            fileId,
+            fileName,
+            summary: `File "${fileName || fileId}" disconnected`,
+        }),
     };
     // Mark incomplete only if no files remain AND no no-receipt category
     if (willHaveNoFiles && !hasNoReceiptCategory) {

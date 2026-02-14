@@ -67,7 +67,7 @@ function FilesDataTableInner(
 
       // Not invoice files - greyed out but preserve selection state
       if (row.isNotInvoice && !isSelected) {
-        return "opacity-60 bg-gray-50/50 dark:bg-gray-900/30";
+        return "opacity-60 bg-muted/50";
       }
       if (row.isNotInvoice && isSelected) {
         return "opacity-75"; // Slightly faded but keep selected bg
@@ -78,10 +78,10 @@ function FilesDataTableInner(
       if (hasConnections) {
         if (isSelected) {
           // Active/selected connected files: darker green
-          return "bg-[#b8e986] hover:bg-[#a8d976] dark:bg-green-900/40 dark:hover:bg-green-900/50";
+          return "bg-complete-row-selected hover:bg-complete-row-selected/80";
         }
         // Non-selected connected files: light green
-        return "bg-[#d9ffb2] hover:bg-[#c9f59f] dark:bg-green-950/20 dark:hover:bg-green-950/30";
+        return "bg-complete-row hover:bg-complete-row/80";
       }
 
       return "";

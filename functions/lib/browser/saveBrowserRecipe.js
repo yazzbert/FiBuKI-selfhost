@@ -8,7 +8,7 @@ exports.saveBrowserRecipeCallable = void 0;
 const createCallable_1 = require("../utils/createCallable");
 const firestore_1 = require("firebase-admin/firestore");
 exports.saveBrowserRecipeCallable = (0, createCallable_1.createCallable)({ name: "saveBrowserRecipe" }, async (ctx, request) => {
-    const { partnerId, startUrl, domain, recordedActions, requiresAuth, originTransactionId, label, } = request;
+    const { partnerId, startUrl, domain, recordedActions, requiresAuth, originTransactionId, label, status, sourceType, fromInvoiceLinkMessageId, invoiceListUrl, invoiceTableMeta, } = request;
     if (!partnerId) {
         throw new createCallable_1.HttpsError("invalid-argument", "partnerId is required");
     }
@@ -18,8 +18,8 @@ exports.saveBrowserRecipeCallable = (0, createCallable_1.createCallable)({ name:
     if (!domain) {
         throw new createCallable_1.HttpsError("invalid-argument", "domain is required");
     }
-    if (!recordedActions || recordedActions.length === 0) {
-        throw new createCallable_1.HttpsError("invalid-argument", "recordedActions must not be empty");
+    if (!recordedActions) {
+        throw new createCallable_1.HttpsError("invalid-argument", "recordedActions is required (use empty array for bookmarks)");
     }
     // Verify partner belongs to user
     const partnerRef = ctx.db.collection("partners").doc(partnerId);
@@ -42,6 +42,9 @@ exports.saveBrowserRecipeCallable = (0, createCallable_1.createCallable)({ name:
         requiresAuth,
         useCount: 0,
         autoRun: false,
+        status: status || "active",
+        successfulFetches: 0,
+        failedFetches: 0,
         createdAt: now,
         updatedAt: now,
     };
@@ -49,6 +52,14 @@ exports.saveBrowserRecipeCallable = (0, createCallable_1.createCallable)({ name:
         newRecipe.label = label;
     if (originTransactionId)
         newRecipe.originTransactionId = originTransactionId;
+    if (sourceType)
+        newRecipe.sourceType = sourceType;
+    if (fromInvoiceLinkMessageId)
+        newRecipe.fromInvoiceLinkMessageId = fromInvoiceLinkMessageId;
+    if (invoiceListUrl)
+        newRecipe.invoiceListUrl = invoiceListUrl;
+    if (invoiceTableMeta)
+        newRecipe.invoiceTableMeta = JSON.parse(JSON.stringify(invoiceTableMeta));
     // Upsert: replace existing recipe for the same domain, or append
     const existingRecipes = partnerDoc.data()?.browserRecipes || [];
     const existingIndex = existingRecipes.findIndex((r) => r.domain === domain);

@@ -24,6 +24,7 @@ const validateDomainOwnership_1 = require("../ai/validateDomainOwnership");
 const ai_usage_logger_1 = require("../utils/ai-usage-logger");
 const globalPartnerUpsert_1 = require("../utils/globalPartnerUpsert");
 const checkAIBudget_1 = require("../billing/checkAIBudget");
+const checkAutomationMode_1 = require("../utils/checkAutomationMode");
 // =============================================================================
 // AUTOMATION METADATA
 // =============================================================================
@@ -892,6 +893,13 @@ async function runPartnerMatching(fileId, fileData) {
         return;
     }
     // No high-confidence match - try Gemini lookup if valid company name
+    // Check automation mode — passive mode skips AI-powered steps
+    const passiveMode = await (0, checkAutomationMode_1.isPassiveMode)(userId);
+    if (passiveMode) {
+        console.log(`[PartnerMatch] Passive mode: skipping Gemini lookup for file ${fileId}, storing suggestions only`);
+        await markPartnerMatchComplete(fileId, null, null, null, null, suggestions);
+        return;
+    }
     // Check AI budget before making Gemini calls (rule-based matching above stays free)
     let isAdminUser = false;
     try {

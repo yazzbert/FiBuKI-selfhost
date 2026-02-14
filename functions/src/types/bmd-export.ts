@@ -21,6 +21,7 @@ export type BmdExportPhase =
 export interface BmdExportRequest {
   dateFrom: string; // ISO date string
   dateTo: string; // ISO date string
+  /** Only export complete transactions (with receipts OR no-receipt category). Field name kept for backward compat. */
   onlyWithFiles: boolean;
   includeFiles: boolean;
 }
@@ -66,6 +67,7 @@ export interface BmdExport {
   // Request params
   dateFrom: Timestamp;
   dateTo: Timestamp;
+  /** Only export complete transactions (with receipts OR no-receipt category). Field name kept for backward compat. */
   onlyWithFiles: boolean;
   includeFiles: boolean;
 

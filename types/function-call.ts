@@ -97,6 +97,9 @@ export type CloudFunctionName =
   | "updateOverageSettings"
   // Browser recipe operations
   | "saveBrowserRecipe"
+  | "updateBrowserRecipe"
+  | "deleteBrowserRecipe"
+  | "migrateInvoiceSources"
   // Card reconciliation operations
   | "confirmReconciliation"
   | "rejectReconciliation"
@@ -106,7 +109,9 @@ export type CloudFunctionName =
   | "calculateFifo"
   | "calculateCapitalGainsSummary"
   | "activateInvestmentsAddon"
-  | "deactivateInvestmentsAddon";
+  | "deactivateInvestmentsAddon"
+  // Automation mode
+  | "updateAutomationMode";
 
 /**
  * Summary statistics for function calls (for dashboards).

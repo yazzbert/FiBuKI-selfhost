@@ -125,7 +125,7 @@ export function FilePreview({
       onClick={onClick}
     >
       {isPdf ? (
-        <div className="aspect-[3/4] flex items-center justify-center bg-white">
+        <div className="aspect-[3/4] flex items-center justify-center bg-background">
           <iframe
             src={`${downloadUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
             className="w-full h-full border-0 pointer-events-none"
