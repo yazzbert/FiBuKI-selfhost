@@ -303,9 +303,10 @@ export function AddPartnerDialog({
       }
       const addressString = addressParts.join("\n");
 
-      // Prefill form with lookup results (don't overwrite name since user typed it)
+      // Prefill form with lookup results (overwrite name with official registered name)
       setFormData((prev) => ({
         ...prev,
+        name: data.name || prev.name,
         aliases: data.aliases?.length
           ? data.aliases.join(", ")
           : prev.aliases,
@@ -323,6 +324,7 @@ export function AddPartnerDialog({
       const found: string[] = [];
       const notFound: string[] = [];
 
+      if (data.name) found.push("Name");
       if (data.website) found.push("Website");
       if (data.aliases?.length) found.push("Aliases");
       if (data.vatId) found.push("VAT ID");
