@@ -1,11 +1,12 @@
 "use client";
 
-import { Bot, Loader2, CheckCircle, XCircle, FileSearch, MessageSquare, Receipt, ExternalLink } from "lucide-react";
+import { Bot, Loader2, FileSearch, MessageSquare, Receipt, ExternalLink } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { AutoActionNotification, ToolCallSummary } from "@/types/notification";
 import { WorkerType } from "@/types/worker";
 import { Button } from "@/components/ui/button";
 import { ToolStepList } from "@/design-system/tool-results";
+import { cn } from "@/lib/utils";
 import { useChat } from "./chat-provider";
 
 interface WorkerActivityCardProps {
@@ -34,22 +35,6 @@ const workerIcons: Record<WorkerType, { icon: typeof Bot }> = {
 };
 
 /**
- * Status icon based on worker status
- */
-function StatusIcon({ status }: { status?: string }) {
-  switch (status) {
-    case "running":
-      return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />;
-    case "completed":
-      return <CheckCircle className="h-3.5 w-3.5 text-green-500" />;
-    case "failed":
-      return <XCircle className="h-3.5 w-3.5 text-red-500" />;
-    default:
-      return null;
-  }
-}
-
-/**
  * Expandable notification card for worker activity.
  * Shows summary in collapsed state, full transcript when expanded.
  * If there's a linked chat session, can navigate to it.
@@ -71,6 +56,7 @@ export function WorkerActivityCard({ notification }: WorkerActivityCardProps) {
   const transactionId = notification.context.transactionId;
   const transactionName = notification.context.transactionName;
   const toolSummary = (notification.context.toolSummary || []) as ToolCallSummary[];
+  const status = notification.context.workerStatus;
 
   const handleViewInChat = async () => {
     if (sessionId) {
@@ -89,6 +75,16 @@ export function WorkerActivityCard({ notification }: WorkerActivityCardProps) {
   const handleViewTransaction = () => {
     if (transactionId) {
       router.push(`/transactions?id=${transactionId}`);
+    }
+  };
+
+  const handleOpenLinkedEntity = () => {
+    if (fileId) {
+      handleViewFile();
+      return;
+    }
+    if (transactionId) {
+      handleViewTransaction();
     }
   };
 
@@ -112,45 +108,55 @@ export function WorkerActivityCard({ notification }: WorkerActivityCardProps) {
     });
   };
 
-  const status = notification.context.workerStatus;
+  const primaryLabel = fileName || transactionName || notification.title;
+  const summaryText = notification.message?.trim() || notification.title;
+  const isRunning = status === "running";
+  const iconColorClass =
+    status === "failed"
+      ? "text-red-500"
+      : status === "completed"
+        ? "text-green-500"
+        : "text-muted-foreground";
+  const hasEntityLink = Boolean(fileId || transactionId);
 
   return (
     <div className="flex flex-col gap-2 max-w-[95%] pb-3 border-b border-muted/50">
-      {/* Header with icon, status, and timestamp */}
+      {/* Header with single stateful icon and timestamp */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Icon className="h-3.5 w-3.5" />
-        <StatusIcon status={status} />
+        {isRunning ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+        ) : (
+          <Icon className={cn("h-3.5 w-3.5", iconColorClass)} />
+        )}
         <span>{formatTime(notification.createdAt)}</span>
       </div>
 
-      {/* Title + entity link */}
-      <div className="text-sm">
-        <p className="font-medium">{notification.title}</p>
-        {(fileId || transactionId) && (
-          <div className="flex items-center gap-1 mt-0.5">
-            {fileId && fileName && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-fit max-w-full h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                onClick={handleViewFile}
-              >
-                <ExternalLink className="h-3 w-3 mr-1 flex-shrink-0" />
-                <span className="truncate">{fileName}</span>
-              </Button>
-            )}
-            {transactionId && transactionName && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-fit max-w-full h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                onClick={handleViewTransaction}
-              >
-                <ExternalLink className="h-3 w-3 mr-1 flex-shrink-0" />
-                <span className="truncate">{transactionName}</span>
-              </Button>
-            )}
-          </div>
+      {/* Main row: filename/title with right-side actions */}
+      <div className="flex items-center gap-1.5 min-w-0">
+        <p className="text-sm font-medium min-w-0 flex-1 truncate" title={primaryLabel}>
+          {primaryLabel}
+        </p>
+        {hasEntityLink && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground flex-shrink-0"
+            onClick={handleOpenLinkedEntity}
+            title={fileId ? "Open file" : "Open transaction"}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        {sessionId && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground flex-shrink-0"
+            onClick={handleViewInChat}
+            title="View in chat"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+          </Button>
         )}
       </div>
 
@@ -158,20 +164,7 @@ export function WorkerActivityCard({ notification }: WorkerActivityCardProps) {
       {toolSummary.length > 0 ? (
         <ToolStepList steps={toolSummary} />
       ) : (
-        <p className="text-xs text-muted-foreground">{notification.message}</p>
-      )}
-
-      {/* View in chat */}
-      {sessionId && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-fit h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
-          onClick={handleViewInChat}
-        >
-          <MessageSquare className="h-3 w-3 mr-1" />
-          View in chat
-        </Button>
+        <p className="text-xs text-muted-foreground">{summaryText}</p>
       )}
     </div>
   );

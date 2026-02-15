@@ -643,7 +643,7 @@ async function createStartingNotification(
       const fileDoc = await db.collection("files").doc(workerRun.triggerContext.fileId).get();
       if (fileDoc.exists) {
         const fileData = fileDoc.data()!;
-        notificationContext.fileName = fileData.extractedPartner || fileData.fileName || "Invoice";
+        notificationContext.fileName = fileData.fileName || "Invoice";
       }
     } catch (err) {
       console.warn("[Worker API] Failed to fetch file name:", err);

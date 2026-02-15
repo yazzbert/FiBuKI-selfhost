@@ -27,6 +27,64 @@ interface UpdateUserPartnerResponse {
   success: boolean;
 }
 
+const LEGAL_SUFFIX_ONLY_ALIASES = new Set([
+  "llc",
+  "inc",
+  "incorporated",
+  "corp",
+  "corporation",
+  "ltd",
+  "limited",
+  "gmbh",
+  "ag",
+  "kg",
+  "ohg",
+  "og",
+  "mbh",
+  "co",
+  "sarl",
+  "sas",
+  "srl",
+  "spa",
+  "sl",
+  "bv",
+  "nv",
+]);
+
+function normalizeAliasInput(alias: string): string {
+  return alias.replace(/\*/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function isMeaningfulAlias(alias: string): boolean {
+  const normalized = alias
+    .toLowerCase()
+    .replace(/[^a-z0-9äöüß\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized || normalized.length < 3) return false;
+  if (LEGAL_SUFFIX_ONLY_ALIASES.has(normalized)) return false;
+  return /[a-z0-9]/i.test(normalized);
+}
+
+function sanitizeAliases(rawAliases: string[] = []): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const rawAlias of rawAliases) {
+    const cleaned = normalizeAliasInput(rawAlias);
+    if (!cleaned || !isMeaningfulAlias(cleaned)) continue;
+
+    const dedupeKey = cleaned.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+
+    seen.add(dedupeKey);
+    result.push(cleaned);
+  }
+
+  return result;
+}
+
 function normalizeIban(iban: string): string {
   return iban.replace(/\s/g, "").toUpperCase();
 }
@@ -72,7 +130,7 @@ export const updateUserPartnerCallable = createCallable<
       updates.name = data.name.trim();
     }
     if (data.aliases !== undefined) {
-      updates.aliases = data.aliases.map((a) => a.trim()).filter(Boolean);
+      updates.aliases = sanitizeAliases(data.aliases);
     }
     if (data.address !== undefined) {
       updates.address = data.address;

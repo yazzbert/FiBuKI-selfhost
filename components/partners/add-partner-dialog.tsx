@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { Loader2, Sparkles, Check, AlertCircle, ChevronsUpDown } from "lucide-react";
+import { Loader2, Sparkles, Check, AlertCircle, ChevronsUpDown, Plus } from "lucide-react";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebase/config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pill } from "@/components/ui/pill";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -60,6 +61,67 @@ const lookupByVatIdFn = httpsCallable<{ vatId: string }, VatLookupResult>(
   functions,
   "lookupByVatId"
 );
+
+const LEGAL_SUFFIX_ONLY_ALIASES = new Set([
+  "llc",
+  "inc",
+  "incorporated",
+  "corp",
+  "corporation",
+  "ltd",
+  "limited",
+  "gmbh",
+  "ag",
+  "kg",
+  "ohg",
+  "og",
+  "mbh",
+  "co",
+  "sarl",
+  "sas",
+  "srl",
+  "spa",
+  "sl",
+  "bv",
+  "nv",
+]);
+
+function normalizeAliasInput(alias: string): string {
+  return alias
+    .replace(/\*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isMeaningfulAlias(alias: string): boolean {
+  const normalized = alias
+    .toLowerCase()
+    .replace(/[^a-z0-9äöüß\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized || normalized.length < 3) return false;
+  if (LEGAL_SUFFIX_ONLY_ALIASES.has(normalized)) return false;
+  return /[a-z0-9]/i.test(normalized);
+}
+
+function sanitizeAliases(rawAliases: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const rawAlias of rawAliases) {
+    const cleaned = normalizeAliasInput(rawAlias);
+    if (!cleaned || !isMeaningfulAlias(cleaned)) continue;
+
+    const dedupeKey = cleaned.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+
+    seen.add(dedupeKey);
+    result.push(cleaned);
+  }
+
+  return result;
+}
 
 // Country select with search
 function CountrySelect({
@@ -195,7 +257,7 @@ export function AddPartnerDialog({
   const [lookupUrl, setLookupUrl] = useState("");
   const [formData, setFormData] = useState({
     name: initialData?.name || "",
-    aliases: initialData?.aliases?.join(", ") || "",
+    aliases: sanitizeAliases(initialData?.aliases || []),
     vatId: initialData?.vatId || "",
     ibans: initialData?.ibans?.join("\n") || "",
     address: initialData?.address
@@ -204,13 +266,14 @@ export function AddPartnerDialog({
     country: initialData?.address?.country || "",
     notes: initialData?.notes || "",
   });
+  const [newAlias, setNewAlias] = useState("");
 
   // Reset form when dialog opens with new initial data
   useEffect(() => {
     if (open) {
       setFormData({
         name: initialData?.name || "",
-        aliases: initialData?.aliases?.join(", ") || "",
+        aliases: sanitizeAliases(initialData?.aliases || []),
         vatId: initialData?.vatId || "",
         ibans: initialData?.ibans?.join("\n") || "",
         address: initialData?.address
@@ -220,10 +283,29 @@ export function AddPartnerDialog({
         notes: initialData?.notes || "",
       });
       setLookupUrl(initialData?.website || "");
+      setNewAlias("");
       setLookupStatus(null);
       setLookupResult(null);
     }
   }, [open, initialData]);
+
+  const handleAddAlias = () => {
+    const cleaned = normalizeAliasInput(newAlias);
+    if (!cleaned) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      aliases: sanitizeAliases([...prev.aliases, cleaned]),
+    }));
+    setNewAlias("");
+  };
+
+  const handleRemoveAlias = (alias: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      aliases: prev.aliases.filter((a) => a !== alias),
+    }));
+  };
 
   const handleLookup = async () => {
     if (!lookupUrl.trim()) return;
@@ -249,7 +331,7 @@ export function AddPartnerDialog({
         ...prev,
         name: data.name || prev.name,
         aliases: data.aliases?.length
-          ? data.aliases.join(", ")
+          ? sanitizeAliases(data.aliases)
           : prev.aliases,
         vatId: data.vatId || prev.vatId,
         address: addressString || prev.address,
@@ -308,7 +390,7 @@ export function AddPartnerDialog({
         ...prev,
         name: data.name || prev.name,
         aliases: data.aliases?.length
-          ? data.aliases.join(", ")
+          ? sanitizeAliases(data.aliases)
           : prev.aliases,
         vatId: data.vatId || prev.vatId,
         address: addressString || prev.address,
@@ -420,10 +502,7 @@ export function AddPartnerDialog({
     try {
       await onAdd({
         name: formData.name.trim(),
-        aliases: formData.aliases
-          .split(",")
-          .map((a) => a.trim())
-          .filter(Boolean),
+        aliases: sanitizeAliases(formData.aliases),
         vatId: formData.vatId.trim() || undefined,
         ibans: formData.ibans
           .split("\n")
@@ -624,20 +703,47 @@ export function AddPartnerDialog({
                   )}
                 </div>
 
-                {/* Patterns */}
+                {/* Aliases */}
                 <div>
                   <label className="text-sm font-medium mb-1.5 block">
-                    Patterns
+                    Aliases (optional)
                   </label>
-                  <Input
-                    placeholder="Google, *google pay* (names or *glob* patterns)"
-                    value={formData.aliases}
-                    onChange={(e) =>
-                      setFormData((f) => ({ ...f, aliases: e.target.value }))
-                    }
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Add alternate company name"
+                      value={newAlias}
+                      onChange={(e) => setNewAlias(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddAlias();
+                        }
+                      }}
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={handleAddAlias}
+                      disabled={!newAlias.trim()}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {formData.aliases.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {formData.aliases.map((alias) => (
+                        <Pill
+                          key={alias}
+                          label={alias}
+                          onRemove={() => handleRemoveAlias(alias)}
+                        />
+                      ))}
+                    </div>
+                  )}
                   <p className="text-xs text-muted-foreground mt-1">
-                    Use * as wildcard, e.g. *amazon* matches any text containing amazon
+                    Optional alternate names. Matching learns automatically from your transaction assignments.
                   </p>
                 </div>
 

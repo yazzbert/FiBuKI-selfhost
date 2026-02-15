@@ -12,47 +12,37 @@ interface NotificationCardProps {
 
 const typeConfig: Record<
   NotificationType,
-  { icon: typeof Package; color: string }
+  { icon: typeof Package }
 > = {
   import_complete: {
     icon: Package,
-    color: "text-blue-500",
   },
   partner_matching: {
     icon: Link2,
-    color: "text-green-500",
   },
   pattern_learned: {
     icon: Sparkles,
-    color: "text-purple-500",
   },
   patterns_cleared: {
     icon: Eraser,
-    color: "text-orange-500",
   },
   worker_activity: {
     icon: Bot,
-    color: "text-blue-500",
   },
   export_complete: {
     icon: Download,
-    color: "text-green-500",
   },
   export_failed: {
     icon: AlertCircle,
-    color: "text-red-500",
   },
   data_import_complete: {
     icon: Upload,
-    color: "text-green-500",
   },
   data_import_failed: {
     icon: AlertCircle,
-    color: "text-red-500",
   },
   reconciliation_suggestion: {
     icon: CreditCard,
-    color: "text-blue-500",
   },
 };
 
@@ -66,9 +56,13 @@ export function NotificationCard({
 
   const config = typeConfig[notification.type] ?? {
     icon: Sparkles,
-    color: "text-muted-foreground",
   };
   const Icon = config.icon;
+  const iconColor =
+    notification.type === "export_failed" || notification.type === "data_import_failed"
+      ? "text-red-500"
+      : "text-green-500";
+  const summaryText = notification.message?.trim() || notification.title;
 
   // Format timestamp
   const formatTime = (timestamp: { toDate: () => Date } | Date) => {
@@ -93,15 +87,16 @@ export function NotificationCard({
     <div className="flex flex-col gap-2 max-w-[95%] pb-3 border-b border-muted/50">
       {/* Header with icon and timestamp */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Icon className={cn("h-3.5 w-3.5", config.color)} />
+        <Icon className={cn("h-3.5 w-3.5", iconColor)} />
         <span>{formatTime(notification.createdAt)}</span>
       </div>
 
-      {/* Message content - styled like assistant messages */}
-      <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 text-sm">
-        <p className="font-medium">{notification.title}</p>
-        <p className="text-muted-foreground">{notification.message}</p>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <p className="text-sm font-medium min-w-0 flex-1 truncate" title={notification.title}>
+          {notification.title}
+        </p>
       </div>
+      <p className="text-xs text-muted-foreground">{summaryText}</p>
 
       {/* Transaction preview - same style as chat */}
       {notification.preview?.transactions &&

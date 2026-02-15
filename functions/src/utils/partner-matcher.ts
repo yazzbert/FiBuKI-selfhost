@@ -236,6 +236,10 @@ export function calculateCompanyNameSimilarity(name1: string, name2: string): nu
   const normalized1 = normalizeCompanyName(name1);
   const normalized2 = normalizeCompanyName(name2);
 
+  // Guard against empty/invalid tokens (e.g. legal suffix-only aliases like "LLC")
+  // to avoid broad false matches via string containment.
+  if (!normalized1 || !normalized2) return 0;
+
   if (normalized1 === normalized2) return 100;
 
   // Phonetic match (Cologne Phonetics) - "Müller" matches "Mueller" matches "MULLER"
@@ -439,6 +443,9 @@ function matchSinglePartner(
     const name = namesToCheck[i];
     const isAlias = i > 0;
     const normalizedName = normalizeCompanyName(name);
+    if (!normalizedName || normalizedName.length < 3) {
+      continue;
+    }
 
     // Check if this name/alias appears in transaction text
     if (txCombinedText.includes(normalizedName) && normalizedName.length >= 3) {
