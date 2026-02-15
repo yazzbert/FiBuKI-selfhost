@@ -123,6 +123,11 @@ exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)(
     };
     // 3. Update transaction's fileIds array and mark as complete
     const actor = connectionType === "manual" ? "manual" : "auto";
+    const sourceTypeLabel = sourceInfo?.sourceType || "search";
+    const searchPattern = sourceInfo?.searchPattern?.trim();
+    const summary = searchPattern
+        ? `File "${fileData.fileName || fileId}" connected (found via ${sourceTypeLabel}: "${searchPattern}")`
+        : `File "${fileData.fileName || fileId}" connected`;
     const transactionUpdate = {
         fileIds: firestore_1.FieldValue.arrayUnion(fileId),
         isComplete: true,
@@ -136,7 +141,7 @@ exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)(
             fileId,
             fileName: fileData.fileName || null,
             confidence: matchConfidence ?? null,
-            summary: `File "${fileData.fileName || fileId}" connected`,
+            summary,
         }),
     };
     // 4. Partner sync logic - FILE TAKES PRECEDENCE (it's the actual document)
@@ -195,58 +200,94 @@ exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)(
     batch.update(transactionRef, transactionUpdate);
     await batch.commit();
     console.log(`[connectFileToTransaction] Connected file ${fileId} to transaction ${transactionId}`);
-    // === LEARN GMAIL PATTERNS ON PARTNER ===
-    // After successful connection, store Gmail source patterns on the partner for future matching
+    // === LEARN SOURCE PATTERNS ON PARTNER ===
+    // After successful connection, store source patterns for future matching/search hints.
     const finalPartnerId = transactionUpdate.partnerId || transactionPartnerId || filePartnerId;
-    if (finalPartnerId && sourceInfo?.gmailMessageFrom) {
-        const senderDomain = extractEmailDomain(sourceInfo.gmailMessageFrom);
-        if (senderDomain) {
-            try {
-                const partnerRef = ctx.db.collection("partners").doc(finalPartnerId);
-                const partnerSnap = await partnerRef.get();
-                if (partnerSnap.exists && partnerSnap.data()?.userId === ctx.userId) {
-                    const partnerData = partnerSnap.data();
-                    const existingDomains = partnerData.emailDomains || [];
-                    // Add domain if not already present
-                    if (!existingDomains.includes(senderDomain)) {
-                        await partnerRef.update({
-                            emailDomains: firestore_1.FieldValue.arrayUnion(senderDomain),
-                            emailDomainsUpdatedAt: firestore_1.Timestamp.now(),
-                            updatedAt: firestore_1.Timestamp.now(),
-                        });
-                        console.log(`[connectFileToTransaction] Learned email domain "${senderDomain}" for partner ${finalPartnerId}`);
-                    }
-                    // Also update fileSourcePatterns if we have Gmail integration info
-                    if (sourceInfo.gmailIntegrationId) {
-                        const existingPatterns = partnerData.fileSourcePatterns || [];
-                        // Check if this exact pattern already exists
-                        const patternExists = existingPatterns.some((p) => p.sourceType === "gmail" &&
-                            p.integrationId === sourceInfo.gmailIntegrationId &&
-                            p.fromDomain === senderDomain);
-                        if (!patternExists) {
-                            await partnerRef.update({
-                                fileSourcePatterns: firestore_1.FieldValue.arrayUnion({
-                                    sourceType: "gmail",
-                                    integrationId: sourceInfo.gmailIntegrationId,
-                                    fromDomain: senderDomain,
-                                    pattern: `from:${senderDomain}`,
-                                    confidence: 80,
-                                    usageCount: 1,
-                                    sourceTransactionIds: [transactionId],
-                                    createdAt: firestore_1.Timestamp.now(),
-                                    lastUsedAt: firestore_1.Timestamp.now(),
-                                }),
-                                fileSourcePatternsUpdatedAt: firestore_1.Timestamp.now(),
-                            });
-                            console.log(`[connectFileToTransaction] Learned Gmail pattern for partner ${finalPartnerId}: from:${senderDomain}`);
-                        }
-                    }
+    const normalizedSearchPattern = sourceInfo?.searchPattern?.trim();
+    if (finalPartnerId && (sourceInfo?.gmailMessageFrom || normalizedSearchPattern)) {
+        const senderDomain = sourceInfo?.gmailMessageFrom
+            ? extractEmailDomain(sourceInfo.gmailMessageFrom)
+            : null;
+        try {
+            const partnerRef = ctx.db.collection("partners").doc(finalPartnerId);
+            const partnerSnap = await partnerRef.get();
+            if (partnerSnap.exists && partnerSnap.data()?.userId === ctx.userId) {
+                const partnerData = partnerSnap.data();
+                const nowTs = firestore_1.Timestamp.now();
+                const updates = {
+                    updatedAt: nowTs,
+                };
+                let shouldUpdatePartner = false;
+                const existingDomains = partnerData.emailDomains || [];
+                if (senderDomain && !existingDomains.includes(senderDomain)) {
+                    updates.emailDomains = firestore_1.FieldValue.arrayUnion(senderDomain);
+                    updates.emailDomainsUpdatedAt = nowTs;
+                    shouldUpdatePartner = true;
+                    console.log(`[connectFileToTransaction] Learned email domain "${senderDomain}" for partner ${finalPartnerId}`);
+                }
+                const existingPatterns = (partnerData.fileSourcePatterns || []);
+                const nextPatterns = [...existingPatterns];
+                const filenameExample = typeof fileData.fileName === "string" ? fileData.fileName : undefined;
+                let patternsChanged = false;
+                // Legacy Gmail domain pattern learning (from:{domain}) with upsert semantics.
+                if (senderDomain) {
+                    const domainPattern = {
+                        sourceType: "gmail",
+                        pattern: `from:${senderDomain}`,
+                        integrationId: sourceInfo?.gmailIntegrationId || null,
+                        resultType: "gmail_attachment",
+                        confidence: 80,
+                        usageCount: 1,
+                        sourceTransactionIds: [transactionId],
+                        filenameExamples: filenameExample ? [filenameExample] : [],
+                        createdAt: nowTs,
+                        lastUsedAt: nowTs,
+                        fromDomain: senderDomain,
+                    };
+                    patternsChanged = upsertPattern(nextPatterns, domainPattern, transactionId, filenameExample, (p) => {
+                        const sameSource = (p.sourceType || "").toLowerCase() === "gmail";
+                        const sameIntegration = (p.integrationId || null) === (sourceInfo?.gmailIntegrationId || null);
+                        const patternMatch = (p.pattern || "").toLowerCase() === `from:${senderDomain}` || p.fromDomain === senderDomain;
+                        return sameSource && sameIntegration && patternMatch;
+                    }) || patternsChanged;
+                }
+                // Learn the actual search query that found this file.
+                if (normalizedSearchPattern) {
+                    const querySourceType = sourceInfo?.sourceType || "gmail";
+                    const queryResultType = sourceInfo?.resultType || "gmail_attachment";
+                    const queryPattern = {
+                        sourceType: querySourceType,
+                        pattern: normalizedSearchPattern,
+                        integrationId: sourceInfo?.gmailIntegrationId || null,
+                        resultType: queryResultType,
+                        confidence: 85,
+                        usageCount: 1,
+                        sourceTransactionIds: [transactionId],
+                        filenameExamples: filenameExample ? [filenameExample] : [],
+                        createdAt: nowTs,
+                        lastUsedAt: nowTs,
+                    };
+                    patternsChanged = upsertPattern(nextPatterns, queryPattern, transactionId, filenameExample, (p) => {
+                        const sameSource = (p.sourceType || "").toLowerCase() === querySourceType.toLowerCase();
+                        const samePattern = (p.pattern || "").toLowerCase() === normalizedSearchPattern.toLowerCase();
+                        const sameIntegration = (p.integrationId || null) === (sourceInfo?.gmailIntegrationId || null);
+                        const sameResultType = (p.resultType || null) === (queryResultType || null);
+                        return sameSource && samePattern && sameIntegration && sameResultType;
+                    }) || patternsChanged;
+                }
+                if (patternsChanged) {
+                    updates.fileSourcePatterns = nextPatterns;
+                    updates.fileSourcePatternsUpdatedAt = nowTs;
+                    shouldUpdatePartner = true;
+                }
+                if (shouldUpdatePartner) {
+                    await partnerRef.update(updates);
                 }
             }
-            catch (learnErr) {
-                // Don't fail the connection if pattern learning fails
-                console.error(`[connectFileToTransaction] Failed to learn Gmail patterns:`, learnErr);
-            }
+        }
+        catch (learnErr) {
+            // Don't fail the connection if pattern learning fails
+            console.error(`[connectFileToTransaction] Failed to learn source patterns:`, learnErr);
         }
     }
     return {
@@ -263,5 +304,47 @@ function extractEmailDomain(email) {
         return null;
     const match = email.toLowerCase().match(/@([a-z0-9.-]+\.[a-z]{2,})/i);
     return match ? match[1] : null;
+}
+function upsertPattern(patterns, incoming, transactionId, filenameExample, matcher) {
+    const nowTs = firestore_1.Timestamp.now();
+    const index = patterns.findIndex(matcher);
+    if (index >= 0) {
+        const current = patterns[index];
+        const mergedTxIds = appendUnique(current.sourceTransactionIds || [], transactionId, 20);
+        const mergedFilenames = filenameExample
+            ? appendUnique(current.filenameExamples || [], filenameExample, 10)
+            : (current.filenameExamples || []);
+        patterns[index] = {
+            ...current,
+            sourceType: incoming.sourceType || current.sourceType,
+            pattern: incoming.pattern || current.pattern,
+            integrationId: incoming.integrationId ?? current.integrationId ?? null,
+            resultType: incoming.resultType || current.resultType,
+            confidence: Math.max(current.confidence || 0, incoming.confidence || 0),
+            usageCount: (current.usageCount || 0) + 1,
+            sourceTransactionIds: mergedTxIds,
+            filenameExamples: mergedFilenames,
+            createdAt: current.createdAt || nowTs,
+            lastUsedAt: nowTs,
+            fromDomain: incoming.fromDomain || current.fromDomain,
+        };
+        return true;
+    }
+    patterns.push({
+        ...incoming,
+        usageCount: 1,
+        sourceTransactionIds: [transactionId],
+        filenameExamples: filenameExample ? [filenameExample] : incoming.filenameExamples || [],
+        createdAt: incoming.createdAt || nowTs,
+        lastUsedAt: nowTs,
+    });
+    return true;
+}
+function appendUnique(existing, next, maxItems) {
+    const merged = [...existing.filter(Boolean)];
+    if (!merged.includes(next)) {
+        merged.push(next);
+    }
+    return merged.slice(-maxItems);
 }
 //# sourceMappingURL=connectFileToTransaction.js.map

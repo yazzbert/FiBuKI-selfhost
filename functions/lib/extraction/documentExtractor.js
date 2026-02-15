@@ -121,6 +121,7 @@ async function extractWithGemini(fileBuffer, fileType, config) {
                     amount: null,
                     currency: null,
                     vatPercent: null,
+                    lineItems: null,
                     partner: null,
                     vatId: null,
                     iban: null,

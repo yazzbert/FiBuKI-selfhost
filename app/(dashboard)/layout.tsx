@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,8 @@ import { OnboardingOverlay, OnboardingCompletion } from "@/components/onboarding
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { BillingLimitBanner } from "@/components/billing/billing-limit-banner";
 import { logoFont } from "@/app/fonts";
+
+const NAV_COMPACT_BREAKPOINT = 635;
 
 const navItems = [
   { href: "/transactions", label: "Transactions", icon: Receipt },
@@ -75,8 +78,11 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
   const { isSidebarOpen, sidebarWidth } = useChat();
   const { user, isAdmin, signOut } = useAuth();
   const [isLogoJumping, setIsLogoJumping] = useState(false);
+  const [isCompactNavigation, setIsCompactNavigation] = useState(false);
+  const [hoveredNavItem, setHoveredNavItem] = useState<string | null>(null);
 
   // Sliding nav indicator
+  const navContainerRef = useRef<HTMLDivElement>(null);
   const navRefs = useRef<(HTMLAnchorElement | null)[]>([]);
   const navRef = useRef<HTMLElement>(null);
   const hasMeasured = useRef(false);
@@ -103,7 +109,34 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
     } else {
       setNavIndicatorStyle((prev) => ({ ...prev, opacity: 0 }));
     }
-  }, [activeIndex]);
+  }, [activeIndex, isCompactNavigation]);
+
+  // Compact nav when header navigation area gets too tight.
+  useEffect(() => {
+    const navContainer = navContainerRef.current;
+    if (!navContainer) return;
+
+    const updateCompactNav = (width: number) => {
+      setIsCompactNavigation(width <= NAV_COMPACT_BREAKPOINT);
+    };
+
+    updateCompactNav(navContainer.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      updateCompactNav(entry.contentRect.width);
+    });
+
+    observer.observe(navContainer);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setHoveredNavItem(null);
+  }, [pathname, isCompactNavigation]);
 
   // Update indicator on route change and sidebar resize
   useLayoutEffect(() => {
@@ -149,12 +182,13 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
       <BillingLimitBanner />
 
       {/* Header */}
-      <header className="border-b bg-card flex-shrink-0 z-50 px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-8">
+      <header className="border-b bg-card flex-shrink-0 z-50 px-4 h-14 flex items-center">
+          <div className="flex w-full min-w-0 items-center justify-between gap-3">
+          <div ref={navContainerRef} className="flex min-w-0 flex-1 items-center gap-6">
             <button
               onClick={handleLogoClick}
               className={cn(
-                "flex items-center gap-2 hover:opacity-80 logo-wrapper",
+                "flex items-center gap-2 hover:opacity-80 logo-wrapper flex-shrink-0",
                 isLogoJumping && "is-jumping"
               )}
             >
@@ -163,11 +197,11 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                 FiBuKI
               </span>
             </button>
-            <nav ref={navRef} className="relative flex items-center gap-1">
+            <nav ref={navRef} className="relative flex min-w-0 items-center gap-1">
               {/* Sliding active indicator */}
               <div
                 className={cn(
-                  "absolute rounded-md bg-primary/8",
+                  "absolute pointer-events-none rounded-md bg-primary/8",
                   hasMeasured.current
                     ? "transition-[left,width,opacity] duration-300 ease-out"
                     : "transition-none"
@@ -177,29 +211,51 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
               />
               {navItems.map((item, i) => {
                 const isActive = pathname.startsWith(item.href);
-                return (
+                const link = (
                   <Link
                     key={item.href}
                     href={item.href}
                     ref={(el) => { navRefs.current[i] = el; }}
                     className={cn(
-                      "relative flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200",
+                      "relative flex items-center rounded-md text-sm font-medium transition-colors duration-200",
+                      isCompactNavigation ? "h-9 w-9 justify-center px-0" : "gap-2 px-3 py-1.5",
                       isActive
                         ? "text-primary"
                         : "text-muted-foreground hover:text-foreground hover:bg-primary/5"
                     )}
+                    onMouseEnter={() => isCompactNavigation && setHoveredNavItem(item.href)}
+                    onMouseLeave={() => isCompactNavigation && setHoveredNavItem((prev) => prev === item.href ? null : prev)}
+                    onFocus={() => isCompactNavigation && setHoveredNavItem(item.href)}
+                    onBlur={() => isCompactNavigation && setHoveredNavItem((prev) => prev === item.href ? null : prev)}
                   >
                     <item.icon className="h-4 w-4" />
-                    {item.label}
+                    {isCompactNavigation ? <span className="sr-only">{item.label}</span> : item.label}
                   </Link>
+                );
+
+                if (!isCompactNavigation) return link;
+
+                return (
+                  <Popover
+                    key={item.href}
+                    open={hoveredNavItem === item.href}
+                    onOpenChange={(open) => setHoveredNavItem(open ? item.href : null)}
+                  >
+                    <PopoverTrigger asChild>{link}</PopoverTrigger>
+                    <PopoverContent
+                      className="w-auto px-2 py-1 text-xs"
+                      side="bottom"
+                      align="center"
+                      sideOffset={6}
+                    >
+                      {item.label}
+                    </PopoverContent>
+                  </Popover>
                 );
               })}
             </nav>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded truncate max-w-[200px]">
-              {user?.email}
-            </span>
+          <div className="flex items-center gap-2 flex-shrink-0">
             <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -208,7 +264,14 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>Settings</DropdownMenuLabel>
+                <DropdownMenuLabel className="space-y-0.5">
+                  <div>Settings</div>
+                  {user?.email && (
+                    <div className="text-[11px] font-normal text-muted-foreground break-all">
+                      {user.email}
+                    </div>
+                  )}
+                </DropdownMenuLabel>
                 <DropdownMenuItem asChild>
                   <Link href="/settings/sign-in-security" className="flex items-center gap-2">
                     <Shield className="h-4 w-4" />
@@ -311,6 +374,7 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+          </div>
           </div>
       </header>
 

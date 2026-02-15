@@ -112,6 +112,12 @@ export function useOnboarding() {
       return;
     }
 
+    // Once onboarding is completed (including explicit "Skip setup"),
+    // do not auto-reopen it based on subsequent data checks.
+    if (state.isComplete) {
+      return;
+    }
+
     // Check each step and complete/uncomplete based on current conditions
     const syncStepsWithData = async () => {
       // Step 0: Set identity (name/company)

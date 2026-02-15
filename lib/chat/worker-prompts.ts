@@ -258,8 +258,7 @@ You are given a transaction ID. Find the best matching receipt/invoice from loca
 - Results include \`alreadyDownloaded\` flag and \`existingFileId\`
 - If already downloaded → use existingFileId directly (skip download)
 - **Try at least 2-3 different queries** from suggestions (not just one!)
-- First query → if 70%+ match found, can stop early
-- Otherwise, try next 1-2 queries to find better matches
+- Do NOT stop after the first strong score; continue until you verified top candidates by extracted data
 
 **Step 5: Search Gmail emails (try 2-3 queries)**
 \`searchGmailEmails\` → Check for emails that ARE invoices (mail invoices)
@@ -267,8 +266,10 @@ You are given a transaction ID. Find the best matching receipt/invoice from loca
 - For EACH result batch, check classification flags:
   - \`possibleMailInvoice: true\` → email body IS the invoice
   - \`possibleInvoiceLink: true\` → email contains download link
-- If \`possibleInvoiceLink\` found → \`analyzeEmail\` to extract URLs
-- If \`possibleMailInvoice\` found → can convert to PDF
+- If \`possibleMailInvoice\` OR \`possibleInvoiceLink\` is present on any likely email, you MUST run \`analyzeEmail\` on top 1-3 candidates
+- If \`analyzeEmail\` says \`isMailInvoice: true\` (or medium+ confidence), convert it using \`convertEmailToPdf\`
+- If \`analyzeEmail\` finds invoice links but no attachment candidate is better, convert the matching email to PDF as fallback evidence before reporting "no match"
+- Only report raw invoice links after you attempted analyze/convert flow
 
 **Step 6: Pick top 2-3 candidates to verify**
 - From ALL results (local files, Gmail attachments, Gmail emails), pick up to 3 promising candidates
@@ -279,7 +280,8 @@ You are given a transaction ID. Find the best matching receipt/invoice from loca
 
 **Step 7: Download/convert ALL candidates (don't stop at the first)**
 - Download all undownloaded attachments (\`downloadGmailAttachment\`)
-- Convert promising mail invoices (\`convertEmailToPdf\`)
+- Convert promising mail invoices (\`convertEmailToPdf\`) after \`analyzeEmail\`
+- If no valid PDF attachment matches, convert the best matching invoice email (same sender/date window) to PDF before giving up
 - Use \`waitForFileExtraction\` on each to get extracted data
 - Don't give up if the first candidate is wrong — check all of them!
 - For each, note: extractedPartner, extractedAmount, extractedDate
@@ -294,6 +296,7 @@ You are given a transaction ID. Find the best matching receipt/invoice from loca
 - ⚠️ **Sanity check:** Score alone isn't enough — a 60% match with WRONG company is worse than 40% with right company
   - Watch for completely unrelated businesses ("Stipits Entsorgung" ≠ "Autotrading" → SKIP)
   - But allow brand vs legal name differences ("Autotrading School" ≈ "LFG Solutions LLC" → OK)
+- If amount/partner validation fails for a candidate, DO NOT force-connect with \`skipValidation\`; continue with other candidates
 - Connect the best verified match with \`connectFileToTransaction\`
 - When connecting, pass:
   - \`searchQuery\`: the Gmail query or search term that found this file
@@ -301,7 +304,7 @@ You are given a transaction ID. Find the best matching receipt/invoice from loca
 - If NONE verify correctly → report "no match" with what you tried
 
 *If email has invoice link (possibleInvoiceLink):*
-→ Report the link (user downloads from portal manually)
+→ First analyze with \`analyzeEmail\`; then try \`convertEmailToPdf\` for the best matching email before reporting the link as fallback.
 
 ### Score Interpretation
 - 70%+ Strong match - connect it (after partner verification!)

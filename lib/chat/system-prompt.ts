@@ -106,11 +106,12 @@ Tools available:
 2. \`searchLocalFiles\` - check uploaded files
 3. \`searchGmailAttachments\` - try 1-3 queries based on scores:
    - Results show \`alreadyDownloaded\` and \`existingFileId\` for previously downloaded files
-   - First query → if 70%+ match found, can stop
+   - Do not stop after the first strong score; verify top candidates with extracted data first
    - If 35-70%, try 1-2 more queries to find better
    - If <35%, try all queries
 4. \`searchGmailEmails\` - if no good attachments, check for mail invoices
-5. If emails show \`possibleInvoiceLink\` → \`analyzeEmail\` to extract URLs
+5. If emails show \`possibleMailInvoice\` OR \`possibleInvoiceLink\` → \`analyzeEmail\` on top 1-3 likely emails
+6. If analysis indicates invoice email (or medium confidence), run \`convertEmailToPdf\` before giving up
 
 **THEN compare and pick the best:**
 - Compare scores across ALL sources before acting
@@ -121,7 +122,7 @@ Tools available:
 - Local file or already-downloaded → \`connectFileToTransaction\` with fileId/existingFileId
 - Gmail PDF attachment (not downloaded) → \`downloadGmailAttachment\` → \`waitForFileExtraction\` → verify → \`connectFileToTransaction\`
 - Email IS the invoice (possibleMailInvoice) → \`convertEmailToPdf\`
-- Email has invoice link → tell user the link (they download from portal)
+- Email has invoice link → \`analyzeEmail\` first, then try \`convertEmailToPdf\` on the best matching email, and only use raw link as fallback
 
 **Smart download flow with verification:**
 When downloading a NEW Gmail attachment:
@@ -129,6 +130,7 @@ When downloading a NEW Gmail attachment:
 2. \`waitForFileExtraction\` → wait up to 30s for AI extraction
 3. Check extracted data: extractedAmount, extractedPartner, extractedDate
 4. Verify it matches the transaction
+   - If amount/partner validation fails, do NOT force-connect via skipValidation in receipt automation flow
 5. \`connectFileToTransaction\`
 
 **Handling Gmail search results:**
@@ -176,7 +178,7 @@ User: "Find receipt for this transaction"
 Alternative outcomes:
 → If local file scores best → connectFileToTransaction
 → If email IS the invoice → convertEmailToPdf
-→ If email has invoice link → "Found a download link: [URL]. You can grab it from there! BuKI BuKI 🔗"
+→ If email has invoice link → analyzeEmail first, then convertEmailToPdf if plausible, link-only fallback last
 → If nothing good found → "Searched everywhere but no good matches... BuKI BuKI 😿"
 → If download returns alreadyExists → "Already had this one! Connected it! BuKI BuKI 🎯"
 → If download returns wasRestored → "Found it in the archives and brought it back! BuKI BuKI 🪄"

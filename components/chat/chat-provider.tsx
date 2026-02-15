@@ -4,6 +4,7 @@
 import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useChat as useVercelChat } from "@ai-sdk/react";
+import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { ChatContextValue, ChatTab, SidebarMode, UIControlActions, ToolCall, ChatSession, ModelProvider, ChatMessage } from "@/types/chat";
 import { AutoActionNotification } from "@/types/notification";
 import { requiresConfirmation } from "@/lib/chat/confirmation-config";
@@ -12,6 +13,8 @@ import { useChatPersistence } from "@/hooks/use-chat-persistence";
 import { useChatSessions } from "@/hooks/use-chat-sessions";
 import { useWorker } from "@/hooks/use-worker";
 import { useAuth } from "@/components/auth";
+import { db } from "@/lib/firebase/config";
+import { serializeMessagesForSDK } from "@/lib/operations";
 
 const ChatContext = createContext<ChatContextValue | null>(null);
 
@@ -60,6 +63,10 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
   // Track entity IDs with active wand searches (workers)
   const [activeWandTargets, setActiveWandTargets] = useState<Set<string>>(new Set());
+  // Track when each wand target was triggered to avoid opening stale sessions.
+  const wandTriggeredAtRef = useRef<Map<string, number>>(new Map());
+  // Track already auto-opened session keys (entityId:sessionId) to avoid repeated loads.
+  const openedWandSessionKeysRef = useRef<Set<string>>(new Set());
 
   // Keep searchParams in a ref to avoid dependency loops
   const searchParamsRef = useRef(searchParams);
@@ -440,6 +447,52 @@ export function ChatProvider({ children }: ChatProviderProps) {
     }
   }, [getSessionMessages, setMessages, switchSession]);
 
+  // Live-sync worker sessions while they are running so "View in chat" streams progress.
+  useEffect(() => {
+    if (!user || !currentSessionId) return;
+
+    const activeSession = sessions.find((s) => s.id === currentSessionId) as (ChatSession & { isWorkerSession?: boolean }) | undefined;
+    if (!activeSession?.isWorkerSession) return;
+
+    const messagesQuery = query(
+      collection(db, `users/${user.uid}/chatSessions/${currentSessionId}/messages`),
+      orderBy("createdAt", "asc")
+    );
+
+    const unsubscribe = onSnapshot(
+      messagesQuery,
+      (snapshot) => {
+        const storedMessages = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as ChatMessage[];
+        const sortedMessages = [...storedMessages].sort((a, b) => {
+          if (a.sequence !== undefined && b.sequence !== undefined) {
+            return a.sequence - b.sequence;
+          }
+          return 0;
+        });
+        const sdkMessages = serializeMessagesForSDK(sortedMessages).map((m: any) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant" | "system",
+          content: m.content || "",
+          createdAt: m.createdAt,
+          ...(m.parts && m.parts.length > 0 ? { parts: m.parts } : {}),
+          ...(m.toolInvocations && m.toolInvocations.length > 0 ? { toolInvocations: m.toolInvocations } : {}),
+        }));
+
+        // Keep persistence cursor in sync to avoid re-saving already-stored worker messages.
+        lastSavedMessageCount.current = sdkMessages.length;
+        setMessages(sdkMessages);
+      },
+      (error) => {
+        console.error("Failed to live-sync worker session:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user, currentSessionId, sessions, setMessages]);
+
   // Toggle sidebar
   const toggleSidebar = useCallback(() => {
     setIsSidebarOpen((prev) => !prev);
@@ -453,10 +506,11 @@ export function ChatProvider({ children }: ChatProviderProps) {
     ) => {
       // Add entity to active targets
       setActiveWandTargets((prev) => new Set(prev).add(entityId));
+      wandTriggeredAtRef.current.set(entityId, Date.now());
 
-      // Open sidebar on notifications tab (worker progress is shown there)
+      // Open sidebar directly on chat tab for processing view
       setSidebarMode("chat");
-      setActiveTab("notifications");
+      setActiveTab("chat");
       if (!isSidebarOpen) {
         setIsSidebarOpen(true);
       }
@@ -465,6 +519,12 @@ export function ChatProvider({ children }: ChatProviderProps) {
         await triggerFn();
       } catch (err) {
         console.error("Worker trigger failed:", err);
+        wandTriggeredAtRef.current.delete(entityId);
+        for (const key of Array.from(openedWandSessionKeysRef.current)) {
+          if (key.startsWith(`${entityId}:`)) {
+            openedWandSessionKeysRef.current.delete(key);
+          }
+        }
         // Remove from active targets on trigger failure (worker never started)
         setActiveWandTargets((prev) => {
           const next = new Set(prev);
@@ -518,6 +578,36 @@ export function ChatProvider({ children }: ChatProviderProps) {
     [triggerWandSearch, triggerFileTransactionSearch]
   );
 
+  // Auto-open the exact worker chat session for wand-triggered runs once notification context has it.
+  useEffect(() => {
+    if (activeWandTargets.size === 0) return;
+
+    for (const notification of notifications) {
+      if (notification.type !== "worker_activity") continue;
+      const ctx = notification.context;
+      const entityId = ctx.transactionId || ctx.fileId;
+      const sessionId = ctx.sessionId;
+      if (!entityId || !sessionId) continue;
+      if (!activeWandTargets.has(entityId)) continue;
+
+      // Ignore stale notifications from older runs of the same entity.
+      const triggeredAt = wandTriggeredAtRef.current.get(entityId);
+      const createdAt = notification.createdAt?.toDate?.().getTime();
+      if (triggeredAt && createdAt && createdAt < triggeredAt - 5000) continue;
+
+      const sessionKey = `${entityId}:${sessionId}`;
+      if (openedWandSessionKeysRef.current.has(sessionKey)) continue;
+      openedWandSessionKeysRef.current.add(sessionKey);
+
+      setSidebarMode("chat");
+      setActiveTab("chat");
+      if (!isSidebarOpen) {
+        setIsSidebarOpen(true);
+      }
+      void loadSession(sessionId);
+    }
+  }, [notifications, activeWandTargets, loadSession, isSidebarOpen]);
+
   // Clean up activeWandTargets when worker notifications complete
   useEffect(() => {
     if (activeWandTargets.size === 0) return;
@@ -530,6 +620,12 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
       const entityId = ctx.transactionId || ctx.fileId;
       if (entityId && activeWandTargets.has(entityId)) {
+        wandTriggeredAtRef.current.delete(entityId);
+        for (const key of Array.from(openedWandSessionKeysRef.current)) {
+          if (key.startsWith(`${entityId}:`)) {
+            openedWandSessionKeysRef.current.delete(key);
+          }
+        }
         setActiveWandTargets((prev) => {
           const next = new Set(prev);
           next.delete(entityId);

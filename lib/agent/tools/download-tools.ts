@@ -14,6 +14,7 @@ import { z } from "zod";
 export const downloadGmailAttachmentTool = tool(
   async ({ attachments }, config) => {
     const authHeader = config?.configurable?.authHeader;
+    const workerType = config?.configurable?.workerType as string | undefined;
 
     console.log(
       "[Tool] downloadGmailAttachment called for",
@@ -82,6 +83,16 @@ export const downloadGmailAttachmentTool = tool(
     const failCount = results.filter((r) => !r.success).length;
     const duplicateCount = results.filter((r) => r.alreadyExists).length;
     const restoredCount = results.filter((r) => r.wasRestored).length;
+    const downloadedFileIds = results
+      .filter((r) => r.success && !!r.fileId)
+      .map((r) => r.fileId as string);
+    const fileIdsNeedingExtraction = results
+      .filter((r) => r.success && !!r.fileId && !r.alreadyExists)
+      .map((r) => r.fileId as string);
+    const existingFileIds = results
+      .filter((r) => r.success && !!r.fileId && !!r.alreadyExists)
+      .map((r) => r.fileId as string);
+    const isWorkerRun = typeof workerType === "string" && workerType.length > 0;
 
     let message: string;
     if (successCount === 0) {
@@ -97,7 +108,7 @@ export const downloadGmailAttachmentTool = tool(
       message = `Downloaded ${newCount} new file(s), ${duplicateCount} already existed.`;
     } else {
       // All new
-      message = `Downloaded ${successCount} file(s). Automation will extract and match to transactions.${failCount > 0 ? ` ${failCount} failed.` : ""}`;
+      message = `Downloaded ${successCount} file(s).${failCount > 0 ? ` ${failCount} failed.` : ""}`;
     }
 
     return {
@@ -106,6 +117,17 @@ export const downloadGmailAttachmentTool = tool(
       failed: failCount,
       duplicates: duplicateCount,
       restored: restoredCount,
+      fileIds: downloadedFileIds,
+      fileIdsNeedingExtraction,
+      existingFileIds,
+      nextStep: fileIdsNeedingExtraction.length > 0
+        ? "Run waitForFileExtraction for each fileId in fileIdsNeedingExtraction, then compare extracted data before connecting."
+        : existingFileIds.length > 0
+          ? "Use getFile on existingFileIds to verify extracted data before connecting."
+          : undefined,
+      workerGuidance: isWorkerRun
+        ? "Do not decide yet. Wait for extraction/getFile checks, then compare candidates."
+        : undefined,
       results,
       message,
     };
@@ -113,7 +135,7 @@ export const downloadGmailAttachmentTool = tool(
   {
     name: "downloadGmailAttachment",
     description:
-      "Download Gmail attachments. After download, automation extracts the file and matches it to transactions automatically.",
+      "Download Gmail attachments. In matching flows, run waitForFileExtraction for new file IDs and verify extracted data before connecting.",
     schema: z.object({
       attachments: z
         .array(
@@ -139,6 +161,7 @@ export const downloadGmailAttachmentTool = tool(
 export const convertEmailToPdfTool = tool(
   async ({ integrationId, messageId, emailSubject, emailFrom }, config) => {
     const authHeader = config?.configurable?.authHeader;
+    const workerType = config?.configurable?.workerType as string | undefined;
 
     console.log("[Tool] convertEmailToPdf called for message:", messageId);
 
@@ -169,6 +192,7 @@ export const convertEmailToPdfTool = tool(
             success: false,
             error: "PDF_CONVERSION_UNAVAILABLE",
             message: "Email-to-PDF conversion is not available in this environment. The email cannot be converted to PDF, but you can still download any attachments from the email.",
+            nextStep: "Fallback: search/download PDF attachments from this email or use invoice links if available.",
           };
         }
 
@@ -176,29 +200,36 @@ export const convertEmailToPdfTool = tool(
           success: false,
           error: errorMsg,
           message: `Failed to convert email to PDF: ${errorMsg}`,
+          nextStep: "Try another candidate email or attachment.",
         };
       }
 
       const data = await response.json();
+      const isWorkerRun = typeof workerType === "string" && workerType.length > 0;
       return {
         success: true,
         fileId: data.fileId,
         fileName: data.fileName,
         downloadUrl: data.downloadUrl,
-        message: `Converted email "${emailSubject || "email"}" to PDF. Automation will match it to transactions.`,
+        nextStep: "Run waitForFileExtraction with this fileId, then verify extracted amount/partner/date before connecting.",
+        workerGuidance: isWorkerRun
+          ? "Do not finalize yet. Wait for extraction result and compare against other candidates."
+          : undefined,
+        message: `Converted email "${emailSubject || "email"}" to PDF.`,
       };
     } catch (error) {
       return {
         success: false,
         error: error instanceof Error ? error.message : "Conversion failed",
         message: "Failed to convert email to PDF.",
+        nextStep: "Try another candidate email or attachment.",
       };
     }
   },
   {
     name: "convertEmailToPdf",
     description:
-      "Convert an email body to a PDF. Use when the email itself is the invoice. Automation will match it to transactions after extraction.",
+      "Convert an email body to a PDF. Use when the email itself is the invoice, then run waitForFileExtraction(fileId) and verify before connecting.",
     schema: z.object({
       integrationId: z.string().describe("Gmail integration ID"),
       messageId: z.string().describe("Gmail message ID"),

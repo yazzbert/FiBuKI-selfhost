@@ -684,6 +684,7 @@ export const searchGmailAttachmentsTool = tool(
   async ({ transactionId, query }, config) => {
     const userId = config?.configurable?.userId;
     const authHeader = config?.configurable?.authHeader;
+    const workerType = config?.configurable?.workerType as string | undefined;
 
     if (!userId) {
       return { error: "User ID not provided" };
@@ -699,6 +700,11 @@ export const searchGmailAttachmentsTool = tool(
 
     const tx = txDoc.data()!;
     const txDate = tx.date?.toDate?.() || new Date(tx.date);
+    const rejectedFileIds = new Set<string>(tx.rejectedFileIds || []);
+    const receiptWorkerDateFrom = new Date(txDate);
+    receiptWorkerDateFrom.setDate(receiptWorkerDateFrom.getDate() - 180);
+    const receiptWorkerDateTo = new Date(txDate);
+    receiptWorkerDateTo.setDate(receiptWorkerDateTo.getDate() + 45);
 
     // Get partner info if available
     let partner = null;
@@ -820,6 +826,8 @@ export const searchGmailAttachmentsTool = tool(
       /** If already downloaded, the existing file ID */
       alreadyDownloaded?: boolean;
       existingFileId?: string;
+      /** True if this file was explicitly rejected for this transaction before */
+      isRejected?: boolean;
     }> = [];
 
     for (const integrationDoc of integrationsSnapshot.docs) {
@@ -829,12 +837,18 @@ export const searchGmailAttachmentsTool = tool(
       for (const searchQuery of searchQueries) {
         try {
           // Call searchGmailCallable directly (same as UI does)
-          // No date filtering - invoices may arrive weeks/months before or after transaction
+          // In receipt worker mode, constrain by a broad default window to reduce stale noise.
           const searchResponse = await callFirebaseFunction<SearchGmailRequest, SearchGmailResponse>(
             "searchGmailCallable",
             {
               integrationId: integrationDoc.id,
               query: searchQuery,
+              ...(workerType === "receipt_search"
+                ? {
+                    dateFrom: receiptWorkerDateFrom.toISOString(),
+                    dateTo: receiptWorkerDateTo.toISOString(),
+                  }
+                : {}),
               hasAttachments: false, // Get all emails, we'll classify them
               expandThreads: true, // Fetch all messages in matching threads
               limit: 50, // Match UI limit for better coverage
@@ -996,6 +1010,7 @@ export const searchGmailAttachmentsTool = tool(
                     classification: att._classification,
                     alreadyDownloaded: att._alreadyDownloaded,
                     existingFileId: att._existingFileId,
+                    isRejected: att._existingFileId ? rejectedFileIds.has(att._existingFileId) : false,
                   });
                 }
               }
@@ -1047,6 +1062,15 @@ export const searchGmailAttachmentsTool = tool(
         amount: tx.amount,
         date: txDate.toISOString(),
       },
+      ...(workerType === "receipt_search"
+        ? {
+            appliedDateWindow: {
+              from: receiptWorkerDateFrom.toISOString(),
+              to: receiptWorkerDateTo.toISOString(),
+              reason: "receipt_search default window (txDate -180d to +45d)",
+            },
+          }
+        : {}),
       queriesUsed: searchQueries,
       summary,
       candidates: topCandidates.map((c) => ({
@@ -1087,6 +1111,7 @@ export const searchGmailEmailsTool = tool(
   async ({ query, transactionId, dateFrom, dateTo, from, limit }, config) => {
     const userId = config?.configurable?.userId;
     const authHeader = config?.configurable?.authHeader;
+    const workerType = config?.configurable?.workerType as string | undefined;
 
     if (!userId) {
       return { error: "User ID not provided" };
@@ -1108,6 +1133,20 @@ export const searchGmailEmailsTool = tool(
           }
         }
       }
+    }
+
+    // In receipt worker mode, use a broad transaction-relative window by default
+    // unless caller already provided explicit date filters.
+    let effectiveDateFrom = dateFrom;
+    let effectiveDateTo = dateTo;
+    if (workerType === "receipt_search" && tx?.date && !effectiveDateFrom && !effectiveDateTo) {
+      const txDate = tx.date?.toDate?.() || new Date(tx.date);
+      const defaultFrom = new Date(txDate);
+      defaultFrom.setDate(defaultFrom.getDate() - 180);
+      const defaultTo = new Date(txDate);
+      defaultTo.setDate(defaultTo.getDate() + 45);
+      effectiveDateFrom = defaultFrom.toISOString();
+      effectiveDateTo = defaultTo.toISOString();
     }
 
     // Get Gmail integrations
@@ -1175,8 +1214,8 @@ export const searchGmailEmailsTool = tool(
           {
             integrationId: integrationDoc.id,
             query,
-            dateFrom,
-            dateTo,
+            dateFrom: effectiveDateFrom,
+            dateTo: effectiveDateTo,
             from,
             hasAttachments: false, // Get all emails, not just those with attachments
             expandThreads: true,
@@ -1302,16 +1341,55 @@ export const searchGmailEmailsTool = tool(
       snippet: rest.snippet || (bodyText ? bodyText.slice(0, 200) + "..." : ""),
     }));
 
+    const mailInvoiceCount = resultEmails.filter((e) => e.classification.possibleMailInvoice).length;
+    const invoiceLinkCount = resultEmails.filter((e) => e.classification.possibleInvoiceLink).length;
+    const needsEmailAnalysis = workerType === "receipt_search" &&
+      resultEmails.some((e) => e.classification.possibleMailInvoice || e.classification.possibleInvoiceLink);
+    const recommendedAnalyzeCandidates = workerType === "receipt_search"
+      ? resultEmails
+        .filter((e) => e.classification.possibleMailInvoice || e.classification.possibleInvoiceLink)
+        .slice(0, 3)
+        .map((e) => ({
+          messageId: e.messageId,
+          integrationId: e.integrationId,
+          subject: e.subject,
+          from: e.from,
+          score: e.score,
+          reason: e.classification.possibleMailInvoice
+            ? "possibleMailInvoice"
+            : "possibleInvoiceLink",
+        }))
+      : [];
+
+    const baseSummary = resultEmails.length > 0
+      ? `Found ${dedupedEmails.length} emails for "${query}". ${mailInvoiceCount} may be mail invoices, ${invoiceLinkCount} may have invoice links.`
+      : `No emails found for "${query}"`;
+    const receiptModeHint = needsEmailAnalysis
+      ? " In receipt_search mode: analyze top candidates with analyzeEmail before concluding no match."
+      : "";
+
     return {
       searchType: "gmail_emails",
       query,
       emails: resultEmails,
       totalFound: dedupedEmails.length,
       integrationCount: integrationsSnapshot.size,
+      ...(needsEmailAnalysis
+        ? {
+            nextStep: "Run analyzeEmail on recommendedAnalyzeCandidates, then convertEmailToPdf if invoice-like.",
+            recommendedAnalyzeCandidates,
+          }
+        : {}),
+      ...(effectiveDateFrom || effectiveDateTo
+        ? {
+            appliedDateWindow: {
+              from: effectiveDateFrom || null,
+              to: effectiveDateTo || null,
+            },
+          }
+        : {}),
       integrationsNeedingReauth: integrationsNeedingReauth.length > 0 ? integrationsNeedingReauth : undefined,
-      summary: resultEmails.length > 0
-        ? `Found ${dedupedEmails.length} emails for "${query}". ${resultEmails.filter(e => e.classification.possibleMailInvoice).length} may be mail invoices, ${resultEmails.filter(e => e.classification.possibleInvoiceLink).length} may have invoice links.`
-        : `No emails found for "${query}"`,
+      summary: `${baseSummary}${receiptModeHint}`,
     };
   },
   {
@@ -1349,6 +1427,7 @@ export const analyzeEmailTool = tool(
   async ({ integrationId, messageId, transactionId }, config) => {
     const userId = config?.configurable?.userId;
     const authHeader = config?.configurable?.authHeader;
+    const workerType = config?.configurable?.workerType as string | undefined;
 
     if (!userId) {
       return { error: "User ID not provided" };
@@ -1400,6 +1479,14 @@ export const analyzeEmailTool = tool(
     }
 
     const result: AnalyzeEmailResponse = await response.json();
+    const shouldConvertToPdf = result.isMailInvoice ||
+      result.mailInvoiceConfidence >= 0.4 ||
+      (workerType === "receipt_search" && result.hasInvoiceLink && result.mailInvoiceConfidence >= 0.25);
+    const recommendedAction = shouldConvertToPdf
+      ? "convertEmailToPdf"
+      : result.hasInvoiceLink
+        ? "reportInvoiceLinks"
+        : "continueSearch";
 
     return {
       messageId: result.messageId,
@@ -1411,6 +1498,13 @@ export const analyzeEmailTool = tool(
       isMailInvoice: result.isMailInvoice,
       mailInvoiceConfidence: result.mailInvoiceConfidence,
       reasoning: result.reasoning,
+      shouldConvertToPdf,
+      recommendedAction,
+      nextStep: shouldConvertToPdf
+        ? "Run convertEmailToPdf for this message, then waitForFileExtraction and validate against transaction."
+        : result.hasInvoiceLink
+          ? "If no better candidates exist, share invoice links as fallback."
+          : "Analyze another email candidate or continue searching.",
       summary: result.hasInvoiceLink
         ? `Found ${result.invoiceLinks.length} invoice link(s): ${result.invoiceLinks.map(l => l.anchorText || l.url).join(", ")}`
         : result.isMailInvoice
@@ -1635,6 +1729,7 @@ export const connectFileToTransactionTool = tool(
   async ({ fileId, transactionId, confidence, skipValidation, searchQuery, sourceType }, config) => {
     const userId = config?.configurable?.userId;
     const authHeader = config?.configurable?.authHeader;
+    const workerType = config?.configurable?.workerType as string | undefined;
 
     if (!userId) {
       return { error: "User ID not provided" };
@@ -1663,10 +1758,21 @@ export const connectFileToTransactionTool = tool(
 
     const file = fileDoc.data()!;
     const tx = txDoc.data()!;
+    const rejectedFileIds = new Set<string>(tx.rejectedFileIds || []);
+
+    const isReceiptSearchWorker = workerType === "receipt_search";
+    const effectiveSkipValidation = isReceiptSearchWorker ? false : Boolean(skipValidation);
 
     // === VALIDATION: Check for mismatches before connecting ===
-    if (!skipValidation) {
+    if (!effectiveSkipValidation) {
       const warnings: string[] = [];
+
+      // 0. Historical rejection safety - don't reconnect files the user rejected for this transaction
+      if (rejectedFileIds.has(fileId)) {
+        warnings.push(
+          `REJECTED BEFORE: File "${file.fileName}" was previously rejected for this transaction.`
+        );
+      }
 
       // 1. Amount validation - check if amounts are significantly different
       const fileAmount = getFileAmountForValidation(file, tx.amount); // in cents (best-effort gross)
@@ -1679,12 +1785,19 @@ export const connectFileToTransactionTool = tool(
         if (absFileAmount > 0 && absTxAmount > 0) {
           const ratio = absFileAmount / absTxAmount;
 
-          // Flag if amounts differ by more than 50% (ratio < 0.5 or > 2.0)
-          if (ratio < 0.5 || ratio > 2.0) {
+          const fileCurrency = (file.extractedCurrency || tx.currency || "EUR").toUpperCase();
+          const txCurrency = (tx.currency || "EUR").toUpperCase();
+          const sameCurrency = fileCurrency === txCurrency;
+
+          // Default mode: tolerate broad ratio mismatches for manual/interactive flows.
+          // Receipt worker mode: require close amount match to avoid auto-connecting wrong invoices.
+          const isAmountMismatch = isReceiptSearchWorker
+            ? (sameCurrency ? (ratio < 0.9 || ratio > 1.1) : (ratio < 0.75 || ratio > 1.35))
+            : (ratio < 0.5 || ratio > 2.0);
+
+          if (isAmountMismatch) {
             const fileAmtStr = (absFileAmount / 100).toFixed(2);
             const txAmtStr = (absTxAmount / 100).toFixed(2);
-            const fileCurrency = file.extractedCurrency || "EUR";
-            const txCurrency = tx.currency || "EUR";
 
             warnings.push(
               `AMOUNT MISMATCH: File has ${fileAmtStr} ${fileCurrency} but transaction is ${txAmtStr} ${txCurrency} ` +
@@ -1697,6 +1810,7 @@ export const connectFileToTransactionTool = tool(
       // 2. Partner validation - check if file's extracted partner matches transaction
       const filePartner = file.extractedPartner;
       const txName = tx.name || tx.partner;
+      const hasTrustedPartnerReference = Boolean(tx.partnerId || tx.partner);
 
       if (filePartner && txName) {
         // Clean the transaction name (remove bank prefixes)
@@ -1705,7 +1819,7 @@ export const connectFileToTransactionTool = tool(
           .replace(/\.{3}$/, "")
           .trim();
 
-        if (!doNamesMatch(filePartner, cleanTxName)) {
+        if (!doNamesMatch(filePartner, cleanTxName) && (!isReceiptSearchWorker || hasTrustedPartnerReference)) {
           warnings.push(
             `PARTNER MISMATCH: File is from "${filePartner}" but transaction is "${cleanTxName}". ` +
             `This file may not belong to this transaction.`
@@ -1727,7 +1841,9 @@ export const connectFileToTransactionTool = tool(
           transactionName: tx.name,
           transactionAmount: tx.amount != null ? tx.amount / 100 : null,
           transactionCurrency: tx.currency || "EUR",
-          message: `Cannot connect: ${warnings.join(" ")} Use skipValidation=true to force connection.`,
+          message: isReceiptSearchWorker
+            ? `Cannot connect in receipt_search mode: ${warnings.join(" ")} Continue searching and verify another candidate.`
+            : `Cannot connect: ${warnings.join(" ")} Use skipValidation=true to force connection.`,
         };
       }
     }
@@ -1810,7 +1926,8 @@ IMPORTANT: This tool validates that the file matches the transaction before conn
 - File's extracted partner must match transaction name
 
 If validation fails, the connection is blocked. Review the warnings before proceeding.
-Only use skipValidation=true if you're certain the file belongs to this transaction despite the mismatch.`,
+Only use skipValidation=true if you're certain the file belongs to this transaction despite the mismatch.
+Note: In receipt_search worker mode, skipValidation is ignored for safety.`,
     schema: z.object({
       fileId: z.string().describe("The file ID from searchLocalFiles results"),
       transactionId: z.string().describe("The transaction ID to connect to"),

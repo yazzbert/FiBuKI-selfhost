@@ -32,6 +32,8 @@ exports.markFileAsNotInvoiceCallable = (0, createCallable_1.createCallable)({ na
         extractedAmount: null,
         extractedCurrency: null,
         extractedVatPercent: null,
+        extractedVatAmount: null,
+        extractedLineItems: null,
         extractedPartner: null,
         extractedVatId: null,
         extractedIban: null,

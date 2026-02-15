@@ -149,6 +149,17 @@ export function ChatSidebar() {
     }
   }, [messages, pendingConfirmations, isLoading, scrollToBottom]);
 
+  // When switching to another chat session (e.g. "View in chat"), reset follow mode
+  // and jump to the latest message so live worker progress starts from the bottom.
+  useEffect(() => {
+    if (activeTab !== "chat") return;
+    userScrolledRef.current = false;
+    setIsAtBottom(true);
+    setTimeout(() => {
+      scrollToBottom();
+    }, 0);
+  }, [currentSessionId, activeTab, scrollToBottom]);
+
   // Focus input when clicking on empty chat area (not when selecting text)
   const handleSidebarClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
