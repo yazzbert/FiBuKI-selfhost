@@ -89,7 +89,6 @@ interface FileExtractedInfoProps {
 
 export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsing, onFieldClick, onDirectionChange, onUpdate, isUpdating }: FileExtractedInfoProps) {
   const [showMore, setShowMore] = useState(false);
-  const [showLineItems, setShowLineItems] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editedFields, setEditedFields] = useState<EditableExtractedFields>({
     date: "",
@@ -132,7 +131,6 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
     });
     setIsEditing(true);
     setShowMore(true); // Expand to show all fields when editing
-    setShowLineItems(true);
   };
 
   const cancelEditing = () => {
@@ -201,7 +199,6 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
         },
       ],
     }));
-    setShowLineItems(true);
   };
 
   const removeLineItem = (index: number) => {
@@ -499,107 +496,6 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
             )}
           </FieldRow>
 
-          {(hasLineItems || isEditing) && (
-            <div className="space-y-2 pt-1">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Line items</span>
-                {isEditing ? null : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => setShowLineItems((prev) => !prev)}
-                  >
-                    {showLineItems ? "Hide items" : "Show items"}
-                  </Button>
-                )}
-              </div>
-
-              {isEditing ? (
-                <div className="space-y-2">
-                  {editedLineItems.map((item, index) => (
-                    <div key={index} className="rounded border p-2 space-y-2">
-                      <Input
-                        value={item.description}
-                        onChange={(e) => updateLineItemField(index, "description", e.target.value)}
-                        className="h-8 text-sm"
-                        placeholder="Description"
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <Input
-                          value={item.quantity}
-                          onChange={(e) => updateLineItemField(index, "quantity", e.target.value)}
-                          className="h-8 text-sm"
-                          placeholder="Qty"
-                        />
-                        <Input
-                          value={item.unitPrice}
-                          onChange={(e) => updateLineItemField(index, "unitPrice", e.target.value)}
-                          className="h-8 text-sm"
-                          placeholder="Unit price"
-                        />
-                        <Input
-                          value={item.vatPercent}
-                          onChange={(e) => updateLineItemField(index, "vatPercent", e.target.value)}
-                          className="h-8 text-sm"
-                          placeholder="VAT %"
-                        />
-                        <Input
-                          value={item.vatAmount}
-                          onChange={(e) => updateLineItemField(index, "vatAmount", e.target.value)}
-                          className="h-8 text-sm"
-                          placeholder="VAT amount"
-                        />
-                        <Input
-                          value={item.amount}
-                          onChange={(e) => updateLineItemField(index, "amount", e.target.value)}
-                          className="h-8 text-sm col-span-2"
-                          placeholder="Gross amount"
-                        />
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-muted-foreground hover:text-destructive"
-                        onClick={() => removeLineItem(index)}
-                      >
-                        <Trash2 className="h-4 w-4 mr-1" />
-                        Remove item
-                      </Button>
-                    </div>
-                  ))}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={addLineItem}
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add line item
-                  </Button>
-                </div>
-              ) : (
-                showLineItems && (
-                  <div className="space-y-2">
-                    {lineItems.map((item, index) => (
-                      <div key={index} className="rounded border p-2">
-                        <div className="text-sm">{item.description || "—"}</div>
-                        <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-1 tabular-nums">
-                          {item.quantity != null && <span>Qty: {item.quantity}</span>}
-                          {item.unitPrice != null && (
-                            <span>Unit: {formatDocumentAmount(item.unitPrice, file.extractedCurrency)}</span>
-                          )}
-                          <span>VAT: {item.vatPercent != null ? `${item.vatPercent}%` : "—"}</span>
-                          <span>Amount: {formatDocumentAmount(item.amount, file.extractedCurrency)}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              )}
-            </div>
-          )}
-
           <FieldRow
             label="Partner"
             onClick={onFieldClick}
@@ -613,7 +509,7 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
           </FieldRow>
 
           {/* Show more toggle - only if there are secondary or additional fields (hide when editing since all are shown) */}
-          {(hasSecondaryFields || hasAdditionalFields) && !isEditing && (
+          {(hasSecondaryFields || hasAdditionalFields || hasLineItems) && !isEditing && (
             <ShowMoreButton
               expanded={showMore}
               onToggle={() => setShowMore(!showMore)}
@@ -714,6 +610,92 @@ export function FileExtractedInfo({ file, onRetryExtraction, isRetrying, isParsi
                     {field.value}
                   </FieldRow>
                 ))
+              )}
+
+              {(hasLineItems || isEditing) && (
+                <div className="space-y-2 pt-2">
+                  <div className="text-sm text-muted-foreground">Line items</div>
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      {editedLineItems.map((item, index) => (
+                        <div key={index} className="rounded border p-2 space-y-2">
+                          <Input
+                            value={item.description}
+                            onChange={(e) => updateLineItemField(index, "description", e.target.value)}
+                            className="h-8 text-sm"
+                            placeholder="Description"
+                          />
+                          <div className="grid grid-cols-2 gap-2">
+                            <Input
+                              value={item.quantity}
+                              onChange={(e) => updateLineItemField(index, "quantity", e.target.value)}
+                              className="h-8 text-sm"
+                              placeholder="Qty"
+                            />
+                            <Input
+                              value={item.unitPrice}
+                              onChange={(e) => updateLineItemField(index, "unitPrice", e.target.value)}
+                              className="h-8 text-sm"
+                              placeholder="Unit price"
+                            />
+                            <Input
+                              value={item.vatPercent}
+                              onChange={(e) => updateLineItemField(index, "vatPercent", e.target.value)}
+                              className="h-8 text-sm"
+                              placeholder="VAT %"
+                            />
+                            <Input
+                              value={item.vatAmount}
+                              onChange={(e) => updateLineItemField(index, "vatAmount", e.target.value)}
+                              className="h-8 text-sm"
+                              placeholder="VAT amount"
+                            />
+                            <Input
+                              value={item.amount}
+                              onChange={(e) => updateLineItemField(index, "amount", e.target.value)}
+                              className="h-8 text-sm col-span-2"
+                              placeholder="Gross amount"
+                            />
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-muted-foreground hover:text-destructive"
+                            onClick={() => removeLineItem(index)}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Remove item
+                          </Button>
+                        </div>
+                      ))}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={addLineItem}
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Add line item
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {lineItems.map((item, index) => (
+                        <div key={index} className="rounded border p-2">
+                          <div className="text-sm">{item.description || "—"}</div>
+                          <div className="text-xs text-muted-foreground flex flex-wrap gap-3 mt-1 tabular-nums">
+                            {item.quantity != null && <span>Qty: {item.quantity}</span>}
+                            {item.unitPrice != null && (
+                              <span>Unit: {formatDocumentAmount(item.unitPrice, file.extractedCurrency)}</span>
+                            )}
+                            <span>VAT: {item.vatPercent != null ? `${item.vatPercent}%` : "—"}</span>
+                            <span>Amount: {formatDocumentAmount(item.amount, file.extractedCurrency)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
