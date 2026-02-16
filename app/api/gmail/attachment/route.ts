@@ -38,6 +38,17 @@ function extractDomain(email?: string | null): string | null {
   return match ? match[1] : null;
 }
 
+function isInvalidAttachmentTokenError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const lower = error.message.toLowerCase();
+  return (
+    lower.includes("attachment_token_invalid") ||
+    lower.includes("invalid attachment token") ||
+    lower.includes("\"reason\": \"invalidargument\"") ||
+    lower.includes("\"reason\":\"invalidargument\"")
+  );
+}
+
 /**
  * GET /api/gmail/attachment
  * Download attachment for preview
@@ -126,6 +137,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { error: "Authentication expired", code: "AUTH_EXPIRED" },
         { status: 403 }
+      );
+    }
+
+    if (isInvalidAttachmentTokenError(error)) {
+      return NextResponse.json(
+        {
+          error:
+            "Attachment token is no longer valid. Re-run search to refresh this email attachment.",
+          code: "ATTACHMENT_INVALID",
+        },
+        { status: 400 }
       );
     }
 
@@ -414,6 +436,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Authentication expired", code: "AUTH_EXPIRED" },
         { status: 403 }
+      );
+    }
+
+    if (isInvalidAttachmentTokenError(error)) {
+      return NextResponse.json(
+        {
+          error:
+            "Attachment token is no longer valid. Re-run search to refresh this email attachment.",
+          code: "ATTACHMENT_INVALID",
+        },
+        { status: 400 }
       );
     }
 

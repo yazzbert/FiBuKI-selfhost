@@ -296,24 +296,98 @@ export class GmailClient implements EmailProviderClient {
     attachmentId: string,
     metadata?: { mimeType?: string; filename?: string }
   ): Promise<AttachmentDownloadResult> {
-    // Fetch the attachment data directly from Gmail API
-    const attachmentData = await this.gmailFetch<{ data: string; size: number }>(
-      `/messages/${messageId}/attachments/${attachmentId}`
-    );
+    const encodedMessageId = encodeURIComponent(messageId);
 
-    // Decode base64url data
-    const data = Buffer.from(
-      attachmentData.data.replace(/-/g, "+").replace(/_/g, "/"),
-      "base64"
-    );
+    const downloadByToken = async (
+      token: string
+    ): Promise<{ data: Buffer; size: number }> => {
+      const encodedToken = encodeURIComponent(token);
+      const attachmentData = await this.gmailFetch<{ data: string; size: number }>(
+        `/messages/${encodedMessageId}/attachments/${encodedToken}`
+      );
 
-    // Use provided metadata or defaults
-    return {
-      data,
-      mimeType: metadata?.mimeType || "application/octet-stream",
-      filename: metadata?.filename || "attachment",
-      size: data.length,
+      const data = Buffer.from(
+        attachmentData.data.replace(/-/g, "+").replace(/_/g, "/"),
+        "base64"
+      );
+
+      return { data, size: data.length };
     };
+
+    try {
+      const downloaded = await downloadByToken(attachmentId);
+      return {
+        data: downloaded.data,
+        mimeType: metadata?.mimeType || "application/octet-stream",
+        filename: metadata?.filename || "attachment",
+        size: downloaded.size,
+      };
+    } catch (error) {
+      if (!this.isInvalidAttachmentTokenError(error)) {
+        throw error;
+      }
+
+      // Gmail can occasionally invalidate attachment tokens; refresh message payload
+      // and resolve the latest token by filename (or exact token if still present).
+      const message = await this.gmailFetch<GmailMessage>(
+        `/messages/${encodedMessageId}?format=full`
+      );
+      const attachmentParts = this.listAttachmentParts(message.payload);
+
+      const filenameHint = metadata?.filename?.trim().toLowerCase();
+      let resolvedPart = attachmentParts.find(
+        (part) => part.attachmentId && part.attachmentId === attachmentId
+      );
+
+      if (!resolvedPart && filenameHint) {
+        resolvedPart = attachmentParts
+          .filter((part) => part.filename && part.filename.toLowerCase() === filenameHint)
+          .sort((a, b) => (b.size || 0) - (a.size || 0))[0];
+      }
+
+      if (!resolvedPart) {
+        const downloadableParts = attachmentParts
+          .filter((part) => !!part.attachmentId || !!part.inlineData)
+          .sort((a, b) => (b.size || 0) - (a.size || 0));
+        if (downloadableParts.length === 1) {
+          resolvedPart = downloadableParts[0];
+        }
+      }
+
+      if (!resolvedPart) {
+        throw new Error(
+          `ATTACHMENT_TOKEN_INVALID: Attachment token is no longer valid for message ${messageId}`
+        );
+      }
+
+      // Some small parts may be inlined in payload.body.data without attachmentId.
+      if (!resolvedPart.attachmentId && resolvedPart.inlineData) {
+        const inlined = Buffer.from(
+          resolvedPart.inlineData.replace(/-/g, "+").replace(/_/g, "/"),
+          "base64"
+        );
+        return {
+          data: inlined,
+          mimeType: resolvedPart.mimeType || metadata?.mimeType || "application/octet-stream",
+          filename: resolvedPart.filename || metadata?.filename || "attachment",
+          size: inlined.length,
+        };
+      }
+
+      if (!resolvedPart.attachmentId) {
+        throw new Error(
+          `ATTACHMENT_TOKEN_INVALID: Attachment token is invalid and no replacement token was found for message ${messageId}`
+        );
+      }
+
+      const refreshed = await downloadByToken(resolvedPart.attachmentId);
+      return {
+        data: refreshed.data,
+        mimeType: resolvedPart.mimeType || metadata?.mimeType || "application/octet-stream",
+        filename: resolvedPart.filename || metadata?.filename || "attachment",
+        size: refreshed.size,
+      };
+    }
   }
 
   /**
@@ -337,6 +411,54 @@ export class GmailClient implements EmailProviderClient {
     }
 
     return null;
+  }
+
+  private listAttachmentParts(
+    payload: GmailMessagePart | undefined
+  ): Array<{
+    attachmentId?: string;
+    filename: string;
+    mimeType?: string;
+    size?: number;
+    inlineData?: string;
+  }> {
+    if (!payload) return [];
+
+    const parts: Array<{
+      attachmentId?: string;
+      filename: string;
+      mimeType?: string;
+      size?: number;
+      inlineData?: string;
+    }> = [];
+
+    if (payload.filename || payload.body?.attachmentId || payload.body?.data) {
+      parts.push({
+        attachmentId: payload.body?.attachmentId,
+        filename: payload.filename || "",
+        mimeType: payload.mimeType,
+        size: payload.body?.size,
+        inlineData: payload.body?.data,
+      });
+    }
+
+    if (payload.parts) {
+      for (const child of payload.parts) {
+        parts.push(...this.listAttachmentParts(child));
+      }
+    }
+
+    return parts;
+  }
+
+  private isInvalidAttachmentTokenError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const lower = error.message.toLowerCase();
+    return (
+      lower.includes("invalid attachment token") ||
+      lower.includes("\"reason\": \"invalidargument\"") ||
+      lower.includes("\"reason\":\"invalidargument\"")
+    );
   }
 
   /**
