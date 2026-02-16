@@ -1725,6 +1725,26 @@ function getFileAmountForValidation(
   return extractedAmount !== null ? extractedAmount : uniqueCandidates[0];
 }
 
+function getDateFromUnknown(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  if (typeof value === "object" && "toDate" in value && typeof (value as { toDate?: unknown }).toDate === "function") {
+    const parsed = (value as { toDate: () => unknown }).toDate();
+    return parsed instanceof Date && !Number.isNaN(parsed.getTime()) ? parsed : null;
+  }
+  return null;
+}
+
+function getAbsoluteDateDiffDays(date1: Date | null, date2: Date | null): number | null {
+  if (!date1 || !date2) return null;
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.round(Math.abs(date1.getTime() - date2.getTime()) / msPerDay);
+}
+
 export const connectFileToTransactionTool = tool(
   async ({ fileId, transactionId, confidence, skipValidation, searchQuery, sourceType }, config) => {
     const userId = config?.configurable?.userId;
@@ -1777,23 +1797,24 @@ export const connectFileToTransactionTool = tool(
       // 1. Amount validation - check if amounts are significantly different
       const fileAmount = getFileAmountForValidation(file, tx.amount); // in cents (best-effort gross)
       const txAmount = tx.amount; // in cents
+      let amountRatio: number | null = null;
+      let sameCurrency = true;
+      let fileCurrency = (file.extractedCurrency || tx.currency || "EUR").toUpperCase();
+      let txCurrency = (tx.currency || "EUR").toUpperCase();
 
       if (fileAmount != null && txAmount != null) {
         const absFileAmount = Math.abs(fileAmount);
         const absTxAmount = Math.abs(txAmount);
 
         if (absFileAmount > 0 && absTxAmount > 0) {
-          const ratio = absFileAmount / absTxAmount;
-
-          const fileCurrency = (file.extractedCurrency || tx.currency || "EUR").toUpperCase();
-          const txCurrency = (tx.currency || "EUR").toUpperCase();
-          const sameCurrency = fileCurrency === txCurrency;
+          amountRatio = absFileAmount / absTxAmount;
+          sameCurrency = fileCurrency === txCurrency;
 
           // Default mode: tolerate broad ratio mismatches for manual/interactive flows.
           // Receipt worker mode: require close amount match to avoid auto-connecting wrong invoices.
           const isAmountMismatch = isReceiptSearchWorker
-            ? (sameCurrency ? (ratio < 0.9 || ratio > 1.1) : (ratio < 0.75 || ratio > 1.35))
-            : (ratio < 0.5 || ratio > 2.0);
+            ? (sameCurrency ? (amountRatio < 0.9 || amountRatio > 1.1) : (amountRatio < 0.75 || amountRatio > 1.35))
+            : (amountRatio < 0.5 || amountRatio > 2.0);
 
           if (isAmountMismatch) {
             const fileAmtStr = (absFileAmount / 100).toFixed(2);
@@ -1801,7 +1822,7 @@ export const connectFileToTransactionTool = tool(
 
             warnings.push(
               `AMOUNT MISMATCH: File has ${fileAmtStr} ${fileCurrency} but transaction is ${txAmtStr} ${txCurrency} ` +
-              `(${Math.round(ratio * 100)}% ratio). This file likely belongs to a different transaction.`
+              `(${Math.round(amountRatio * 100)}% ratio). This file likely belongs to a different transaction.`
             );
           }
         }
@@ -1811,6 +1832,19 @@ export const connectFileToTransactionTool = tool(
       const filePartner = file.extractedPartner;
       const txName = tx.name || tx.partner;
       const hasTrustedPartnerReference = Boolean(tx.partnerId || tx.partner);
+      const txDate = getDateFromUnknown(tx.date);
+      const fileDate = getDateFromUnknown(file.extractedDate) || getDateFromUnknown(file.uploadedAt);
+      const dateDiffDays = getAbsoluteDateDiffDays(fileDate, txDate);
+      const hasStrongAmountMatch = amountRatio != null
+        && (sameCurrency
+          ? amountRatio >= 0.85 && amountRatio <= 1.15
+          : amountRatio >= 0.7 && amountRatio <= 1.4);
+      const hasVeryStrongAmountMatch = amountRatio != null
+        && (sameCurrency
+          ? amountRatio >= 0.95 && amountRatio <= 1.05
+          : amountRatio >= 0.85 && amountRatio <= 1.15);
+      const hasCloseDate = dateDiffDays != null && dateDiffDays <= (isReceiptSearchWorker ? 75 : 120);
+      const hasStrongAmountAndDateEvidence = hasStrongAmountMatch && hasCloseDate;
 
       if (filePartner && txName) {
         // Clean the transaction name (remove bank prefixes)
@@ -1819,7 +1853,13 @@ export const connectFileToTransactionTool = tool(
           .replace(/\.{3}$/, "")
           .trim();
 
-        if (!doNamesMatch(filePartner, cleanTxName) && (!isReceiptSearchWorker || hasTrustedPartnerReference)) {
+        const hasNameMismatch = !doNamesMatch(filePartner, cleanTxName);
+        const shouldCheckPartnerMismatch = hasNameMismatch && (!isReceiptSearchWorker || hasTrustedPartnerReference);
+        const shouldBlockOnPartnerMismatch = shouldCheckPartnerMismatch
+          && !hasStrongAmountAndDateEvidence
+          && !hasVeryStrongAmountMatch;
+
+        if (shouldBlockOnPartnerMismatch) {
           warnings.push(
             `PARTNER MISMATCH: File is from "${filePartner}" but transaction is "${cleanTxName}". ` +
             `This file may not belong to this transaction.`
@@ -1923,7 +1963,7 @@ export const connectFileToTransactionTool = tool(
 
 IMPORTANT: This tool validates that the file matches the transaction before connecting:
 - Amount must be within 50-200% of transaction amount
-- File's extracted partner must match transaction name
+- Partner mismatch is treated as a warning unless amount/date evidence is strong
 
 If validation fails, the connection is blocked. Review the warnings before proceeding.
 Only use skipValidation=true if you're certain the file belongs to this transaction despite the mismatch.
