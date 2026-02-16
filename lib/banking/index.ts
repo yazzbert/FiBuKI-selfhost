@@ -2,7 +2,7 @@
  * Banking Provider Abstraction Layer
  *
  * Provides a unified interface for multiple Open Banking providers:
- * - finAPI (DACH region)
+ * - finAPI (EU + CH)
  * - TrueLayer
  * - Plaid (future)
  *
@@ -51,7 +51,7 @@ import { getFinapiProvider } from "./providers/finapi";
  * This should be called once at app startup
  */
 export function initializeBankingProviders(): void {
-  // Register finAPI (primary provider for DACH region)
+  // Register finAPI (primary provider for EU + CH)
   try {
     const finapi = getFinapiProvider();
     bankingRegistry.register(finapi);

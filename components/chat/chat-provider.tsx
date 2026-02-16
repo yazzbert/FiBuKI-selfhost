@@ -123,8 +123,12 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
   // Track session IDs requested from URL to avoid repeatedly loading the same session.
   const lastUrlRequestedSessionRef = useRef<string | null>(initialUrlChatStateRef.current.sessionId);
-  // Track last pushed chat signature to avoid unnecessary history entries.
-  const lastChatStateSignatureRef = useRef<string | null>(null);
+  // Track last URL-synced chat UI state to decide push vs replace.
+  const lastUrlSyncedStateRef = useRef<{
+    isSidebarOpen: boolean;
+    activeTab: ChatTab;
+    sessionId: string | null;
+  } | null>(null);
   // Prevent state -> URL effect from overwriting URL-driven state updates (e.g., back/forward).
   const isApplyingUrlStateRef = useRef(false);
   // Distinguish browser back/forward from app navigation pushes.
@@ -777,6 +781,12 @@ export function ChatProvider({ children }: ChatProviderProps) {
     const isPopStateNavigation = isPopStateNavigationRef.current;
     isPopStateNavigationRef.current = false;
 
+    // Ignore local state-only renders while URL has no chat state yet.
+    // This prevents "open sidebar" clicks from being immediately reverted before router updates search params.
+    if (!hasChatParam && !pathChanged && !isPopStateNavigation) {
+      return;
+    }
+
     // Keep current sidebar state across app navigation even when links don't carry query params.
     // Browser back/forward should still apply URL state.
     if (pathChanged && isSidebarOpen && !hasChatParam && !isPopStateNavigation) {
@@ -791,7 +801,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
       appliedUrlState = true;
     }
 
-    if (activeTab !== urlChatState.activeTab) {
+    if (hasChatParam && activeTab !== urlChatState.activeTab) {
       setActiveTab(urlChatState.activeTab);
       appliedUrlState = true;
     }
@@ -823,22 +833,45 @@ export function ChatProvider({ children }: ChatProviderProps) {
   // Sync sidebar state -> URL params (encodes tab + session and preserves history on state changes).
   const hasInitialized = useRef(false);
   useEffect(() => {
-    const stateSignature = `${isSidebarOpen}:${activeTab}:${currentSessionId || ""}`;
-    const previousSignature = lastChatStateSignatureRef.current;
-    const historyMode = previousSignature === null || previousSignature === stateSignature ? "replace" : "push";
-    lastChatStateSignatureRef.current = stateSignature;
+    const currentState = {
+      isSidebarOpen,
+      activeTab,
+      sessionId: currentSessionId,
+    };
 
     // Skip writing URL on first render - initial state comes from URL.
     if (!hasInitialized.current) {
       hasInitialized.current = true;
+      lastUrlSyncedStateRef.current = currentState;
       return;
     }
 
     // URL-driven state changes already updated the URL; avoid overriding them.
     if (isApplyingUrlStateRef.current) {
       isApplyingUrlStateRef.current = false;
+      lastUrlSyncedStateRef.current = currentState;
       return;
     }
+
+    // If URL requested a specific session and we're still loading/switching to it, don't overwrite URL.
+    const urlChatState = getChatStateFromUrl(searchParamsRef.current);
+    if (
+      urlChatState.isSidebarOpen &&
+      urlChatState.sessionId &&
+      lastUrlRequestedSessionRef.current === urlChatState.sessionId &&
+      currentSessionId !== urlChatState.sessionId
+    ) {
+      lastUrlSyncedStateRef.current = currentState;
+      return;
+    }
+
+    const previousState = lastUrlSyncedStateRef.current;
+    const historyMode: "push" | "replace" =
+      previousState &&
+      (previousState.isSidebarOpen !== currentState.isSidebarOpen || previousState.activeTab !== currentState.activeTab)
+        ? "push"
+        : "replace";
+    lastUrlSyncedStateRef.current = currentState;
 
     updateUrlParams({
       isSidebarOpen,

@@ -12,15 +12,14 @@
 
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
-import {
-  matchTransaction,
-  shouldAutoApply,
-  PartnerData,
-  TransactionData,
-} from "../utils/partner-matcher";
 import { isValidCompanyName, extractLegalSuffix } from "../utils/companyNameValidator";
-import { createLocalPartnerFromGlobal } from "./createLocalPartnerFromGlobal";
 import { AutomationMeta } from "../automation/types";
+import {
+  applyPartnerMatchUpdates,
+  loadPartnerMatchingContext,
+  processPartnerMatchesForTransactions,
+  queuePartnerMatchingWorker,
+} from "./partnerMatchingShared";
 
 // =============================================================================
 // AUTOMATION METADATA
@@ -155,23 +154,12 @@ async function queueCompanySearch(
 
   const initialPrompt = promptParts.join(". ");
 
-  const requestRef = db.collection(`users/${userId}/workerRequests`).doc();
-  await requestRef.set({
-    id: requestRef.id,
-    workerType: "partner_matching",
-    initialPrompt,
-    triggerContext: {
-      transactionId,
-      companyName,
-      sourceField,
-      triggeredByCompanyCheck: true,
-    },
-    triggeredBy: "auto",
-    status: "pending",
-    createdAt: Timestamp.now(),
+  return queuePartnerMatchingWorker(userId, initialPrompt, {
+    transactionId,
+    companyName,
+    sourceField,
+    triggeredByCompanyCheck: true,
   });
-
-  return requestRef.id;
 }
 
 // =============================================================================
@@ -207,73 +195,7 @@ export const onTransactionsImportedCompanyCheck = onDocumentCreated(
     // STEP 1: Partner Matching (reused from matchPartners callable)
     // =========================================================================
 
-    // Fetch partners
-    const [userPartnersSnapshot, globalPartnersSnapshot] = await Promise.all([
-      db
-        .collection("partners")
-        .where("userId", "==", userId)
-        .where("isActive", "==", true)
-        .get(),
-      db.collection("globalPartners").where("isActive", "==", true).get(),
-    ]);
-
-    // Build manual removals map
-    const partnerManualRemovals = new Map<string, Set<string>>();
-
-    const userPartners: PartnerData[] = userPartnersSnapshot.docs.map((doc) => {
-      const data = doc.data();
-
-      const removals = data.manualRemovals || [];
-      if (removals.length > 0) {
-        partnerManualRemovals.set(
-          doc.id,
-          new Set(removals.map((r: { transactionId: string }) => r.transactionId))
-        );
-      }
-
-      return {
-        id: doc.id,
-        name: data.name,
-        aliases: data.aliases || [],
-        ibans: data.ibans || [],
-        website: data.website,
-        vatId: data.vatId,
-        learnedPatterns: data.learnedPatterns || [],
-        globalPartnerId: data.globalPartnerId || null,
-      };
-    });
-
-    const globalPartners: PartnerData[] = globalPartnersSnapshot.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        name: data.name,
-        aliases: data.aliases || [],
-        ibans: data.ibans || [],
-        website: data.website,
-        vatId: data.vatId,
-        patterns: data.patterns || [],
-      };
-    });
-
-    // Filter out global partners that are already localized
-    const localizedGlobalIds = new Set(
-      userPartners
-        .map((p) => p.globalPartnerId)
-        .filter(Boolean) as string[]
-    );
-    const filteredGlobalPartners = globalPartners.filter(
-      (p) => !localizedGlobalIds.has(p.id)
-    );
-
-    // Build partner name map for automationHistory entries
-    const partnerNameMap = new Map<string, string>();
-    for (const p of userPartners) {
-      partnerNameMap.set(p.id, p.name);
-    }
-    for (const p of filteredGlobalPartners) {
-      partnerNameMap.set(p.id, p.name);
-    }
+    const partnerContext = await loadPartnerMatchingContext(userId);
 
     // Fetch transactions from this import
     const transactionsSnapshot = await db
@@ -290,114 +212,17 @@ export const onTransactionsImportedCompanyCheck = onDocumentCreated(
 
     console.log(`[CompanyCheck] Found ${transactionsSnapshot.size} transactions to process`);
 
-    // Run partner matching
-    let autoMatched = 0;
-    let withSuggestions = 0;
-    let batch = db.batch();
-    let batchCount = 0;
+    const matchResult = await processPartnerMatchesForTransactions({
+      userId,
+      transactions: transactionsSnapshot.docs,
+      partnerContext,
+      skipUnchangedSuggestions: false,
+      collectAgenticFallback: false,
+    });
 
-    for (const txDoc of transactionsSnapshot.docs) {
-      const txData = txDoc.data();
+    await applyPartnerMatchUpdates(matchResult.writeOperations);
 
-      // Skip if already has a partner
-      if (txData.partnerId) {
-        continue;
-      }
-
-      // Skip transactions with no-receipt categories (already complete, don't need partner)
-      if (txData.noReceiptCategoryId) {
-        continue;
-      }
-
-      // Skip over-quota transactions (imported but processing limited)
-      if (txData.quotaExceeded) {
-        continue;
-      }
-
-      const transaction: TransactionData = {
-        id: txDoc.id,
-        partner: txData.partner || null,
-        partnerIban: txData.partnerIban || null,
-        name: txData.name || "",
-        reference: txData.reference || null,
-      };
-
-      const matches = matchTransaction(transaction, userPartners, filteredGlobalPartners);
-
-      if (matches.length > 0) {
-        // Filter out matches where user explicitly removed this transaction
-        const filteredMatches = matches.filter((m) => {
-          const removals = partnerManualRemovals.get(m.partnerId);
-          return !(removals && removals.has(txDoc.id));
-        });
-
-        if (filteredMatches.length === 0) {
-          continue;
-        }
-
-        const topMatch = filteredMatches[0];
-        const updates: Record<string, unknown> = {
-          partnerSuggestions: filteredMatches.map((m) => ({
-            partnerId: m.partnerId,
-            partnerType: m.partnerType,
-            confidence: m.confidence,
-            source: m.source,
-          })),
-          updatedAt: FieldValue.serverTimestamp(),
-        };
-
-        if (shouldAutoApply(topMatch.confidence)) {
-          let assignedPartnerId = topMatch.partnerId;
-          let assignedPartnerType = topMatch.partnerType;
-
-          if (topMatch.partnerType === "global") {
-            try {
-              assignedPartnerId = await createLocalPartnerFromGlobal(userId, topMatch.partnerId);
-              assignedPartnerType = "user";
-            } catch (error) {
-              console.error(
-                `[CompanyCheck] Failed to create local partner from global:`,
-                error
-              );
-            }
-          }
-
-          updates.partnerId = assignedPartnerId;
-          updates.partnerType = assignedPartnerType;
-          updates.partnerMatchConfidence = topMatch.confidence;
-          updates.partnerMatchedBy = "auto";
-          autoMatched++;
-
-          const partnerName = partnerNameMap.get(assignedPartnerId) || partnerNameMap.get(topMatch.partnerId) || null;
-          updates.automationHistory = FieldValue.arrayUnion({
-            type: "partner_assigned",
-            ranAt: Timestamp.now(),
-            status: "completed",
-            actor: "auto",
-            level: "outcome",
-            forPartnerId: assignedPartnerId,
-            partnerName,
-            confidence: topMatch.confidence,
-            summary: `Partner "${partnerName || assignedPartnerId}" auto-assigned`,
-          });
-        } else {
-          withSuggestions++;
-        }
-
-        batch.update(txDoc.ref, updates);
-        batchCount++;
-
-        if (batchCount >= 500) {
-          await batch.commit();
-          batch = db.batch();
-          batchCount = 0;
-        }
-      }
-    }
-
-    if (batchCount > 0) {
-      await batch.commit();
-    }
+    const { autoMatched, withSuggestions } = matchResult;
 
     console.log(
       `[CompanyCheck] Partner matching complete: ${autoMatched} auto-matched, ` +

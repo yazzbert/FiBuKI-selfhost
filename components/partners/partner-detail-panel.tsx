@@ -202,6 +202,10 @@ export function PartnerDetailPanel({
     () => receiptHints.workingQueries.filter((pattern) => pattern.sourceType === "gmail"),
     [receiptHints.workingQueries]
   );
+  const receiptHintDomains = useMemo(
+    () => (receiptHints.emailDomains.length > 0 ? receiptHints.emailDomains : (partner.emailDomains || [])),
+    [partner.emailDomains, receiptHints.emailDomains]
+  );
 
   // Clear feedback after 4 seconds
   useEffect(() => {
@@ -396,7 +400,14 @@ export function PartnerDetailPanel({
             )
           );
 
-          const fileMetaById = new Map<string, { fileName: string; sourceType: string | null }>();
+          const fileMetaById = new Map<string, {
+            fileName: string;
+            sourceType: string | null;
+            sourceSearchPattern: string | null;
+            sourceResultType: string | null;
+            gmailIntegrationId: string | null;
+            gmailSenderEmail: string | null;
+          }>();
           for (let i = 0; i < fileIds.length; i += 30) {
             const fileBatch = fileIds.slice(i, i + 30);
             if (fileBatch.length === 0) continue;
@@ -406,11 +417,23 @@ export function PartnerDetailPanel({
             ));
 
             for (const doc of fileSnapshot.docs) {
-              const data = doc.data() as { userId?: string; fileName?: string; sourceType?: string };
+              const data = doc.data() as {
+                userId?: string;
+                fileName?: string;
+                sourceType?: string;
+                sourceSearchPattern?: string;
+                sourceResultType?: string;
+                gmailIntegrationId?: string;
+                gmailSenderEmail?: string;
+              };
               if (data.userId !== userId) continue;
               fileMetaById.set(doc.id, {
                 fileName: data.fileName || "",
                 sourceType: data.sourceType || null,
+                sourceSearchPattern: data.sourceSearchPattern || null,
+                sourceResultType: data.sourceResultType || null,
+                gmailIntegrationId: data.gmailIntegrationId || null,
+                gmailSenderEmail: data.gmailSenderEmail || null,
               });
             }
           }
@@ -421,21 +444,25 @@ export function PartnerDetailPanel({
             if (sourceType === "unknown" && fileMeta?.sourceType) {
               sourceType = normalizeHintSourceType(fileMeta.sourceType);
             }
+            if (sourceType === "unknown" && fileMeta?.sourceResultType) {
+              sourceType = normalizeHintSourceType(fileMeta.sourceResultType);
+            }
 
             sourceCounts.set(sourceType, (sourceCounts.get(sourceType) || 0) + 1);
 
-            const domain = extractDomain(connection.gmailMessageFrom);
+            const domain = extractDomain(connection.gmailMessageFrom || fileMeta?.gmailSenderEmail);
             if (domain) domainSet.add(domain);
 
             if (fileMeta?.fileName) filenameSet.add(fileMeta.fileName);
 
-            const searchPattern = typeof connection.searchPattern === "string"
-              ? connection.searchPattern.trim()
-              : "";
+            const searchPatternRaw = typeof connection.searchPattern === "string"
+              ? connection.searchPattern
+              : fileMeta?.sourceSearchPattern || "";
+            const searchPattern = searchPatternRaw.trim();
             if (!searchPattern) continue;
 
-            const integrationId = connection.gmailIntegrationId || null;
-            const resultType = connection.resultType || null;
+            const integrationId = connection.gmailIntegrationId || fileMeta?.gmailIntegrationId || null;
+            const resultType = connection.resultType || fileMeta?.sourceResultType || null;
             const key = `${sourceType}|${searchPattern.toLowerCase()}|${integrationId || ""}|${resultType || ""}`;
             const lastSeenAtMs = connection.createdAt?.toMillis?.() || 0;
             const existing = queryMap.get(key);
@@ -508,9 +535,33 @@ export function PartnerDetailPanel({
         const filenameExamples = Array.from(filenameSet).slice(0, 5);
         const hasHints = workingQueries.length > 0 || emailDomains.length > 0 || filenameExamples.length > 0;
 
-        const message = hasHints
-          ? `Based on ${successfulConnections} successful file connection${successfulConnections === 1 ? "" : "s"} for this partner`
-          : "No receipt search history for this partner yet.";
+        const message = (() => {
+          if (!hasHints) return "No receipt search history for this partner yet.";
+
+          const availableParts: string[] = [];
+          if (filenameExamples.length > 0) {
+            availableParts.push("filename examples");
+          }
+          if (emailDomains.length > 0) {
+            availableParts.push(`email domain${emailDomains.length === 1 ? "" : "s"}`);
+          }
+          if (workingQueries.length > 0) {
+            availableParts.push("search queries");
+          }
+
+          const availableSummary = availableParts.length > 0
+            ? `${availableParts.join(", ")} available.`
+            : "";
+          const preferredSummary = preferredSource
+            ? ` Preferred source is ${sourceTypeLabel(preferredSource)}.`
+            : "";
+
+          if (successfulConnections > 0) {
+            return `Hints found from ${successfulConnections} successful file connection${successfulConnections === 1 ? "" : "s"}; ${availableSummary}${preferredSummary}`.trim();
+          }
+
+          return `Hints loaded from learned partner patterns; ${availableSummary}${preferredSummary}`.trim();
+        })();
 
         if (!cancelled) {
           setReceiptHints({
@@ -539,7 +590,7 @@ export function PartnerDetailPanel({
     return () => {
       cancelled = true;
     };
-  }, [partner.id, partner.emailDomains, partner.fileSourcePatterns, userId]);
+  }, [files, partner.id, partner.emailDomains, partner.fileSourcePatterns, transactions, userId]);
 
   // Compute categories from transactions that have noReceiptCategoryId
   const connectedCategories = useMemo(() => {
@@ -679,8 +730,10 @@ export function PartnerDetailPanel({
     partner.learnedPatterns?.length ||
     partner.categoryMatchRules?.length ||
     partner.aliases.some((a) => a.includes("*")) ||
-    partner.emailDomains?.length ||
-    gmailFilePatterns.length > 0;
+    receiptHintDomains.length > 0 ||
+    gmailFilePatterns.length > 0 ||
+    isLoadingReceiptHints ||
+    receiptHints.hasHints;
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -944,8 +997,53 @@ export function PartnerDetailPanel({
                   })
                 )}
 
+                {/* Receipt Hints (from connected transactions + file history) */}
+                {(isLoadingReceiptHints || receiptHints.hasHints) && (
+                  <RuleCard
+                    icon={<LinkIcon className="h-4 w-4" />}
+                    title="Receipt Hints"
+                    confidence={receiptHints.hasHints ? 88 : undefined}
+                    variant="learned"
+                  >
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        {isLoadingReceiptHints
+                          ? "Step 0: Check partner receipt hints..."
+                          : receiptHints.hasHints
+                            ? "Step 0 complete: hints found from matched transaction-file history."
+                            : "Step 0: No receipt hints found yet."}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {isLoadingReceiptHints
+                          ? "Get Partner Receipt Hints running..."
+                          : "Get Partner Receipt Hints completed"}
+                      </p>
+                      {!isLoadingReceiptHints && (
+                        <p className="text-xs text-muted-foreground">{receiptHints.message}</p>
+                      )}
+                      {!isLoadingReceiptHints && receiptHints.preferredSource && (
+                        <Badge variant="outline" className="text-[10px]">
+                          Preferred source: {sourceTypeLabel(receiptHints.preferredSource)}
+                        </Badge>
+                      )}
+                      {!isLoadingReceiptHints && receiptHints.filenameExamples.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {receiptHints.filenameExamples.slice(0, 3).map((fileName, idx) => (
+                            <code
+                              key={idx}
+                              className="text-xs bg-muted px-1.5 py-0.5 rounded truncate max-w-[240px]"
+                            >
+                              {fileName}
+                            </code>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </RuleCard>
+                )}
+
                 {/* Email Domains */}
-                {partner.emailDomains && partner.emailDomains.length > 0 && (
+                {receiptHintDomains.length > 0 && (
                   <RuleCard
                     icon={<Mail className="h-4 w-4" />}
                     title="Email Domains"
@@ -953,7 +1051,7 @@ export function PartnerDetailPanel({
                     variant="learned"
                   >
                     <div className="flex flex-wrap gap-1">
-                      {partner.emailDomains.map((domain, idx) => (
+                      {receiptHintDomains.map((domain, idx) => (
                         <code
                           key={idx}
                           className="text-xs bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 rounded font-mono"
@@ -976,10 +1074,10 @@ export function PartnerDetailPanel({
                       {gmailFilePatterns.slice(0, 2).map((pattern, idx) => (
                         <div key={idx} className="flex items-center gap-1.5">
                           <code className="text-xs bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 rounded font-mono flex-1 truncate">
-                            {pattern.pattern}
+                            {pattern.query}
                           </code>
                           <Badge variant="outline" className="text-[10px]">
-                            {pattern.confidence}%
+                            used {pattern.usageCount}x
                           </Badge>
                         </div>
                       ))}

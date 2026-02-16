@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { FINAPI_SUPPORTED_COUNTRY_CODES } from "@/lib/banking/finapi-countries";
 
 // Types for finAPI connections from API
 interface FinapiAccount {
@@ -611,7 +612,7 @@ function ConnectBankContent() {
                             logo: conn.bankLogo || "",
                             providerId: "finapi" as const,
                             transaction_total_days: "365",
-                            countries: ["DE", "AT", "CH"],
+                            countries: [...FINAPI_SUPPORTED_COUNTRY_CODES],
                           };
                           startConnection(institution);
                         } else {

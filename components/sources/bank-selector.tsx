@@ -4,23 +4,11 @@ import { useState, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Building2, Search, Loader2, ArrowLeft } from "lucide-react";
 import { useInstitutions, filterInstitutions, Institution, BankingProvider } from "@/hooks/use-institutions";
+import { FINAPI_COUNTRY_OPTIONS } from "@/lib/banking/finapi-countries";
 
-// Countries supported by finAPI (DACH region)
-// Sandbox test banks are available under Germany
-const COUNTRIES = [
-  { code: "DE", name: "Germany", description: "Includes finAPI test banks for sandbox" },
-  { code: "AT", name: "Austria" },
-  { code: "CH", name: "Switzerland" },
-];
+const COUNTRIES = FINAPI_COUNTRY_OPTIONS;
 
 interface BankSelectorProps {
   selectedCountry: string | null;
@@ -40,11 +28,20 @@ export function BankSelector({
   isLoading = false,
   provider = "all",
 }: BankSelectorProps) {
+  const [countrySearchQuery, setCountrySearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const { institutions, loading, error } = useInstitutions({
     countryCode: selectedCountry,
     provider,
   });
+
+  const filteredCountries = useMemo(() => {
+    const query = countrySearchQuery.trim().toLowerCase();
+    if (!query) return COUNTRIES;
+    return COUNTRIES.filter((country) =>
+      `${country.name} ${country.code} ${country.description || ""}`.toLowerCase().includes(query)
+    );
+  }, [countrySearchQuery]);
 
   const filteredInstitutions = useMemo(
     () => filterInstitutions(institutions, searchQuery),
@@ -62,25 +59,42 @@ export function BankSelector({
           </p>
         </div>
 
-        <Select onValueChange={onCountrySelect}>
-          <SelectTrigger>
-            <SelectValue placeholder="Select a country" />
-          </SelectTrigger>
-          <SelectContent>
-            {COUNTRIES.map((country) => (
-              <SelectItem key={country.code} value={country.code}>
-                <div>
-                  <span>{country.name}</span>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search countries..."
+            value={countrySearchQuery}
+            onChange={(e) => setCountrySearchQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+
+        <ScrollArea className="h-[260px] rounded-md border">
+          <div className="p-2 space-y-1">
+            {filteredCountries.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No countries found matching your search
+              </div>
+            ) : (
+              filteredCountries.map((country) => (
+                <button
+                  key={country.code}
+                  type="button"
+                  onClick={() => onCountrySelect(country.code)}
+                  className="w-full text-left px-3 py-2 rounded-md hover:bg-muted/50 transition-colors"
+                >
+                  <span className="font-medium">{country.name}</span>
+                  <span className="text-xs text-muted-foreground ml-2">({country.code})</span>
                   {country.description && (
                     <span className="text-xs text-muted-foreground ml-2">
-                      ({country.description})
+                      {country.description}
                     </span>
                   )}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+                </button>
+              ))
+            )}
+          </div>
+        </ScrollArea>
       </div>
     );
   }

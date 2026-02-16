@@ -6,7 +6,7 @@
  * Key characteristics:
  * - Uses Web Form 2.0 for bank authentication (redirect flow)
  * - Creates finAPI users per app user (auto-managed)
- * - Supports German/Austrian/Swiss banks primarily
+ * - Supports EU banks (plus Switzerland)
  * - XS2A (PSD2) compliant
  */
 
@@ -36,9 +36,9 @@ import {
   FinapiTransaction,
   FinapiEnvironment,
 } from "@/lib/finapi/client";
+import { FINAPI_SUPPORTED_COUNTRY_CODES } from "@/lib/banking/finapi-countries";
 
-// Countries supported by finAPI (DACH region + more)
-const FINAPI_COUNTRIES = ["DE", "AT", "CH"];
+const FINAPI_COUNTRIES = FINAPI_SUPPORTED_COUNTRY_CODES;
 
 /**
  * finAPI Provider Implementation
@@ -71,8 +71,8 @@ export class FinapiProvider extends BaseBankingProvider {
     return {
       id: "finapi",
       name: "finAPI",
-      description: "Connect to German, Austrian, and Swiss banks via finAPI.",
-      supportedCountries: FINAPI_COUNTRIES,
+      description: "Connect to European banks via finAPI.",
+      supportedCountries: [...FINAPI_COUNTRIES],
       logoUrl: "/images/providers/finapi-logo.svg",
       isEnabled: this.isConfigured(),
       requiresReauth: true,
@@ -447,7 +447,7 @@ export class FinapiProvider extends BaseBankingProvider {
       name: bank.name,
       bic: bank.bic,
       logoUrl: bank.logo?.url,
-      countries: bank.location ? [bank.location] : FINAPI_COUNTRIES,
+      countries: bank.location ? [bank.location] : [...FINAPI_COUNTRIES],
       maxHistoryDays: 365, // finAPI typically supports 1 year
       providerId: "finapi",
     };

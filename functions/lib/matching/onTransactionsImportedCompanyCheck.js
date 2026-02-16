@@ -14,9 +14,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.onTransactionsImportedCompanyCheck = exports.AUTOMATION_META = void 0;
 const firestore_1 = require("firebase-functions/v2/firestore");
 const firestore_2 = require("firebase-admin/firestore");
-const partner_matcher_1 = require("../utils/partner-matcher");
 const companyNameValidator_1 = require("../utils/companyNameValidator");
-const createLocalPartnerFromGlobal_1 = require("./createLocalPartnerFromGlobal");
+const partnerMatchingShared_1 = require("./partnerMatchingShared");
 // =============================================================================
 // AUTOMATION METADATA
 // =============================================================================
@@ -105,22 +104,12 @@ async function queueCompanySearch(userId, transactionId, companyName, sourceFiel
     promptParts.push(`This transaction has no partner assigned and wasn't matched by rule-based matching. ` +
         `Search company registries and create the partner.`);
     const initialPrompt = promptParts.join(". ");
-    const requestRef = db.collection(`users/${userId}/workerRequests`).doc();
-    await requestRef.set({
-        id: requestRef.id,
-        workerType: "partner_matching",
-        initialPrompt,
-        triggerContext: {
-            transactionId,
-            companyName,
-            sourceField,
-            triggeredByCompanyCheck: true,
-        },
-        triggeredBy: "auto",
-        status: "pending",
-        createdAt: firestore_2.Timestamp.now(),
+    return (0, partnerMatchingShared_1.queuePartnerMatchingWorker)(userId, initialPrompt, {
+        transactionId,
+        companyName,
+        sourceField,
+        triggeredByCompanyCheck: true,
     });
-    return requestRef.id;
 }
 // =============================================================================
 // FIRESTORE TRIGGER
@@ -146,59 +135,7 @@ exports.onTransactionsImportedCompanyCheck = (0, firestore_1.onDocumentCreated)(
     // =========================================================================
     // STEP 1: Partner Matching (reused from matchPartners callable)
     // =========================================================================
-    // Fetch partners
-    const [userPartnersSnapshot, globalPartnersSnapshot] = await Promise.all([
-        db
-            .collection("partners")
-            .where("userId", "==", userId)
-            .where("isActive", "==", true)
-            .get(),
-        db.collection("globalPartners").where("isActive", "==", true).get(),
-    ]);
-    // Build manual removals map
-    const partnerManualRemovals = new Map();
-    const userPartners = userPartnersSnapshot.docs.map((doc) => {
-        const data = doc.data();
-        const removals = data.manualRemovals || [];
-        if (removals.length > 0) {
-            partnerManualRemovals.set(doc.id, new Set(removals.map((r) => r.transactionId)));
-        }
-        return {
-            id: doc.id,
-            name: data.name,
-            aliases: data.aliases || [],
-            ibans: data.ibans || [],
-            website: data.website,
-            vatId: data.vatId,
-            learnedPatterns: data.learnedPatterns || [],
-            globalPartnerId: data.globalPartnerId || null,
-        };
-    });
-    const globalPartners = globalPartnersSnapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-            id: doc.id,
-            name: data.name,
-            aliases: data.aliases || [],
-            ibans: data.ibans || [],
-            website: data.website,
-            vatId: data.vatId,
-            patterns: data.patterns || [],
-        };
-    });
-    // Filter out global partners that are already localized
-    const localizedGlobalIds = new Set(userPartners
-        .map((p) => p.globalPartnerId)
-        .filter(Boolean));
-    const filteredGlobalPartners = globalPartners.filter((p) => !localizedGlobalIds.has(p.id));
-    // Build partner name map for automationHistory entries
-    const partnerNameMap = new Map();
-    for (const p of userPartners) {
-        partnerNameMap.set(p.id, p.name);
-    }
-    for (const p of filteredGlobalPartners) {
-        partnerNameMap.set(p.id, p.name);
-    }
+    const partnerContext = await (0, partnerMatchingShared_1.loadPartnerMatchingContext)(userId);
     // Fetch transactions from this import
     const transactionsSnapshot = await db
         .collection("transactions")
@@ -211,97 +148,15 @@ exports.onTransactionsImportedCompanyCheck = (0, firestore_1.onDocumentCreated)(
         return;
     }
     console.log(`[CompanyCheck] Found ${transactionsSnapshot.size} transactions to process`);
-    // Run partner matching
-    let autoMatched = 0;
-    let withSuggestions = 0;
-    let batch = db.batch();
-    let batchCount = 0;
-    for (const txDoc of transactionsSnapshot.docs) {
-        const txData = txDoc.data();
-        // Skip if already has a partner
-        if (txData.partnerId) {
-            continue;
-        }
-        // Skip transactions with no-receipt categories (already complete, don't need partner)
-        if (txData.noReceiptCategoryId) {
-            continue;
-        }
-        // Skip over-quota transactions (imported but processing limited)
-        if (txData.quotaExceeded) {
-            continue;
-        }
-        const transaction = {
-            id: txDoc.id,
-            partner: txData.partner || null,
-            partnerIban: txData.partnerIban || null,
-            name: txData.name || "",
-            reference: txData.reference || null,
-        };
-        const matches = (0, partner_matcher_1.matchTransaction)(transaction, userPartners, filteredGlobalPartners);
-        if (matches.length > 0) {
-            // Filter out matches where user explicitly removed this transaction
-            const filteredMatches = matches.filter((m) => {
-                const removals = partnerManualRemovals.get(m.partnerId);
-                return !(removals && removals.has(txDoc.id));
-            });
-            if (filteredMatches.length === 0) {
-                continue;
-            }
-            const topMatch = filteredMatches[0];
-            const updates = {
-                partnerSuggestions: filteredMatches.map((m) => ({
-                    partnerId: m.partnerId,
-                    partnerType: m.partnerType,
-                    confidence: m.confidence,
-                    source: m.source,
-                })),
-                updatedAt: firestore_2.FieldValue.serverTimestamp(),
-            };
-            if ((0, partner_matcher_1.shouldAutoApply)(topMatch.confidence)) {
-                let assignedPartnerId = topMatch.partnerId;
-                let assignedPartnerType = topMatch.partnerType;
-                if (topMatch.partnerType === "global") {
-                    try {
-                        assignedPartnerId = await (0, createLocalPartnerFromGlobal_1.createLocalPartnerFromGlobal)(userId, topMatch.partnerId);
-                        assignedPartnerType = "user";
-                    }
-                    catch (error) {
-                        console.error(`[CompanyCheck] Failed to create local partner from global:`, error);
-                    }
-                }
-                updates.partnerId = assignedPartnerId;
-                updates.partnerType = assignedPartnerType;
-                updates.partnerMatchConfidence = topMatch.confidence;
-                updates.partnerMatchedBy = "auto";
-                autoMatched++;
-                const partnerName = partnerNameMap.get(assignedPartnerId) || partnerNameMap.get(topMatch.partnerId) || null;
-                updates.automationHistory = firestore_2.FieldValue.arrayUnion({
-                    type: "partner_assigned",
-                    ranAt: firestore_2.Timestamp.now(),
-                    status: "completed",
-                    actor: "auto",
-                    level: "outcome",
-                    forPartnerId: assignedPartnerId,
-                    partnerName,
-                    confidence: topMatch.confidence,
-                    summary: `Partner "${partnerName || assignedPartnerId}" auto-assigned`,
-                });
-            }
-            else {
-                withSuggestions++;
-            }
-            batch.update(txDoc.ref, updates);
-            batchCount++;
-            if (batchCount >= 500) {
-                await batch.commit();
-                batch = db.batch();
-                batchCount = 0;
-            }
-        }
-    }
-    if (batchCount > 0) {
-        await batch.commit();
-    }
+    const matchResult = await (0, partnerMatchingShared_1.processPartnerMatchesForTransactions)({
+        userId,
+        transactions: transactionsSnapshot.docs,
+        partnerContext,
+        skipUnchangedSuggestions: false,
+        collectAgenticFallback: false,
+    });
+    await (0, partnerMatchingShared_1.applyPartnerMatchUpdates)(matchResult.writeOperations);
+    const { autoMatched, withSuggestions } = matchResult;
     console.log(`[CompanyCheck] Partner matching complete: ${autoMatched} auto-matched, ` +
         `${withSuggestions} with suggestions`);
     // =========================================================================
