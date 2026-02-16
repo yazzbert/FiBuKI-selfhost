@@ -176,6 +176,21 @@ exports.onMailServiceReconnected = (0, firestore_1.onDocumentUpdated)({
                 console.log(`[MailService] Cleared error on precisionSearchQueue item: ${doc.id}`);
             }
         }
+        // Resume pending workerRequests paused for reauth.
+        const pausedWorkerRequests = await db
+            .collection(`users/${userId}/workerRequests`)
+            .where("status", "==", "pending")
+            .where("pauseReason", "==", "reauth_required")
+            .get();
+        for (const doc of pausedWorkerRequests.docs) {
+            await doc.ref.update({
+                lastError: firestore_2.FieldValue.delete(),
+                pauseReason: firestore_2.FieldValue.delete(),
+                notBeforeAt: firestore_2.FieldValue.delete(),
+                updatedAt: firestore_2.Timestamp.now(),
+            });
+            console.log(`[MailService] Resumed workerRequest after reauth: ${doc.id}`);
+        }
         // Queue precision search for incomplete transactions that may have been
         // skipped while mail service was disconnected
         const existingSearch = await db

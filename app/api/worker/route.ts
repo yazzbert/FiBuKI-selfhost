@@ -61,6 +61,117 @@ interface PartnerBatchClaimResult {
 const PARTNER_BATCH_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 const PARTNER_BATCH_FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000; // 5 minutes
 const PARTNER_BATCH_FAILURE_BACKOFF_MAX_MS = 6 * 60 * 60 * 1000; // 6 hours
+const GMAIL_REAUTH_RETRY_DELAY_MS = 10 * 60 * 1000; // 10 minutes
+
+function isGmailReauthErrorMessage(message?: string): boolean {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("auth_expired") ||
+    lower.includes("token_expired") ||
+    lower.includes("reauth_required") ||
+    lower.includes("re-authentication required") ||
+    lower.includes("reconnect gmail") ||
+    lower.includes("tokens_missing") ||
+    lower.includes("needs reconnection") ||
+    lower.includes("needs reauth")
+  );
+}
+
+function workerUsesGmail(config: { toolNames: string[] }): boolean {
+  const gmailTools = new Set([
+    "searchGmailAttachments",
+    "searchGmailEmails",
+    "analyzeEmail",
+    "downloadGmailAttachment",
+    "convertEmailToPdf",
+  ]);
+  return config.toolNames.some((toolName) => gmailTools.has(toolName));
+}
+
+async function getGmailReauthBlock(userId: string): Promise<{
+  blocked: boolean;
+  affectedEmails: string[];
+}> {
+  const integrationsSnap = await db
+    .collection("emailIntegrations")
+    .where("userId", "==", userId)
+    .where("provider", "==", "gmail")
+    .where("isActive", "==", true)
+    .get();
+
+  if (integrationsSnap.empty) {
+    return { blocked: false, affectedEmails: [] };
+  }
+
+  const integrations = integrationsSnap.docs.map((doc) => doc.data() as {
+    email?: string;
+    needsReauth?: boolean;
+  });
+  const hasHealthyIntegration = integrations.some((integration) => integration.needsReauth !== true);
+
+  if (hasHealthyIntegration) {
+    return { blocked: false, affectedEmails: [] };
+  }
+
+  const affectedEmails = integrations
+    .map((integration) => integration.email)
+    .filter((email): email is string => typeof email === "string" && email.length > 0);
+
+  return { blocked: true, affectedEmails };
+}
+
+async function requeueWorkerRequestForReauth(
+  userId: string,
+  workerRequestId: string | undefined,
+  message: string,
+  retryAfterMs: number
+): Promise<void> {
+  if (!workerRequestId) return;
+
+  const requestRef = db.collection(`users/${userId}/workerRequests`).doc(workerRequestId);
+  const requestSnap = await requestRef.get();
+  if (!requestSnap.exists) return;
+
+  await requestRef.set(
+    {
+      status: "pending",
+      startedAt: null,
+      completedAt: FieldValue.delete(),
+      error: FieldValue.delete(),
+      lastError: message,
+      pauseReason: "reauth_required",
+      notBeforeAt: Timestamp.fromMillis(Date.now() + retryAfterMs),
+      updatedAt: Timestamp.now(),
+    },
+    { merge: true }
+  );
+}
+
+async function createGmailReauthNotification(
+  userId: string,
+  affectedEmails: string[]
+): Promise<void> {
+  const now = Timestamp.now();
+  const emailPreview = affectedEmails[0] || "your Gmail account";
+  const message = `${emailPreview} needs reconnection. Automated matching is paused and will resume automatically once reconnected.`;
+  const notificationRef = db
+    .collection("notifications")
+    .doc(`gmail_reauth_required_${userId}`);
+  const notificationSnap = await notificationRef.get();
+
+  await notificationRef.set({
+    userId,
+    type: "gmail_reauth_required",
+    title: "Reconnect Gmail to Resume Matching",
+    message,
+    read: false, // re-open the reminder every time this condition recurs
+    createdAt: notificationSnap.exists
+      ? (notificationSnap.data()?.createdAt || now)
+      : now,
+    updatedAt: now,
+  });
+}
 
 function normalizeStringArray(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
@@ -800,6 +911,29 @@ export async function POST(req: Request) {
       );
     }
 
+    if (workerUsesGmail(config)) {
+      const gmailBlock = await getGmailReauthBlock(userId);
+      if (gmailBlock.blocked) {
+        const pauseMessage =
+          "Paused: Gmail reconnection required. This worker will resume automatically after reconnect.";
+
+        await requeueWorkerRequestForReauth(
+          userId,
+          workerRequestId,
+          pauseMessage,
+          GMAIL_REAUTH_RETRY_DELAY_MS
+        );
+        await createGmailReauthNotification(userId, gmailBlock.affectedEmails);
+
+        return NextResponse.json({
+          status: "blocked_for_reauth",
+          error: pauseMessage,
+          errorCode: "REAUTH_REQUIRED",
+          retryAfterMs: GMAIL_REAUTH_RETRY_DELAY_MS,
+        });
+      }
+    }
+
     console.log(`[Worker API] Starting ${workerType} worker for user ${userId}`);
 
     // Create WorkerRun document
@@ -1036,6 +1170,8 @@ export async function POST(req: Request) {
     } catch (error) {
       // Update WorkerRun with error
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const isReauthError = isGmailReauthErrorMessage(errorMessage);
+      const errorCode = isReauthError ? "REAUTH_REQUIRED" : undefined;
 
       if (workerType === "partner_file_batch" && effectiveTriggerContext?.partnerId) {
         try {
@@ -1054,10 +1190,21 @@ export async function POST(req: Request) {
       const failedRun: Partial<WorkerRun> = {
         status: "failed",
         error: errorMessage,
+        ...(errorCode ? { errorCode } : {}),
         completedAt: Timestamp.now(),
       };
 
       await runRef.update(failedRun);
+
+      if (isReauthError) {
+        await requeueWorkerRequestForReauth(
+          userId,
+          workerRequestId,
+          "Paused: Gmail reconnection required. This worker will resume automatically after reconnect.",
+          GMAIL_REAUTH_RETRY_DELAY_MS
+        );
+        await createGmailReauthNotification(userId, []);
+      }
 
       // Update notification with failure
       if (notificationId) {
@@ -1069,10 +1216,21 @@ export async function POST(req: Request) {
 
       console.error(`[Worker API] ${workerType} worker failed:`, error);
 
+      if (isReauthError) {
+        return NextResponse.json({
+          runId,
+          status: "blocked_for_reauth",
+          error: "Paused: Gmail reconnection required. This worker will resume automatically after reconnect.",
+          errorCode: "REAUTH_REQUIRED",
+          retryAfterMs: GMAIL_REAUTH_RETRY_DELAY_MS,
+        });
+      }
+
       return NextResponse.json({
         runId,
         status: "failed",
         error: errorMessage,
+        ...(errorCode ? { errorCode } : {}),
       });
     }
   } catch (error) {

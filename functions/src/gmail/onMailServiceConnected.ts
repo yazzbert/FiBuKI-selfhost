@@ -1,5 +1,5 @@
 import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
-import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import { FieldValue, getFirestore, Timestamp } from "firebase-admin/firestore";
 
 const db = getFirestore();
 
@@ -224,6 +224,23 @@ export const onMailServiceReconnected = onDocumentUpdated(
           });
           console.log(`[MailService] Cleared error on precisionSearchQueue item: ${doc.id}`);
         }
+      }
+
+      // Resume pending workerRequests paused for reauth.
+      const pausedWorkerRequests = await db
+        .collection(`users/${userId}/workerRequests`)
+        .where("status", "==", "pending")
+        .where("pauseReason", "==", "reauth_required")
+        .get();
+
+      for (const doc of pausedWorkerRequests.docs) {
+        await doc.ref.update({
+          lastError: FieldValue.delete(),
+          pauseReason: FieldValue.delete(),
+          notBeforeAt: FieldValue.delete(),
+          updatedAt: Timestamp.now(),
+        });
+        console.log(`[MailService] Resumed workerRequest after reauth: ${doc.id}`);
       }
 
       // Queue precision search for incomplete transactions that may have been

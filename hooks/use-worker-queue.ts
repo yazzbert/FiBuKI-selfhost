@@ -11,7 +11,19 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { collection, query, where, orderBy, limit, onSnapshot, doc, updateDoc, Timestamp, runTransaction } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  onSnapshot,
+  doc,
+  updateDoc,
+  Timestamp,
+  runTransaction,
+  deleteField,
+} from "firebase/firestore";
 import { db } from "@/lib/firebase/config";
 import { useAuth } from "@/components/auth";
 import { WorkerType } from "@/types/worker";
@@ -50,6 +62,27 @@ interface WorkerRequest {
 
 const MAX_CONCURRENT = 3;
 const DISPATCH_INTERVAL_MS = 15_000;
+const REAUTH_RETRY_DELAY_MS = 10 * 60 * 1000;
+
+function isGmailReauthErrorMessage(message?: string): boolean {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("auth_expired") ||
+    lower.includes("token_expired") ||
+    lower.includes("reauth_required") ||
+    lower.includes("re-authentication required") ||
+    lower.includes("reconnect gmail") ||
+    lower.includes("tokens_missing") ||
+    lower.includes("needs reconnection") ||
+    lower.includes("needs reauth")
+  );
+}
+
+function buildReauthPauseMessage(errorMessage?: string): string {
+  return errorMessage?.trim() ||
+    "Paused: Gmail reconnection required. This worker will resume automatically after reconnect.";
+}
 
 interface UseWorkerQueueOptions {
   /** Enable queue processing (default: true) */
@@ -147,16 +180,58 @@ export function useWorkerQueue(options: UseWorkerQueueOptions = {}) {
         }),
       });
 
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(result.error || "Worker API request failed");
+        const apiError = result?.error || "Worker API request failed";
+        const err = new Error(apiError) as Error & { code?: string };
+        if (typeof result?.errorCode === "string") {
+          err.code = result.errorCode;
+        } else if (typeof result?.code === "string") {
+          err.code = result.code;
+        }
+        throw err;
+      }
+
+      if (result?.status === "blocked_for_reauth") {
+        const retryAfterMs =
+          typeof result.retryAfterMs === "number" && result.retryAfterMs > 0
+            ? result.retryAfterMs
+            : REAUTH_RETRY_DELAY_MS;
+        const pauseMessage = buildReauthPauseMessage(result.error);
+
+        await updateDoc(requestRef, {
+          status: "pending",
+          startedAt: null,
+          completedAt: deleteField(),
+          error: deleteField(),
+          lastError: pauseMessage,
+          pauseReason: "reauth_required",
+          notBeforeAt: Timestamp.fromMillis(Date.now() + retryAfterMs),
+          updatedAt: Timestamp.now(),
+          ...(result.runId ? { workerRunId: result.runId } : {}),
+        });
+        console.log(`[WorkerQueue] Requeued request ${request.id} (blocked_for_reauth)`);
+        return;
+      }
+
+      if (result?.status === "failed") {
+        const apiError = result.error || "Worker execution failed";
+        const err = new Error(apiError) as Error & { code?: string };
+        if (typeof result?.errorCode === "string") {
+          err.code = result.errorCode;
+        }
+        throw err;
       }
 
       // Mark as completed (only include summary if defined)
       await updateDoc(requestRef, {
         status: "completed",
         completedAt: Timestamp.now(),
+        error: deleteField(),
+        lastError: deleteField(),
+        pauseReason: deleteField(),
+        notBeforeAt: deleteField(),
         workerRunId: result.runId,
         ...(result.summary !== undefined && { summary: result.summary }),
       });
@@ -174,11 +249,35 @@ export function useWorkerQueue(options: UseWorkerQueueOptions = {}) {
       console.log(`[WorkerQueue] Completed request ${request.id}:`, result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorCode =
+        error && typeof error === "object" && "code" in error && typeof (error as { code?: unknown }).code === "string"
+          ? (error as { code: string }).code
+          : undefined;
+      const isReauthError =
+        (errorCode && isGmailReauthErrorMessage(errorCode)) ||
+        isGmailReauthErrorMessage(errorMessage);
+
+      if (isReauthError) {
+        await updateDoc(requestRef, {
+          status: "pending",
+          startedAt: null,
+          completedAt: deleteField(),
+          error: deleteField(),
+          lastError: buildReauthPauseMessage(errorMessage),
+          pauseReason: "reauth_required",
+          notBeforeAt: Timestamp.fromMillis(Date.now() + REAUTH_RETRY_DELAY_MS),
+          updatedAt: Timestamp.now(),
+        });
+        console.warn(`[WorkerQueue] Requeued request ${request.id} due to Gmail reauth requirement`);
+        return;
+      }
 
       // Mark as failed
       await updateDoc(requestRef, {
         status: "failed",
         completedAt: Timestamp.now(),
+        pauseReason: deleteField(),
+        notBeforeAt: deleteField(),
         error: errorMessage,
       });
 
