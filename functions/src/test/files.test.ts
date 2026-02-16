@@ -24,6 +24,13 @@ vi.mock("../utils/createCallable", () => ({
   },
 }));
 
+// Silence async cancellation side-effects in unit tests.
+vi.mock("../utils/cancelWorkers", () => ({
+  cancelFileWorkersForTransaction: vi.fn(async () => 0),
+  cancelTransactionWorkersForFile: vi.fn(async () => 0),
+  cancelPrecisionSearchForTransaction: vi.fn(async () => 0),
+}));
+
 // Import handlers after mocking
 const { updateFileCallable } = await import("../files/updateFile");
 const { deleteFileCallable } = await import("../files/deleteFile");
@@ -266,6 +273,134 @@ describe("File Cloud Functions", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("should reassign existing auto/ai matches when allowAutoReassign=true", async () => {
+      const userId = "user-123";
+      const fileA = "file-a";
+      const fileB = "file-b";
+      const tx1 = "tx-1";
+      const tx2 = "tx-2";
+
+      store.setDoc("files", fileA, createTestFile({ userId, transactionIds: [tx1] }));
+      store.setDoc("files", fileB, createTestFile({ userId, transactionIds: [tx2] }));
+      store.setDoc("transactions", tx1, createTestTransaction({ userId, fileIds: [fileA], isComplete: true }));
+      store.setDoc("transactions", tx2, createTestTransaction({ userId, fileIds: [fileB], isComplete: true }));
+      store.setDoc("fileConnections", "conn-auto-tx", {
+        userId,
+        fileId: fileA,
+        transactionId: tx1,
+        connectionType: "auto_matched",
+      });
+      store.setDoc("fileConnections", "conn-ai-file", {
+        userId,
+        fileId: fileB,
+        transactionId: tx2,
+        connectionType: "ai_matched",
+      });
+
+      const ctx = {
+        userId,
+        db: createMockFirestore(),
+        request: { auth: { uid: userId }, data: {} },
+        logAIUsage: vi.fn(),
+      };
+
+      const result = await connectFileToTransactionCallable(ctx as any, {
+        fileId: fileB,
+        transactionId: tx1,
+        connectionType: "auto_matched",
+        allowAutoReassign: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.reassignedConnections).toBe(2);
+
+      // Old auto/ai links removed
+      expect(store.getDoc("fileConnections", "conn-auto-tx")).toBeUndefined();
+      expect(store.getDoc("fileConnections", "conn-ai-file")).toBeUndefined();
+
+      // New link exists
+      const newConnection = store.queryDocs("fileConnections", [
+        { field: "fileId", op: "==", value: fileB },
+        { field: "transactionId", op: "==", value: tx1 },
+      ]);
+      expect(newConnection).toHaveLength(1);
+
+      // Arrays updated on both sides
+      expect((store.getDoc("files", fileA)?.transactionIds as string[]) || []).not.toContain(tx1);
+      expect((store.getDoc("files", fileB)?.transactionIds as string[]) || []).toContain(tx1);
+      expect((store.getDoc("files", fileB)?.transactionIds as string[]) || []).not.toContain(tx2);
+      expect((store.getDoc("transactions", tx1)?.fileIds as string[]) || []).toContain(fileB);
+      expect((store.getDoc("transactions", tx1)?.fileIds as string[]) || []).not.toContain(fileA);
+      expect((store.getDoc("transactions", tx2)?.fileIds as string[]) || []).not.toContain(fileB);
+      expect(store.getDoc("transactions", tx2)?.isComplete).toBe(false);
+    });
+
+    it("should reject auto reassignment when transaction has manual/user-confirmed connection", async () => {
+      const userId = "user-123";
+      const fileA = "file-a";
+      const fileB = "file-b";
+      const tx1 = "tx-1";
+
+      store.setDoc("files", fileA, createTestFile({ userId, transactionIds: [tx1] }));
+      store.setDoc("files", fileB, createTestFile({ userId, transactionIds: [] }));
+      store.setDoc("transactions", tx1, createTestTransaction({ userId, fileIds: [fileA], isComplete: true }));
+      store.setDoc("fileConnections", "conn-manual", {
+        userId,
+        fileId: fileA,
+        transactionId: tx1,
+        connectionType: "manual",
+      });
+
+      const ctx = {
+        userId,
+        db: createMockFirestore(),
+        request: { auth: { uid: userId }, data: {} },
+        logAIUsage: vi.fn(),
+      };
+
+      await expect(
+        connectFileToTransactionCallable(ctx as any, {
+          fileId: fileB,
+          transactionId: tx1,
+          connectionType: "auto_matched",
+          allowAutoReassign: true,
+        })
+      ).rejects.toThrow("Transaction has manual/user-confirmed file matches");
+    });
+
+    it("should reject auto reassignment when file has manual/user-confirmed connection", async () => {
+      const userId = "user-123";
+      const fileB = "file-b";
+      const tx1 = "tx-1";
+      const tx2 = "tx-2";
+
+      store.setDoc("files", fileB, createTestFile({ userId, transactionIds: [tx2] }));
+      store.setDoc("transactions", tx1, createTestTransaction({ userId, fileIds: [], isComplete: false }));
+      store.setDoc("transactions", tx2, createTestTransaction({ userId, fileIds: [fileB], isComplete: true }));
+      store.setDoc("fileConnections", "conn-suggestion", {
+        userId,
+        fileId: fileB,
+        transactionId: tx2,
+        connectionType: "suggestion_accepted",
+      });
+
+      const ctx = {
+        userId,
+        db: createMockFirestore(),
+        request: { auth: { uid: userId }, data: {} },
+        logAIUsage: vi.fn(),
+      };
+
+      await expect(
+        connectFileToTransactionCallable(ctx as any, {
+          fileId: fileB,
+          transactionId: tx1,
+          connectionType: "auto_matched",
+          allowAutoReassign: true,
+        })
+      ).rejects.toThrow("File has manual/user-confirmed transaction matches");
     });
   });
 

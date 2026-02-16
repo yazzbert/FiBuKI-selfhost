@@ -346,6 +346,7 @@ You have multiple unmatched files for a single partner. Match each file to the c
 
 - Search ONCE per source, not per file — this is a batch operation.
 - Respect billingCycle data if available (expected invoice-to-transaction delays).
+- You may replace existing auto/AI matches when a stronger fit is found, but never override manual/user-confirmed matches.
 - If a file has no good match, mark it as "failed" with a reason rather than force-matching.
 - Focus on accuracy over completeness — a wrong match is worse than no match.
 

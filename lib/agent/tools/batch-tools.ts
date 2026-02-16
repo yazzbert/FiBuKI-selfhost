@@ -25,6 +25,10 @@ async function getDb() {
 // Assignment Helpers
 // ============================================================================
 
+function isAutoConnectionType(connectionType: unknown): boolean {
+  return connectionType === "auto_matched" || connectionType === "ai_matched";
+}
+
 /**
  * Hungarian algorithm (min-cost assignment) for square matrices.
  * Returns an array where result[row] = assigned column.
@@ -132,6 +136,47 @@ export const loadPartnerBatchContextTool = tool(
       }
     }
 
+    // Load existing connection metadata for batch files (so the worker can reason
+    // about occupied/locked items before proposing new matches).
+    const batchFileIds = files.map((f) => f.fileId);
+    const fileConnectionSummary = new Map<string, {
+      total: number;
+      auto: number;
+      locked: number;
+      transactionIds: string[];
+    }>();
+    for (let i = 0; i < batchFileIds.length; i += 30) {
+      const batch = batchFileIds.slice(i, i + 30);
+      if (batch.length === 0) continue;
+      const snap = await db
+        .collection("fileConnections")
+        .where("userId", "==", userId)
+        .where("fileId", "in", batch)
+        .get();
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        const fId = data.fileId as string | undefined;
+        const txId = data.transactionId as string | undefined;
+        if (!fId || !txId) continue;
+        const summary = fileConnectionSummary.get(fId) || {
+          total: 0,
+          auto: 0,
+          locked: 0,
+          transactionIds: [],
+        };
+        summary.total += 1;
+        if (isAutoConnectionType(data.connectionType)) {
+          summary.auto += 1;
+        } else {
+          summary.locked += 1;
+        }
+        if (!summary.transactionIds.includes(txId)) {
+          summary.transactionIds.push(txId);
+        }
+        fileConnectionSummary.set(fId, summary);
+      }
+    }
+
     // Load candidate transactions for this partner (recent + date range from files)
     const fileDates = files
       .map((f) => f.extractedDate)
@@ -164,10 +209,50 @@ export const loadPartnerBatchContextTool = tool(
       .limit(200)
       .get();
 
+    const txIds = txSnap.docs.filter((doc) => !doc.data().quotaExceeded).map((doc) => doc.id);
+    const txConnectionSummary = new Map<string, {
+      total: number;
+      auto: number;
+      locked: number;
+      fileIds: string[];
+    }>();
+    for (let i = 0; i < txIds.length; i += 30) {
+      const batch = txIds.slice(i, i + 30);
+      if (batch.length === 0) continue;
+      const snap = await db
+        .collection("fileConnections")
+        .where("userId", "==", userId)
+        .where("transactionId", "in", batch)
+        .get();
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        const txId = data.transactionId as string | undefined;
+        const fId = data.fileId as string | undefined;
+        if (!txId || !fId) continue;
+        const summary = txConnectionSummary.get(txId) || {
+          total: 0,
+          auto: 0,
+          locked: 0,
+          fileIds: [],
+        };
+        summary.total += 1;
+        if (isAutoConnectionType(data.connectionType)) {
+          summary.auto += 1;
+        } else {
+          summary.locked += 1;
+        }
+        if (!summary.fileIds.includes(fId)) {
+          summary.fileIds.push(fId);
+        }
+        txConnectionSummary.set(txId, summary);
+      }
+    }
+
     const transactions = txSnap.docs
       .filter((doc) => !doc.data().quotaExceeded)
       .map((doc) => {
         const data = doc.data();
+        const conn = txConnectionSummary.get(doc.id);
         return {
           transactionId: doc.id,
           amount: data.amount,
@@ -176,8 +261,23 @@ export const loadPartnerBatchContextTool = tool(
           name: data.name,
           hasFiles: (data.fileIds?.length || 0) > 0,
           isComplete: data.isComplete,
+          connectedFileIds: data.fileIds || [],
+          autoConnectionCount: conn?.auto || 0,
+          lockedConnectionCount: conn?.locked || 0,
+          hasLockedConnection: (conn?.locked || 0) > 0,
         };
       });
+
+    const filesWithConnectionMeta = files.map((file) => {
+      const conn = fileConnectionSummary.get(file.fileId);
+      return {
+        ...file,
+        connectedTransactionIds: conn?.transactionIds || [],
+        autoConnectionCount: conn?.auto || 0,
+        lockedConnectionCount: conn?.locked || 0,
+        hasLockedConnection: (conn?.locked || 0) > 0,
+      };
+    });
 
     return {
       partner: {
@@ -195,9 +295,11 @@ export const loadPartnerBatchContextTool = tool(
           })
         ),
       },
-      files,
+      files: filesWithConnectionMeta,
       transactions,
-      summary: `Loaded ${files.length} files and ${transactions.length} transactions for partner "${partnerData.name}"`,
+      summary:
+        `Loaded ${filesWithConnectionMeta.length} files and ${transactions.length} transactions for partner "${partnerData.name}". ` +
+        `Includes current auto/manual occupancy so better matches can safely replace auto links.`,
     };
   },
   {
@@ -315,18 +417,60 @@ export const searchLocalFilesForPartnerTool = tool(
       .collection("files")
       .where("userId", "==", userId)
       .where("partnerId", "==", partnerId)
-      .where("transactionIds", "==", []) // Unconnected files
-      .limit(50)
+      .where("extractionComplete", "==", true)
+      .limit(100)
       .get();
+
+    const fileIds = snap.docs.map((doc) => doc.id);
+    const fileConnectionSummary = new Map<string, {
+      auto: number;
+      locked: number;
+      transactionIds: string[];
+    }>();
+
+    for (let i = 0; i < fileIds.length; i += 30) {
+      const batch = fileIds.slice(i, i + 30);
+      if (batch.length === 0) continue;
+      const connSnap = await db
+        .collection("fileConnections")
+        .where("userId", "==", userId)
+        .where("fileId", "in", batch)
+        .get();
+      for (const connDoc of connSnap.docs) {
+        const data = connDoc.data();
+        const fileId = data.fileId as string | undefined;
+        const transactionId = data.transactionId as string | undefined;
+        if (!fileId || !transactionId) continue;
+        const summary = fileConnectionSummary.get(fileId) || {
+          auto: 0,
+          locked: 0,
+          transactionIds: [],
+        };
+        if (isAutoConnectionType(data.connectionType)) {
+          summary.auto += 1;
+        } else {
+          summary.locked += 1;
+        }
+        if (!summary.transactionIds.includes(transactionId)) {
+          summary.transactionIds.push(transactionId);
+        }
+        fileConnectionSummary.set(fileId, summary);
+      }
+    }
 
     const files = snap.docs.map((doc) => {
       const data = doc.data();
+      const conn = fileConnectionSummary.get(doc.id);
       return {
         fileId: doc.id,
         fileName: data.fileName,
         extractedAmount: data.extractedAmount,
         extractedDate: data.extractedDate?.toDate?.()?.toISOString?.()?.split("T")[0],
         extractedPartner: data.extractedPartner,
+        connectedTransactionIds: conn?.transactionIds || data.transactionIds || [],
+        autoConnectionCount: conn?.auto || 0,
+        lockedConnectionCount: conn?.locked || 0,
+        hasLockedConnection: (conn?.locked || 0) > 0,
       };
     });
 
@@ -334,12 +478,13 @@ export const searchLocalFilesForPartnerTool = tool(
       files,
       totalCount: files.length,
       query: searchQuery,
+      includesConnected: true,
     };
   },
   {
     name: "searchLocalFilesForPartner",
     description:
-      "Search local files for a partner. Finds unconnected files that belong to this partner.",
+      "Search local files for a partner. Includes currently connected files and lock metadata so the batcher can safely rebalance auto matches.",
     schema: z.object({
       partnerId: z.string().describe("The partner ID"),
       searchQuery: z.string().describe("Description of what you're looking for"),
@@ -482,12 +627,27 @@ export const bulkConnectFilesTool = tool(
     const authHeader = config?.configurable?.authHeader;
     if (!authHeader) return { error: "Auth not provided" };
 
+    const dedupedConnections = [...connections]
+      .sort((a, b) => b.confidence - a.confidence)
+      .filter((conn, index, arr) => {
+        return arr.findIndex((candidate) =>
+          candidate.fileId === conn.fileId || candidate.transactionId === conn.transactionId
+        ) === index;
+      });
+
     const results = [];
-    for (const conn of connections) {
+    let reassignedConnections = 0;
+    for (const conn of dedupedConnections) {
       try {
         const result = await callFirebaseFunction<
-          { fileId: string; transactionId: string; connectionType: string; matchConfidence: number },
-          { connectionId?: string }
+          {
+            fileId: string;
+            transactionId: string;
+            connectionType: string;
+            matchConfidence: number;
+            allowAutoReassign: boolean;
+          },
+          { connectionId?: string; reassignedConnections?: number }
         >(
           "connectFileToTransaction",
           {
@@ -495,14 +655,17 @@ export const bulkConnectFilesTool = tool(
             transactionId: conn.transactionId,
             connectionType: "auto_matched",
             matchConfidence: conn.confidence,
+            allowAutoReassign: true,
           },
           authHeader
         );
+        reassignedConnections += result?.reassignedConnections || 0;
         results.push({
           fileId: conn.fileId,
           transactionId: conn.transactionId,
           success: true,
           connectionId: result?.connectionId,
+          reassignedConnections: result?.reassignedConnections || 0,
         });
       } catch (err) {
         results.push({
@@ -517,7 +680,11 @@ export const bulkConnectFilesTool = tool(
     const successCount = results.filter((r) => r.success).length;
     return {
       results,
-      summary: `Connected ${successCount}/${connections.length} file-transaction pairs.`,
+      summary:
+        `Connected ${successCount}/${dedupedConnections.length} file-transaction pairs` +
+        (reassignedConnections > 0
+          ? ` and reassigned ${reassignedConnections} prior auto match${reassignedConnections === 1 ? "" : "es"}.`
+          : "."),
     };
   },
   {

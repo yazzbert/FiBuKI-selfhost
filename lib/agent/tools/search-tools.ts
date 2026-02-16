@@ -1533,6 +1533,7 @@ interface ConnectFileRequest {
   transactionId: string;
   connectionType?: "manual" | "auto_matched";
   matchConfidence?: number | null;
+  allowAutoReassign?: boolean;
   sourceInfo?: {
     sourceType?: string;
     searchPattern?: string;
@@ -1546,6 +1547,7 @@ interface ConnectFileResponse {
   success: boolean;
   connectionId: string;
   alreadyConnected: boolean;
+  reassignedConnections?: number;
 }
 
 export const getPartnerReceiptHintsTool = tool(
@@ -1928,6 +1930,8 @@ export const connectFileToTransactionTool = tool(
             ? "browser_invoice"
             : "local_file");
 
+    const shouldAllowAutoReassign = workerType === "receipt_search" || workerType === "partner_file_batch";
+
     const result = await callFirebaseFunction<ConnectFileRequest, ConnectFileResponse>(
       "connectFileToTransaction",
       {
@@ -1935,6 +1939,7 @@ export const connectFileToTransactionTool = tool(
         transactionId,
         connectionType: "manual",
         matchConfidence: confidence || null,
+        allowAutoReassign: shouldAllowAutoReassign,
         sourceInfo: {
           sourceType: inferredSourceType,
           searchPattern: effectiveSearchPattern,
@@ -1953,7 +1958,9 @@ export const connectFileToTransactionTool = tool(
       fileName: file.fileName,
       message: result.alreadyConnected
         ? `File "${file.fileName}" was already connected to this transaction.`
-        : `Connected "${file.fileName}" to transaction.`,
+        : result.reassignedConnections && result.reassignedConnections > 0
+          ? `Connected "${file.fileName}" and reassigned ${result.reassignedConnections} previous auto match${result.reassignedConnections === 1 ? "" : "es"}.`
+          : `Connected "${file.fileName}" to transaction.`,
     };
   },
   {

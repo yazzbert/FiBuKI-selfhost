@@ -79,10 +79,12 @@ export const updateTransactionCallable = createCallable<
 export interface ConnectFileRequest {
   fileId: string;
   transactionId: string;
+  allowAutoReassign?: boolean;
 }
 
 export interface ConnectFileResponse {
   success: boolean;
+  reassignedConnections?: number;
 }
 
 export const connectFileToTransactionCallable = createCallable<

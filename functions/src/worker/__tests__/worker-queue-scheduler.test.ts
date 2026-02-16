@@ -147,7 +147,7 @@ describe("WorkerQueueScheduler", () => {
   // B. Batch cancellation
   // =========================================================================
   describe("batch cancellation", () => {
-    it("partner_file_batch completion cancels pending same-partner requests", async () => {
+    it("cancelPendingForPartner cancels pending same-partner requests", () => {
       const cbs = makeCallbacks();
       const scheduler = new WorkerQueueScheduler(3, cbs);
 
@@ -165,8 +165,7 @@ describe("WorkerQueueScheduler", () => {
       // batch and other dispatched (sibling1, sibling2 blocked by pX)
       expect(cbs.dispatched.map((r) => r.id)).toEqual([batch.id, other.id]);
 
-      // Complete the batch
-      await resolve(cbs, batch.id);
+      scheduler.cancelPendingForPartner("pX");
 
       // siblings cancelled
       expect(cbs.cancelled.map((r) => r.id)).toContain(sibling1.id);
@@ -175,7 +174,7 @@ describe("WorkerQueueScheduler", () => {
       expect(scheduler.cancelledIdSet.has(sibling2.id)).toBe(true);
     });
 
-    it("onCancel callback called for each cancelled request", async () => {
+    it("onCancel callback called for each cancelled request", () => {
       const cbs = makeCallbacks();
       const scheduler = new WorkerQueueScheduler(3, cbs);
 
@@ -190,7 +189,7 @@ describe("WorkerQueueScheduler", () => {
       ]);
       scheduler.dispatch();
 
-      await resolve(cbs, batch.id);
+      scheduler.cancelPendingForPartner("pX");
 
       expect(cbs.onCancel).toHaveBeenCalledTimes(2);
     });
@@ -215,7 +214,7 @@ describe("WorkerQueueScheduler", () => {
       // otherQueued should still be in queue (or dispatched after slot freed)
     });
 
-    it("cancelled IDs are tracked — enqueue ignores re-added cancelled IDs", async () => {
+    it("cancelled IDs are tracked — enqueue ignores re-added cancelled IDs", () => {
       const cbs = makeCallbacks();
       const scheduler = new WorkerQueueScheduler(3, cbs);
 
@@ -227,7 +226,7 @@ describe("WorkerQueueScheduler", () => {
 
       scheduler.enqueue([batch, sibling]);
       scheduler.dispatch();
-      await resolve(cbs, batch.id);
+      scheduler.cancelPendingForPartner("pX");
 
       expect(scheduler.cancelledIdSet.has(sibling.id)).toBe(true);
 

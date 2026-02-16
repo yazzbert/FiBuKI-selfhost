@@ -9,7 +9,7 @@ const createCallable_1 = require("../utils/createCallable");
 const cancelWorkers_1 = require("../utils/cancelWorkers");
 const activityLevel_1 = require("../utils/activityLevel");
 exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)({ name: "connectFileToTransaction" }, async (ctx, request) => {
-    const { fileId, transactionId, connectionType = "manual", matchConfidence, sourceInfo, } = request;
+    const { fileId, transactionId, connectionType = "manual", matchConfidence, sourceInfo, allowAutoReassign = false, } = request;
     if (!fileId || !transactionId) {
         throw new createCallable_1.HttpsError("invalid-argument", "fileId and transactionId are required");
     }
@@ -69,6 +69,103 @@ exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)(
     }
     const now = firestore_1.Timestamp.now();
     const batch = ctx.db.batch();
+    let reassignedConnections = 0;
+    const isAutoConnectionType = (value) => value === "auto_matched" || value === "ai_matched";
+    // Optional safety mode for agentic flows: reassign existing auto connections.
+    // This allows better matches to replace older auto links while preserving
+    // manual/user-confirmed decisions.
+    if (allowAutoReassign) {
+        const [txConnectionsSnap, fileConnectionsSnap] = await Promise.all([
+            ctx.db
+                .collection("fileConnections")
+                .where("transactionId", "==", transactionId)
+                .where("userId", "==", ctx.userId)
+                .get(),
+            ctx.db
+                .collection("fileConnections")
+                .where("fileId", "==", fileId)
+                .where("userId", "==", ctx.userId)
+                .get(),
+        ]);
+        const lockedTxConnections = txConnectionsSnap.docs.filter((doc) => {
+            const data = doc.data();
+            if (data.fileId === fileId)
+                return false;
+            return !isAutoConnectionType(data.connectionType);
+        });
+        if (lockedTxConnections.length > 0) {
+            throw new createCallable_1.HttpsError("failed-precondition", "Transaction has manual/user-confirmed file matches; refusing auto reassignment.");
+        }
+        const lockedFileConnections = fileConnectionsSnap.docs.filter((doc) => {
+            const data = doc.data();
+            if (data.transactionId === transactionId)
+                return false;
+            return !isAutoConnectionType(data.connectionType);
+        });
+        if (lockedFileConnections.length > 0) {
+            throw new createCallable_1.HttpsError("failed-precondition", "File has manual/user-confirmed transaction matches; refusing auto reassignment.");
+        }
+        const staleAutoById = new Map();
+        for (const doc of txConnectionsSnap.docs) {
+            const data = doc.data();
+            if (data.fileId === fileId)
+                continue;
+            if (isAutoConnectionType(data.connectionType)) {
+                staleAutoById.set(doc.id, doc);
+            }
+        }
+        for (const doc of fileConnectionsSnap.docs) {
+            const data = doc.data();
+            if (data.transactionId === transactionId)
+                continue;
+            if (isAutoConnectionType(data.connectionType)) {
+                staleAutoById.set(doc.id, doc);
+            }
+        }
+        if (staleAutoById.size > 0) {
+            const removeTxIdsByFile = new Map();
+            const removeFileIdsByTx = new Map();
+            for (const staleDoc of staleAutoById.values()) {
+                const staleData = staleDoc.data();
+                const staleFileId = staleData.fileId;
+                const staleTransactionId = staleData.transactionId;
+                if (!staleFileId || !staleTransactionId)
+                    continue;
+                if (!removeTxIdsByFile.has(staleFileId)) {
+                    removeTxIdsByFile.set(staleFileId, new Set());
+                }
+                removeTxIdsByFile.get(staleFileId).add(staleTransactionId);
+                if (!removeFileIdsByTx.has(staleTransactionId)) {
+                    removeFileIdsByTx.set(staleTransactionId, new Set());
+                }
+                removeFileIdsByTx.get(staleTransactionId).add(staleFileId);
+                batch.delete(staleDoc.ref);
+            }
+            for (const [staleFileId, staleTxIds] of removeTxIdsByFile.entries()) {
+                batch.update(ctx.db.collection("files").doc(staleFileId), {
+                    transactionIds: firestore_1.FieldValue.arrayRemove(...Array.from(staleTxIds)),
+                    updatedAt: now,
+                });
+            }
+            for (const [staleTransactionId, staleFileIds] of removeFileIdsByTx.entries()) {
+                const staleTxRef = ctx.db.collection("transactions").doc(staleTransactionId);
+                const staleTxSnap = await staleTxRef.get();
+                const staleTxData = staleTxSnap.exists ? staleTxSnap.data() || {} : {};
+                const existingFileIds = Array.isArray(staleTxData.fileIds) ? staleTxData.fileIds : [];
+                const remainingFileIds = existingFileIds.filter((id) => !staleFileIds.has(id));
+                const hasNoReceiptCategory = !!staleTxData.noReceiptCategoryId;
+                const staleUpdates = {
+                    fileIds: firestore_1.FieldValue.arrayRemove(...Array.from(staleFileIds)),
+                    updatedAt: now,
+                };
+                if (staleTransactionId !== transactionId && remainingFileIds.length === 0 && !hasNoReceiptCategory) {
+                    staleUpdates.isComplete = false;
+                }
+                batch.update(staleTxRef, staleUpdates);
+            }
+            reassignedConnections = staleAutoById.size;
+        }
+    }
     // Check if this transaction was in file's suggestions (for tracking accuracy)
     const suggestions = fileData.transactionSuggestions || [];
     const suggestedIndex = suggestions.findIndex((s) => s.transactionId === transactionId);
@@ -294,6 +391,7 @@ exports.connectFileToTransactionCallable = (0, createCallable_1.createCallable)(
         success: true,
         connectionId: connectionRef.id,
         alreadyConnected: false,
+        reassignedConnections,
     };
 });
 /**
