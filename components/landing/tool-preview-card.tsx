@@ -4,18 +4,27 @@ import { cn } from "@/lib/utils";
 import {
   FileCheck,
   FileText,
-  Bot,
-  ChevronRight,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from "lucide-react";
 
-type ToolType = "api" | "files" | "integrations";
+type ToolType = "transactions" | "api" | "files";
 
 interface ToolPreviewCardProps {
   type: ToolType;
   className?: string;
 }
 
-// Fake data for API preview
+// Fake data for mini bank statement
+const FAKE_TRANSACTIONS = [
+  { date: "Mar 07", name: "REWE Markt #4821", amount: -45.23, currency: "EUR" },
+  { date: "Mar 06", name: "Spotify AB", amount: -9.99, currency: "EUR" },
+  { date: "Mar 05", name: "Amazon.de *MK4R92", amount: -129.99, currency: "EUR" },
+  { date: "Mar 04", name: "Gehalt Infinity Vertigo", amount: 3500.0, currency: "EUR" },
+  { date: "Mar 03", name: "A1 Telekom Austria", amount: -24.9, currency: "EUR" },
+];
+
+// Fake data for API/MCP preview
 const FAKE_MCP_CALL = {
   tool: "list_transactions",
   params: '{ "limit": 3, "source": "raiffeisen" }',
@@ -47,14 +56,55 @@ const FAKE_FILES = [
   },
 ];
 
-const AI_SERVICES = [
-  { name: "Claude", sub: "via MCP" },
-  { name: "ChatGPT", sub: "via API" },
-  { name: "Claude Code", sub: "via MCP" },
-  { name: "OpenClaw", sub: "via MCP" },
-];
-
 export function ToolPreviewCard({ type, className }: ToolPreviewCardProps) {
+  if (type === "transactions") {
+    return (
+      <div
+        className={cn(
+          "rounded-md border text-xs overflow-hidden bg-card shadow-lg",
+          className
+        )}
+      >
+        <div className="bg-muted/50 flex items-center justify-between px-3 py-1.5 border-b">
+          <span className="font-medium text-muted-foreground">Raiffeisen AT</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-300">
+            Updated daily
+          </span>
+        </div>
+        <div className="divide-y divide-muted/50">
+          {FAKE_TRANSACTIONS.map((tx, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 px-3 py-1.5"
+            >
+              {tx.amount >= 0 ? (
+                <ArrowDownLeft className="h-3 w-3 text-green-600 shrink-0" />
+              ) : (
+                <ArrowUpRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+              )}
+              <span className="text-[10px] text-muted-foreground tabular-nums w-10 shrink-0">
+                {tx.date}
+              </span>
+              <span className="flex-1 truncate">{tx.name}</span>
+              <span
+                className={cn(
+                  "tabular-nums font-medium shrink-0",
+                  tx.amount >= 0 ? "text-green-600" : "text-foreground"
+                )}
+              >
+                {tx.amount >= 0 ? "+" : ""}
+                {tx.amount.toLocaleString("de-AT", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (type === "api") {
     return (
       <div
@@ -96,76 +146,54 @@ export function ToolPreviewCard({ type, className }: ToolPreviewCardProps) {
     );
   }
 
-  if (type === "files") {
-    return (
-      <div
-        className={cn(
-          "rounded-md border text-xs overflow-hidden bg-card shadow-lg",
-          className
-        )}
-      >
-        <div className="bg-muted/50 grid grid-cols-[1fr_auto_auto] gap-2 px-2 py-1.5 border-b">
-          <span className="font-medium text-muted-foreground">Receipt</span>
-          <span className="font-medium text-muted-foreground">Score</span>
-          <span className="font-medium text-muted-foreground">Status</span>
-        </div>
-        <div className="divide-y divide-muted/50">
-          {FAKE_FILES.map((f, i) => (
-            <div
-              key={i}
-              className="grid grid-cols-[1fr_auto_auto] gap-2 px-2 py-2 items-center"
-            >
-              <div className="min-w-0 overflow-hidden flex items-center gap-2">
-                <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <div className="min-w-0">
-                  <span className="truncate block">{f.name}</span>
-                  <span className="text-[10px] text-muted-foreground truncate block">
-                    {f.partner}
-                  </span>
-                </div>
-              </div>
-              <span className={cn(
-                "text-[10px] tabular-nums font-medium",
-                f.confidence >= 90 ? "text-green-600" : f.confidence >= 80 ? "text-amber-600" : "text-muted-foreground"
-              )}>
-                {f.confidence}%
-              </span>
-              <span
-                className={cn(
-                  "text-[10px] px-1.5 py-0.5 rounded-full",
-                  f.status === "connected"
-                    ? "bg-green-50 text-green-900 border border-green-300"
-                    : "bg-amber-50 text-amber-900 border border-amber-300"
-                )}
-              >
-                {f.status === "connected" ? (
-                  <span className="flex items-center gap-0.5">
-                    <FileCheck className="h-2.5 w-2.5" /> Matched
-                  </span>
-                ) : "Matching..."}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // Integrations type - AI service logos
+  // Files type - AI matching
   return (
-    <div className={cn("rounded-md border text-xs overflow-hidden bg-card shadow-lg", className)}>
-      <div className="bg-muted/50 px-3 py-1.5 border-b">
-        <span className="font-medium text-muted-foreground">Connected AI Services</span>
+    <div
+      className={cn(
+        "rounded-md border text-xs overflow-hidden bg-card shadow-lg",
+        className
+      )}
+    >
+      <div className="bg-muted/50 grid grid-cols-[1fr_auto_auto] gap-2 px-2 py-1.5 border-b">
+        <span className="font-medium text-muted-foreground">Receipt</span>
+        <span className="font-medium text-muted-foreground">Score</span>
+        <span className="font-medium text-muted-foreground">Status</span>
       </div>
       <div className="divide-y divide-muted/50">
-        {AI_SERVICES.map((s, i) => (
-          <div key={i} className="flex items-center gap-2 px-3 py-2">
-            <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <div className="flex-1 min-w-0">
-              <span className="text-xs font-medium">{s.name}</span>
-              <span className="text-[10px] text-muted-foreground ml-1.5">{s.sub}</span>
+        {FAKE_FILES.map((f, i) => (
+          <div
+            key={i}
+            className="grid grid-cols-[1fr_auto_auto] gap-2 px-2 py-2 items-center"
+          >
+            <div className="min-w-0 overflow-hidden flex items-center gap-2">
+              <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <div className="min-w-0">
+                <span className="truncate block">{f.name}</span>
+                <span className="text-[10px] text-muted-foreground truncate block">
+                  {f.partner}
+                </span>
+              </div>
             </div>
-            <ChevronRight className="h-3 w-3 text-muted-foreground/50" />
+            <span className={cn(
+              "text-[10px] tabular-nums font-medium",
+              f.confidence >= 90 ? "text-green-600" : f.confidence >= 80 ? "text-amber-600" : "text-muted-foreground"
+            )}>
+              {f.confidence}%
+            </span>
+            <span
+              className={cn(
+                "text-[10px] px-1.5 py-0.5 rounded-full",
+                f.status === "connected"
+                  ? "bg-green-50 text-green-900 border border-green-300"
+                  : "bg-amber-50 text-amber-900 border border-amber-300"
+              )}
+            >
+              {f.status === "connected" ? (
+                <span className="flex items-center gap-0.5">
+                  <FileCheck className="h-2.5 w-2.5" /> Matched
+                </span>
+              ) : "Matching..."}
+            </span>
           </div>
         ))}
       </div>

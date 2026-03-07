@@ -1,20 +1,20 @@
 {
   "landing": {
     "hero": {
-      "title": "Banking-Tools für AI-first Unternehmen",
-      "subtitle": "Verbinde deine Bankdaten mit Claude, ChatGPT und deinen eigenen Tools via MCP & API. Lass KI Zuordnung, Extraktion und Buchhaltung übernehmen.",
+      "title": "Bank-Zugang für AI-natives",
+      "subtitle": "Verbinde deine europäische Bank mit Claude, ChatGPT oder OpenClaw mit eigenen Skills, MCP und API. Lass KI dein Budgeting, Rechnungszuordnung und Buchhaltung übernehmen.",
       "ctaLogin": "Zum Dashboard",
       "ctaGetStarted": "Loslegen"
     },
     "toolPreviews": {
       "transactions": {
-        "title": "Bank Daten API"
+        "title": "Live Bankdaten"
       },
       "files": {
-        "title": "AI Matching"
+        "title": "AI-First Matching"
       },
       "integrations": {
-        "title": "Integrationen"
+        "title": "MCP & API"
       }
     },
     "footer": {
