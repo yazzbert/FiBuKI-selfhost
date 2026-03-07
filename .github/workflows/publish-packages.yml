@@ -94,12 +94,11 @@ jobs:
         working-directory: cli
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
-      - name: Bump patch for push-triggered publish
-        if: github.event_name == 'push'
+      - name: Ensure version is publishable
+        if: github.event_name != 'release'
         working-directory: cli
         run: |
           CURRENT=$(node -p "require('./package.json').version")
-          # Check if this version already exists on npm
           if npm view "@fibukiapp/cli@${CURRENT}" version 2>/dev/null; then
             echo "Version ${CURRENT} exists, bumping patch..."
             npm version patch --no-git-tag-version
@@ -148,8 +147,8 @@ jobs:
         working-directory: integrations/openclaw-plugin
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
-      - name: Bump patch for push-triggered publish
-        if: github.event_name == 'push'
+      - name: Ensure version is publishable
+        if: github.event_name != 'release'
         working-directory: integrations/openclaw-plugin
         run: |
           CURRENT=$(node -p "require('./package.json').version")
@@ -177,6 +176,7 @@ jobs:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
 
       - name: Publish skill to ClawHub
+        continue-on-error: true
         working-directory: integrations/openclaw-plugin/skills/fibuki-guide
         run: |
           VERSION="${VERSION:-$(node -p "require('../../package.json').version")}"
