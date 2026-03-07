@@ -98,13 +98,16 @@ jobs:
         if: github.event_name != 'release'
         working-directory: cli
         run: |
-          CURRENT=$(node -p "require('./package.json').version")
-          if npm view "@fibukiapp/cli@${CURRENT}" version 2>/dev/null; then
-            echo "Version ${CURRENT} exists, bumping patch..."
-            npm version patch --no-git-tag-version
-          else
-            echo "Version ${CURRENT} not yet published, using as-is."
-          fi
+          while true; do
+            CURRENT=$(node -p "require('./package.json').version")
+            if npm view "@fibukiapp/cli@${CURRENT}" version 2>/dev/null; then
+              echo "Version ${CURRENT} exists, bumping patch..."
+              npm version patch --no-git-tag-version
+            else
+              echo "Will publish version ${CURRENT}"
+              break
+            fi
+          done
 
       - name: Publish to npm
         working-directory: cli
@@ -151,13 +154,16 @@ jobs:
         if: github.event_name != 'release'
         working-directory: integrations/openclaw-plugin
         run: |
-          CURRENT=$(node -p "require('./package.json').version")
-          if npm view "@fibukiapp/openclaw-plugin@${CURRENT}" version 2>/dev/null; then
-            echo "Version ${CURRENT} exists, bumping patch..."
-            npm version patch --no-git-tag-version
-          else
-            echo "Version ${CURRENT} not yet published, using as-is."
-          fi
+          while true; do
+            CURRENT=$(node -p "require('./package.json').version")
+            if npm view "@fibukiapp/openclaw-plugin@${CURRENT}" version 2>/dev/null; then
+              echo "Version ${CURRENT} exists, bumping patch..."
+              npm version patch --no-git-tag-version
+            else
+              echo "Will publish version ${CURRENT}"
+              break
+            fi
+          done
 
       # ── npm publish ──
       - name: Publish to npm
