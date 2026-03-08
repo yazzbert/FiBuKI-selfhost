@@ -188,7 +188,7 @@ jobs:
           VERSION="${VERSION:-$(node -p "require('../../package.json').version")}"
           clawhub publish . \
             --slug fibuki \
-            --name "FiBuKI Tax Studio" \
+            --name "FiBuKI — European Bank Transactions" \
             --version "${VERSION}" \
             --changelog "${{ github.event.release.body || 'Auto-publish from main' }}" \
             --tags latest \

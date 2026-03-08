@@ -1,11 +1,11 @@
 {
   "id": "fibuki",
   "name": "FiBuKI Tax Studio",
-  "description": "Manage bank transactions, receipts, and tax bookkeeping for Austrian/German small businesses. 25 tools for transactions, files, partners, and categories.",
+  "description": "Access European bank transactions via PSD2 Open Banking. Browse accounts, search payments, auto-match receipts to transactions, categorize expenses, and manage partners. 25 tools for full bookkeeping control.",
   "skills": ["skills/fibuki-guide"],
   "channel": {
     "docsPath": "/integrations/fibuki",
-    "blurb": "AI-powered tax bookkeeping for Austrian & German freelancers and small businesses"
+    "blurb": "Access European bank payments via PSD2 Open Banking — search transactions, match receipts, categorize expenses"
   },
   "configSchema": {
     "type": "object",

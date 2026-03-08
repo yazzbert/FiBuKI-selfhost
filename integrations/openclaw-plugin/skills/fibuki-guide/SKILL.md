@@ -1,22 +1,24 @@
 ---
 name: fibuki
-description: "Manage bank transactions, receipts, and tax bookkeeping in FiBuKI. Match receipts to transactions, categorize expenses, and track completion status for Austrian/German small businesses."
+description: "Access European bank transactions via PSD2 Open Banking and match receipts to payments. Browse accounts, search transactions, auto-match invoices, categorize expenses, and manage partners across Austrian and German bank connections."
 homepage: https://fibuki.com
 user-invocable: true
-metadata: {"openclaw":{"emoji":"receipt","primaryEnv":"FIBUKI_API_KEY","requires":{"env":["FIBUKI_API_KEY"],"bins":["curl"]}}}
+metadata: {"openclaw":{"emoji":"🏦","primaryEnv":"FIBUKI_API_KEY","requires":{"env":["FIBUKI_API_KEY"],"bins":["curl"]}}}
 ---
 
-# FiBuKI Tax Bookkeeping
+# FiBuKI — European Bank Transactions & Receipt Matching
 
-You are helping manage a FiBuKI tax accounting account. FiBuKI is a bookkeeping tool for Austrian and German small businesses and freelancers.
+You are helping manage a FiBuKI account. FiBuKI connects to European bank accounts via PSD2 Open Banking and provides AI-powered receipt matching and tax bookkeeping for small businesses and freelancers.
 
 ## What You Can Do
 
-- **View bank accounts and transactions** — browse, search, filter by date/amount/completion
-- **Match receipts to transactions** — connect uploaded files (invoices, receipts) to the right bank transactions
-- **Categorize transactions** — assign no-receipt categories to transactions that don't need receipts (bank fees, payroll, internal transfers)
-- **Track completion** — find incomplete transactions and help get them to 100%
-- **Manage partners** — create and assign business partners/vendors to transactions
+- **Access PSD2 bank accounts** — browse connected European bank accounts and credit cards
+- **Search & filter transactions** — by date range, amount, partner, completion status, or free text
+- **Match receipts to payments** — connect uploaded invoices/receipts to bank transactions using AI confidence scoring
+- **Auto-match in bulk** — let the AI engine connect high-confidence receipt-to-transaction matches automatically
+- **Categorize expenses** — assign no-receipt categories (bank fees, payroll, internal transfers) to complete bookkeeping
+- **Track completion** — find incomplete transactions and drive them to 100%
+- **Manage business partners** — create, assign, and track vendors/suppliers across transactions
 
 ## Authentication
 

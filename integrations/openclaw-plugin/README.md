@@ -1,6 +1,6 @@
 # FiBuKI OpenClaw Plugin
 
-Manage your FiBuKI tax accounting data through AI assistants. 25 tools for bank transactions, receipts, partners, and tax categorization.
+Give your AI agent access to European bank transactions via PSD2 Open Banking. 25 tools to browse accounts, search payments, auto-match receipts, categorize expenses, and manage business partners.
 
 ## Installation
 
