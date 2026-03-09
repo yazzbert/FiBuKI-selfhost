@@ -1,12 +1,12 @@
 ---
 name: fibuki
-description: "Analyze European bank transactions and match receipts via PSD2 Open Banking. Connect to bank accounts through FiBuKI.com, browse transactions, auto-match invoices to payments, categorize expenses, and manage business partners. Triggers on \"bank\", \"transaction\", \"receipt\", \"invoice\", \"bookkeeping\", \"PSD2\"."
+description: "Connect to European bank accounts via PSD2 Open Banking. Browse transactions, match receipts to payments, categorize expenses, and manage business partners through FiBuKI.com. Triggers on \"bank\", \"transaction\", \"receipt\", \"invoice\", \"PSD2\", \"SEPA\"."
 homepage: https://fibuki.com
 user-invocable: true
 metadata: {"openclaw":{"emoji":"🏦","primaryEnv":"FIBUKI_API_KEY","requires":{"env":["FIBUKI_API_KEY"],"bins":["curl"]}}}
 ---
 
-# European Bank Transaction Analyzer
+# Bank Transactions Connector - Europe (PSD2)
 
 You have access to European bank transactions and receipt matching through FiBuKI.com. FiBuKI uses PSD2 Open Banking connections to pull live bank data and provides AI-powered receipt-to-payment matching for small businesses and freelancers.
 

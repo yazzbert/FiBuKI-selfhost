@@ -188,7 +188,7 @@ jobs:
           VERSION="${VERSION:-$(node -p "require('../../package.json').version")}"
           clawhub publish . \
             --slug fibuki \
-            --name "European Bank Transaction Analyzer" \
+            --name "Bank Transactions Connector - Europe (PSD2)" \
             --version "${VERSION}" \
             --changelog "${{ github.event.release.body || 'Auto-publish from main' }}" \
             --tags latest \
