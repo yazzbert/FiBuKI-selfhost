@@ -26,27 +26,23 @@ If the environment variable `FIBUKI_API_KEY` is NOT configured, you MUST walk th
 
 > To connect your bank transactions, I need to set up FiBuKI first.
 >
-> **1. Create a free account** — open this link in your browser:
+> **If you're on your own computer**, run this — it handles everything:
+> ```
+> npx @fibukiapp/cli auth
+> ```
+> It opens your browser, you sign up or log in, approve the key, and it's saved automatically.
+>
+> **If you're on a remote server** (or prefer manual setup), go to:
 > https://fibuki.com/clawhub-install
-> (Free plan: 50 transactions/month, full API access)
+> Create a free account, then go to Settings > Integrations > AI Agents, create an API key, and paste it back here.
 >
-> **2. Get your API key** — after signing in, go to:
-> **Settings > Integrations > AI Agents** and click "Create API Key".
-> Copy the key (starts with `fk_`).
->
-> **3. Paste the key here** — once you have it, give it to me and I'll configure it.
-> Or set it yourself:
-> ```
-> export FIBUKI_API_KEY="fk_your_key_here"
-> ```
+> Free plan includes 50 transactions/month with full API access.
 
 If the user gives you an API key (starts with `fk_`), configure it by writing to `~/.openclaw/openclaw.json`:
 ```json
 { "skills": { "entries": { "fibuki": { "enabled": true, "env": { "FIBUKI_API_KEY": "fk_..." } } } } }
 ```
 Then restart OpenClaw to load the tools.
-
-**Alternative for local machines with a browser:** The user can run `npx @fibukiapp/cli auth` which handles everything automatically.
 
 Then STOP and wait for the user to complete setup. Do not proceed until they confirm or provide a key.
 
