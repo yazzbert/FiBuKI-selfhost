@@ -3,22 +3,22 @@ import type { Metadata } from "next";
 import { ExpandPageContent } from "@/components/expand/expand-page-content";
 
 export const metadata: Metadata = {
-  title: "Expand FiBuKI to Your Country",
+  title: "Help FiBuKI get PSD2 banking in more countries",
   description:
-    "Help bring FiBuKI to your country. Back with a one-time €10 commitment and unlock PSD2 banking in your region.",
+    "FiBuKI connects directly to your bank via PSD2. Help us expand to your country — back with €10 and unlock direct bank connections in your region.",
   openGraph: {
-    title: "Help bring FiBuKI to your country",
+    title: "Help FiBuKI get PSD2 banking in more countries",
     description:
-      "Back your country with €10 and help us expand across Europe. Your payment becomes credit toward your first month.",
+      "Back your country with €10 to help activate PSD2 bank connections. Your payment becomes credit toward your first month.",
     url: "https://fibuki.com/expand",
     siteName: "FiBuKI",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Help bring FiBuKI to your country",
+    title: "Help FiBuKI get PSD2 banking in more countries",
     description:
-      "Back your country with €10 and help us expand across Europe.",
+      "Back your country with €10 to help activate PSD2 bank connections.",
   },
 };
 

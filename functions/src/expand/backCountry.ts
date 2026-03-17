@@ -90,8 +90,8 @@ export const backCountryCallable = createCallable<
           price_data: {
             currency: "eur",
             product_data: {
-              name: `Back FiBuKI in ${countryData.countryName}`,
-              description: `€10 commitment to help bring FiBuKI to ${countryData.countryName}. Applied as credit toward your first month.`,
+              name: `Unlock PSD2 banking in ${countryData.countryName}`,
+              description: `€10 commitment to help activate PSD2 bank connections in ${countryData.countryName}. Applied as credit toward your first month.`,
             },
             unit_amount: BACKING_AMOUNT_CENTS,
           },

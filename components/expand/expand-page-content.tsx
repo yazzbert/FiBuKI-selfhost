@@ -43,12 +43,14 @@ export function ExpandPageContent() {
         {/* Hero */}
         <div className="text-center space-y-4 max-w-2xl mb-12">
           <h1 className="text-4xl font-bold tracking-tight">
-            Help bring FiBuKI to your country
+            Help FiBuKI get PSD2 banking in more countries
           </h1>
           <p className="text-lg text-muted-foreground">
-            FiBuKI currently supports Austria. Back your country with a one-time
-            €10 commitment and help us expand across Europe. Your payment
-            becomes credit toward your first month.
+            FiBuKI connects directly to your bank via PSD2 — no CSV uploads
+            needed. Right now this works in Austria. Expanding to each new
+            country requires a separate banking licence. Back your country with
+            €10 to help us get there. Your payment becomes credit toward your
+            first month.
           </p>
           <div className="flex items-center justify-center gap-2 pt-2">
             <Badge variant="success">Austria — Live</Badge>
@@ -71,24 +73,24 @@ export function ExpandPageContent() {
 
           <div className="space-y-6">
             <FaqItem
+              question="Why does each country need separate funding?"
+              answer="PSD2 banking access is licenced per country. Each new country requires a dedicated banking connection licence with ongoing costs. Crowdfunding lets us activate countries where there's real demand."
+            />
+            <FaqItem
               question="What happens to my €10?"
-              answer="Your €10 is a one-time payment that reserves your spot. Once enough backers join and the country goes live, your €10 is applied as credit toward your first month's subscription."
+              answer="Your €10 reserves your spot. Once enough backers join and we activate the country's PSD2 banking connection, your €10 is applied as credit toward your first month's subscription."
             />
             <FaqItem
               question="When does my subscription start?"
-              answer="Your subscription only begins once the country is activated. You won't be charged any recurring fees until then."
+              answer="Only after the country goes live. You won't be charged any recurring fees until PSD2 banking is active in your country."
             />
             <FaqItem
               question="What if the target isn't reached?"
               answer="If a country doesn't reach its backer target within a reasonable timeframe, we'll issue a full refund of your €10."
             />
             <FaqItem
-              question="How many backers are needed?"
-              answer="We target around 30 backers per country to ensure sustainable operations. The progress bar on each card shows how close we are."
-            />
-            <FaqItem
               question="Do I need a FiBuKI account?"
-              answer="No! You can back a country with just your email address. When the country goes live, we'll invite you to create an account."
+              answer="No! You can back a country with just your email address. We'll notify you when banking goes live so you can sign up."
             />
           </div>
         </div>

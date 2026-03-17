@@ -78,8 +78,8 @@ export const BACKING_AMOUNT_CENTS = 1000;
 /** Default target backers before country activation */
 export const DEFAULT_TARGET_BACKERS = 30;
 
-/** Monthly finAPI cost per country in cents (€200) */
-export const MONTHLY_COST_CENTS = 20000;
+/** Monthly finAPI International add-on cost per country in cents (€20) */
+export const MONTHLY_COST_CENTS = 2000;
 
 // =============================================================================
 // Country Data (static, for seeding + UI)

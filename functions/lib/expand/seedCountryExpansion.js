@@ -23,7 +23,7 @@ const COUNTRIES = [
     { code: "SI", name: "Slovenia" },
 ];
 const DEFAULT_TARGET_BACKERS = 30;
-const MONTHLY_COST_CENTS = 20000; // €200
+const MONTHLY_COST_CENTS = 2000; // €20 (finAPI International add-on per country)
 exports.seedCountryExpansionCallable = (0, createCallable_1.createCallable)({ name: "seedCountryExpansion" }, async (ctx) => {
     // Admin check
     const isAdmin = ctx.request.auth?.token?.admin === true;

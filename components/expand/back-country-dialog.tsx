@@ -66,9 +66,9 @@ export function BackCountryDialog({
             {country?.flag} Back FiBuKI in {country?.name}
           </DialogTitle>
           <DialogDescription>
-            Pay €10 to help bring FiBuKI to {country?.name}. Your payment will
-            be applied as credit toward your first month once the country goes
-            live.
+            Pay €10 to help activate PSD2 banking in {country?.name}. Your
+            payment will be applied as credit toward your first month once bank
+            connections go live.
           </DialogDescription>
         </DialogHeader>
 

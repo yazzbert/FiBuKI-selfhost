@@ -23,7 +23,7 @@ const COUNTRIES = [
 ];
 
 const DEFAULT_TARGET_BACKERS = 30;
-const MONTHLY_COST_CENTS = 20000; // €200
+const MONTHLY_COST_CENTS = 2000; // €20 (finAPI International add-on per country)
 
 interface SeedResponse {
   created: number;
