@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -16,16 +17,20 @@ export function CountryCard({ country, flag, onBack }: CountryCardProps) {
     (country.currentBackers / country.targetBackers) * 100,
     100
   );
+  const slug = country.countryCode.toLowerCase();
 
   return (
     <div className="rounded-lg border bg-card p-6 flex flex-col gap-4">
-      <div className="flex items-start justify-between">
+      <Link
+        href={`/expand/${slug}`}
+        className="flex items-start justify-between hover:opacity-80 transition-opacity"
+      >
         <div className="flex items-center gap-3">
           <span className="text-3xl">{flag}</span>
           <h3 className="font-semibold text-lg">{country.countryName}</h3>
         </div>
         <StatusBadge status={country.status} />
-      </div>
+      </Link>
 
       <div className="space-y-2">
         <Progress value={progress} className="h-3" />

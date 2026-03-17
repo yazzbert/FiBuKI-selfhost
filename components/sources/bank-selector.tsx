@@ -1,12 +1,16 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Building2, Search, Loader2, ArrowLeft } from "lucide-react";
 import { useInstitutions, filterInstitutions, Institution, BankingProvider } from "@/hooks/use-institutions";
 import { FINAPI_COUNTRY_OPTIONS } from "@/lib/banking/finapi-countries";
+
+/** Countries with active PSD2 banking connections */
+const LIVE_COUNTRIES = new Set(["AT"]);
 
 const COUNTRIES = FINAPI_COUNTRY_OPTIONS;
 
@@ -28,6 +32,7 @@ export function BankSelector({
   isLoading = false,
   provider = "all",
 }: BankSelectorProps) {
+  const router = useRouter();
   const [countrySearchQuery, setCountrySearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const { institutions, loading, error } = useInstitutions({
@@ -76,22 +81,38 @@ export function BankSelector({
                 No countries found matching your search
               </div>
             ) : (
-              filteredCountries.map((country) => (
-                <button
-                  key={country.code}
-                  type="button"
-                  onClick={() => onCountrySelect(country.code)}
-                  className="w-full text-left px-3 py-2 rounded-md hover:bg-muted/50 transition-colors"
-                >
-                  <span className="font-medium">{country.name}</span>
-                  <span className="text-xs text-muted-foreground ml-2">({country.code})</span>
-                  {country.description && (
-                    <span className="text-xs text-muted-foreground ml-2">
-                      {country.description}
+              filteredCountries.map((country) => {
+                const isLive = LIVE_COUNTRIES.has(country.code);
+                return (
+                  <button
+                    key={country.code}
+                    type="button"
+                    onClick={() => {
+                      if (isLive) {
+                        onCountrySelect(country.code);
+                      } else {
+                        router.push(`/expand/${country.code.toLowerCase()}`);
+                      }
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-md hover:bg-muted/50 transition-colors flex items-center justify-between"
+                  >
+                    <span>
+                      <span className="font-medium">{country.name}</span>
+                      <span className="text-xs text-muted-foreground ml-2">({country.code})</span>
+                      {country.description && (
+                        <span className="text-xs text-muted-foreground ml-2">
+                          {country.description}
+                        </span>
+                      )}
                     </span>
-                  )}
-                </button>
-              ))
+                    {!isLive && (
+                      <span className="text-xs text-muted-foreground shrink-0 ml-2">
+                        Help unlock &rarr;
+                      </span>
+                    )}
+                  </button>
+                );
+              })
             )}
           </div>
         </ScrollArea>
