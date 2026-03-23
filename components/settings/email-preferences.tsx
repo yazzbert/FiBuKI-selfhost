@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Mail, Bell, ShieldCheck, Loader2 } from "lucide-react";
+import { Mail, Bell, ShieldCheck } from "lucide-react";
 import { callFunction } from "@/lib/firebase/callable";
 import type { Subscription } from "@/types/billing";
 
@@ -15,7 +15,6 @@ interface EmailPreferencesProps {
 type EmailPreference = "digest" | "budgetWarnings";
 
 export function EmailPreferences({ subscription }: EmailPreferencesProps) {
-  // Defaults: both opt-out (enabled unless explicitly false)
   const [digestEnabled, setDigestEnabled] = useState(
     subscription?.digestEnabled !== false
   );
@@ -42,7 +41,7 @@ export function EmailPreferences({ subscription }: EmailPreferencesProps) {
       >("updateEmailPreference", { preference, enabled: newValue });
     } catch (err) {
       console.error("[EmailPreferences] Failed to update:", err);
-      setter(!newValue); // revert
+      setter(!newValue);
     } finally {
       setSaving(false);
     }
@@ -87,10 +86,10 @@ export function EmailPreferences({ subscription }: EmailPreferencesProps) {
                 Transaction stats and matching progress, every Monday
               </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
+            <Switch
+              checked={digestEnabled}
+              disabled={savingDigest}
+              onCheckedChange={() =>
                 togglePreference(
                   "digest",
                   digestEnabled,
@@ -98,17 +97,7 @@ export function EmailPreferences({ subscription }: EmailPreferencesProps) {
                   setSavingDigest
                 )
               }
-              disabled={savingDigest}
-              className="shrink-0"
-            >
-              {savingDigest ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : digestEnabled ? (
-                "Enabled"
-              ) : (
-                "Disabled"
-              )}
-            </Button>
+            />
           </div>
         </CardContent>
       </Card>
@@ -129,10 +118,10 @@ export function EmailPreferences({ subscription }: EmailPreferencesProps) {
                 Notified at 90% and 100% of your AI budget
               </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
+            <Switch
+              checked={budgetWarningsEnabled}
+              disabled={savingBudget}
+              onCheckedChange={() =>
                 togglePreference(
                   "budgetWarnings",
                   budgetWarningsEnabled,
@@ -140,17 +129,7 @@ export function EmailPreferences({ subscription }: EmailPreferencesProps) {
                   setSavingBudget
                 )
               }
-              disabled={savingBudget}
-              className="shrink-0"
-            >
-              {savingBudget ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : budgetWarningsEnabled ? (
-                "Enabled"
-              ) : (
-                "Disabled"
-              )}
-            </Button>
+            />
           </div>
           <p className="text-xs text-muted-foreground mt-2">
             In-app notifications are always shown regardless of this setting.
