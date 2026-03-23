@@ -96,7 +96,6 @@ export { resetInboundDailyLimits } from "./email-inbound/resetDailyLimits";
 // Export auth functions
 export {
   setAdminClaim,
-  beforeUserCreatedHandler,
   listAdmins,
 } from "./auth/setAdminClaim";
 export { validateRegistration, markInviteUsed } from "./auth/validateRegistration";

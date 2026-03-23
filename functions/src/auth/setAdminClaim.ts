@@ -1,5 +1,4 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import { beforeUserCreated } from "firebase-functions/v2/identity";
 import { getAuth } from "firebase-admin/auth";
 
 const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL || "";
@@ -67,31 +66,6 @@ export const setAdminClaim = onCall(
       console.error("Error setting admin claim:", error);
       throw new HttpsError("internal", "Failed to set admin claim");
     }
-  }
-);
-
-/**
- * Blocking function that runs before user creation
- * Auto-sets admin claim for super admin
- */
-export const beforeUserCreatedHandler = beforeUserCreated(
-  {
-    region: "europe-west1",
-  },
-  async (event) => {
-    const user = event.data;
-
-    // Auto-set admin for super admin email
-    if (user?.email === SUPER_ADMIN_EMAIL) {
-      console.log(`Setting admin claim for super admin: ${user.email}`);
-      return {
-        customClaims: {
-          admin: true,
-        },
-      };
-    }
-
-    return {};
   }
 );
 
