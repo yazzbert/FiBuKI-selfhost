@@ -44,5 +44,4 @@ const countryNames = new Map<string, string>(
 export const FINAPI_COUNTRY_OPTIONS = FINAPI_SUPPORTED_COUNTRY_CODES.map((code) => ({
   code,
   name: countryNames.get(code) || code,
-  description: code === "DE" ? "Includes finAPI test banks for sandbox" : undefined,
 }));
