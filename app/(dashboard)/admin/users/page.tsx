@@ -111,6 +111,7 @@ export default function AdminUsersPage() {
   const [processingRequest, setProcessingRequest] = useState<string | null>(null);
   const [openSeatTotal, setOpenSeatTotal] = useState(0);
   const [openSeatRemaining, setOpenSeatRemaining] = useState(0);
+  const [openSeatClaimed, setOpenSeatClaimed] = useState(0);
   const [openSeatInput, setOpenSeatInput] = useState("");
   const [savingSeats, setSavingSeats] = useState(false);
   const [error, setError] = useState("");
@@ -127,6 +128,7 @@ export default function AdminUsersPage() {
           const data = snap.data();
           setOpenSeatTotal(data.totalSeats as number);
           setOpenSeatRemaining(data.remainingSeats as number);
+          setOpenSeatClaimed((data.claimedSeats as number) || 0);
         }
       },
       (err) => console.error("openSeats listener error:", err)
@@ -417,7 +419,7 @@ export default function AdminUsersPage() {
               <div className="text-sm text-muted-foreground">
                 {openSeatTotal > 0 ? (
                   <span>
-                    {openSeatRemaining} of {openSeatTotal} remaining ({openSeatTotal - openSeatRemaining} used)
+                    {openSeatRemaining} of {openSeatTotal} remaining ({openSeatClaimed} claimed)
                   </span>
                 ) : (
                   <span>No open seats configured</span>
