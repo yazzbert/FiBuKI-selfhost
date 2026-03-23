@@ -12,7 +12,8 @@ import {
   User,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider,
   GithubAuthProvider,
   signOut as firebaseSignOut,
@@ -195,16 +196,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Keep customMfaStatus for reference, it will be cleared on next login
   }, [setMfaVerifiedForSession]);
 
-  const handleOAuthSignIn = useCallback(
-    async (
-      provider: GoogleAuthProvider | GithubAuthProvider,
-      providerName: "google" | "github"
-    ) => {
-      try {
-        const result = await signInWithPopup(auth, provider);
-        const email = result.user.email;
+  // Handle OAuth redirect result after page reloads
+  useEffect(() => {
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (!result) return;
 
-        // Check if this is a new user by comparing creation and last sign-in times
+        const providerName =
+          (sessionStorage.getItem("fibuki_oauth_provider") as "google" | "github") || "google";
+        sessionStorage.removeItem("fibuki_oauth_provider");
+
+        const email = result.user.email;
         const isNewUser =
           result.user.metadata.creationTime === result.user.metadata.lastSignInTime;
 
@@ -217,7 +219,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const validation = await validateFn({ email: email.toLowerCase() });
 
           if (!validation.data.allowed) {
-            // Submit access request before deleting the temp account
             try {
               const submitFn = httpsCallable(functions, "submitAccessRequest");
               await submitFn({ provider: providerName });
@@ -227,10 +228,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             await result.user.delete();
             setAccessRequested(true);
-            return; // Don't throw — UI reads accessRequested state
+            return;
           }
 
-          // Allowed user — mark invite as used
           try {
             const markUsedFn = httpsCallable(functions, "markInviteUsed");
             await markUsedFn({});
@@ -238,16 +238,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.warn("Failed to mark invite as used:", e);
           }
         }
-        // Firebase auth succeeded - onAuthStateChanged will handle MFA check
-      } catch (error) {
+      })
+      .catch((error) => {
         if (isMfaError(error)) {
           const resolver = getMultiFactorResolver(auth, error);
           setMfaResolver(resolver);
           setMfaRequired(true);
           return;
         }
-        throw error;
-      }
+        console.error("OAuth redirect error:", error);
+      });
+  }, []);
+
+  const handleOAuthSignIn = useCallback(
+    async (
+      provider: GoogleAuthProvider | GithubAuthProvider,
+      providerName: "google" | "github"
+    ) => {
+      sessionStorage.setItem("fibuki_oauth_provider", providerName);
+      await signInWithRedirect(auth, provider);
     },
     []
   );
