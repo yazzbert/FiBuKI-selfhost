@@ -13,6 +13,13 @@ exports.setOpenSeatsCallable = (0, createCallable_1.createCallable)({ name: "set
         throw new createCallable_1.HttpsError("invalid-argument", "totalSeats must be a non-negative integer");
     }
     const configRef = ctx.db.collection("config").doc("openSeats");
+    // Count all used invites for cumulative claimed seats
+    const usedInvites = await ctx.db
+        .collection("allowedEmails")
+        .where("usedAt", "!=", null)
+        .count()
+        .get();
+    const claimedSeats = usedInvites.data().count;
     const result = await ctx.db.runTransaction(async (tx) => {
         const doc = await tx.get(configRef);
         let remainingSeats;
@@ -29,6 +36,7 @@ exports.setOpenSeatsCallable = (0, createCallable_1.createCallable)({ name: "set
         tx.set(configRef, {
             totalSeats,
             remainingSeats,
+            claimedSeats,
             updatedAt: firestore_1.FieldValue.serverTimestamp(),
             updatedBy: ctx.userId,
         });

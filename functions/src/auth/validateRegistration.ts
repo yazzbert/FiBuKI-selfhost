@@ -1,5 +1,5 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
 const db = getFirestore();
 const SUPER_ADMIN_EMAIL = "felix@i7v6.com";
@@ -140,6 +140,13 @@ export const markInviteUsed = onCall(
           registeredUserId: request.auth.uid,
         });
       }
+
+      // Increment cumulative claimed seats counter
+      const configRef = db.collection("config").doc("openSeats");
+      await configRef.set(
+        { claimedSeats: FieldValue.increment(1) },
+        { merge: true }
+      );
 
       return { success: true };
     } catch (error) {

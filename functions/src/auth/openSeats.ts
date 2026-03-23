@@ -30,6 +30,14 @@ export const setOpenSeatsCallable = createCallable<
 
     const configRef = ctx.db.collection("config").doc("openSeats");
 
+    // Count all used invites for cumulative claimed seats
+    const usedInvites = await ctx.db
+      .collection("allowedEmails")
+      .where("usedAt", "!=", null)
+      .count()
+      .get();
+    const claimedSeats = usedInvites.data().count;
+
     const result = await ctx.db.runTransaction(async (tx) => {
       const doc = await tx.get(configRef);
 
@@ -48,6 +56,7 @@ export const setOpenSeatsCallable = createCallable<
       tx.set(configRef, {
         totalSeats,
         remainingSeats,
+        claimedSeats,
         updatedAt: FieldValue.serverTimestamp(),
         updatedBy: ctx.userId,
       });

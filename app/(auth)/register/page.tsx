@@ -28,7 +28,7 @@ export default function RegisterPage() {
   const [isLogoJumping, setIsLogoJumping] = useState(false);
   const [referralApplied, setReferralApplied] = useState(false);
   const [hasReferral, setHasReferral] = useState(false);
-  const [openSeats, setOpenSeats] = useState<{ total: number; remaining: number } | null>(null);
+  const [openSeats, setOpenSeats] = useState<{ total: number; remaining: number; claimed: number } | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -41,8 +41,9 @@ export default function RegisterPage() {
           const data = snap.data();
           const remaining = data.remainingSeats as number;
           const total = data.totalSeats as number;
+          const claimed = (data.claimedSeats as number) || 0;
           if (remaining > 0) {
-            setOpenSeats({ total, remaining });
+            setOpenSeats({ total, remaining, claimed });
           } else {
             setOpenSeats(null);
           }
@@ -162,13 +163,13 @@ export default function RegisterPage() {
                 {openSeats.remaining} open seat{openSeats.remaining === 1 ? "" : "s"} available
               </span>
               <span className="text-muted-foreground text-xs">
-                {openSeats.total - openSeats.remaining}/{openSeats.total} claimed
+                {openSeats.claimed}/{openSeats.total} claimed
               </span>
             </div>
             <div className="h-2 rounded-full bg-muted overflow-hidden">
               <div
                 className="h-full rounded-full bg-green-500 transition-all duration-500"
-                style={{ width: `${((openSeats.total - openSeats.remaining) / openSeats.total) * 100}%` }}
+                style={{ width: `${(openSeats.claimed / openSeats.total) * 100}%` }}
               />
             </div>
           </div>

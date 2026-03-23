@@ -119,6 +119,9 @@ exports.markInviteUsed = (0, https_1.onCall)({
                 registeredUserId: request.auth.uid,
             });
         }
+        // Increment cumulative claimed seats counter
+        const configRef = db.collection("config").doc("openSeats");
+        await configRef.set({ claimedSeats: firestore_1.FieldValue.increment(1) }, { merge: true });
         return { success: true };
     }
     catch (error) {
