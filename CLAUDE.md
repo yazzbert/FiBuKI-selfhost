@@ -347,3 +347,15 @@ Used for the main chat interface and LangGraph agent. Requires `ANTHROPIC_API_KE
 - Deploy manually: `firebase deploy --only functions`
 - Region: `europe-west1`
 - Deploy specific functions: `firebase deploy --only functions:functionName`
+- **IMPORTANT**: Cloud Functions are NOT auto-deployed on push. When you create or modify Cloud Functions, you MUST deploy them after pushing:
+  ```bash
+  firebase deploy --only functions:fn1,functions:fn2
+  ```
+- CORS origins are configured in `createCallable()` wrapper (`functions/src/utils/createCallable.ts`). New callables using `createCallable()` inherit CORS automatically. Standalone `onCall()` functions must include the same CORS origins array.
+
+### Firestore Rules & Indexes
+- **NOT auto-deployed on push**. When modifying `firestore.rules` or `firestore.indexes.json`, deploy after pushing:
+  ```bash
+  firebase deploy --only firestore:rules
+  firebase deploy --only firestore:indexes
+  ```
