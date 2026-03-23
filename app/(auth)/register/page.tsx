@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +29,7 @@ export default function RegisterPage() {
   const [referralApplied, setReferralApplied] = useState(false);
   const [hasReferral, setHasReferral] = useState(false);
   const [openSeats, setOpenSeats] = useState<{ total: number; remaining: number } | null>(null);
+  const router = useRouter();
   const searchParams = useSearchParams();
 
   // Listen for open seats config (public read, no auth needed)
@@ -72,6 +73,13 @@ export default function RegisterPage() {
   };
 
   const { user, signInWithGoogle, signInWithGitHub, accessRequested } = useAuth();
+
+  // Redirect existing users to the dashboard
+  useEffect(() => {
+    if (user && !accessRequested) {
+      router.push("/transactions");
+    }
+  }, [user, accessRequested, router]);
 
   // After successful registration, apply referral code
   useEffect(() => {
