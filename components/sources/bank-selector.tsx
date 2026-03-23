@@ -1,12 +1,15 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "@/lib/firebase/config";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Building2, Search, Loader2, ArrowLeft } from "lucide-react";
 import { useInstitutions, filterInstitutions, Institution, BankingProvider } from "@/hooks/use-institutions";
 import { FINAPI_COUNTRY_OPTIONS } from "@/lib/banking/finapi-countries";
+import type { CountryExpansion } from "@/types/expand";
 
 /** Countries with active PSD2 banking connections (none yet — all in funding) */
 const LIVE_COUNTRIES = new Set<string>([]);
@@ -36,10 +39,27 @@ export function BankSelector({
 }: BankSelectorProps) {
   const [countrySearchQuery, setCountrySearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [expansionData, setExpansionData] = useState<Map<string, CountryExpansion>>(new Map());
   const { institutions, loading, error } = useInstitutions({
     countryCode: selectedCountry,
     provider,
   });
+
+  // Fetch country expansion data (backer counts) for non-live countries
+  useEffect(() => {
+    if (selectedCountry) return; // Only fetch when showing country list
+    const unsubscribe = onSnapshot(
+      collection(db, "countryExpansion"),
+      (snap) => {
+        const data = new Map<string, CountryExpansion>();
+        snap.forEach((doc) => {
+          data.set(doc.id, { ...doc.data(), countryCode: doc.id } as CountryExpansion);
+        });
+        setExpansionData(data);
+      }
+    );
+    return unsubscribe;
+  }, [selectedCountry]);
 
   const filteredCountries = useMemo(() => {
     const query = countrySearchQuery.trim().toLowerCase();
@@ -84,6 +104,7 @@ export function BankSelector({
             ) : (
               filteredCountries.map((country) => {
                 const isLive = LIVE_COUNTRIES.has(country.code);
+                const expansion = expansionData.get(country.code);
                 return (
                   <button
                     key={country.code}
@@ -102,8 +123,15 @@ export function BankSelector({
                       <span className="text-xs text-muted-foreground ml-2">({country.code})</span>
                     </span>
                     {!isLive && (
-                      <span className="text-xs text-muted-foreground shrink-0 ml-2">
-                        Help unlock &rarr;
+                      <span className="text-xs shrink-0 ml-2 flex items-center gap-1.5">
+                        {expansion && expansion.currentBackers > 0 && (
+                          <span className="text-blue-600 font-medium">
+                            {expansion.currentBackers}/{expansion.targetBackers}
+                          </span>
+                        )}
+                        <span className="text-muted-foreground">
+                          Help unlock &rarr;
+                        </span>
                       </span>
                     )}
                   </button>

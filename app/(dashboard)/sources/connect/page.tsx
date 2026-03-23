@@ -55,6 +55,7 @@ function ConnectBankContent() {
   const searchParams = useSearchParams();
   const connectionId = searchParams.get("connectionId");
   const sourceId = searchParams.get("sourceId"); // Existing source to link
+  const isBackingSuccess = searchParams.get("success") === "1";
   const { user } = useAuth();
   const { sources, deleteSource } = useSources();
   const [deletingInstitutionId, setDeletingInstitutionId] = useState<string | null>(null);
@@ -542,6 +543,23 @@ function ConnectBankContent() {
           Back to Sources
         </Button>
       </div>
+
+      {isBackingSuccess && (
+        <Alert className="mb-4 border-green-300 bg-green-50">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-900">
+            <span className="font-medium">Thank you for backing!</span> We&apos;ll notify you when
+            PSD2 banking goes live. In the meantime, you can{" "}
+            <button
+              onClick={() => router.push("/sources")}
+              className="underline font-medium hover:text-green-700"
+            >
+              add a manual bank account
+            </button>{" "}
+            and import transactions via CSV.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader>
