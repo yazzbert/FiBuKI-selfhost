@@ -123,7 +123,7 @@ export default function AdminEmailsPage() {
   const handleSelect = async (template: EmailTemplate) => {
     setSelected(template);
     setSendResult(null);
-    await loadPreview(template);
+    await loadPreview(template, mergeEmail || undefined);
   };
 
   const handleResolveMerge = async () => {
