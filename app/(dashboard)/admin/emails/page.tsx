@@ -219,6 +219,9 @@ export default function AdminEmailsPage() {
                       placeholder="user@example.com"
                       value={mergeEmail}
                       onChange={(e) => setMergeEmail(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleResolveMerge();
+                      }}
                       className="text-sm"
                     />
                     <Button
