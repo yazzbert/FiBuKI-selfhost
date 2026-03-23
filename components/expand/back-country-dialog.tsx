@@ -19,11 +19,17 @@ import type { BackCountryRequest, BackCountryResponse } from "@/types/expand";
 interface BackCountryDialogProps {
   countryCode: string | null;
   onClose: () => void;
+  /** Override the Stripe success redirect URL */
+  successUrl?: string;
+  /** Override the Stripe cancel redirect URL */
+  cancelUrl?: string;
 }
 
 export function BackCountryDialog({
   countryCode,
   onClose,
+  successUrl: successUrlOverride,
+  cancelUrl: cancelUrlOverride,
 }: BackCountryDialogProps) {
   const { user } = useAuth();
   const userEmail = user?.email ?? "";
@@ -42,6 +48,7 @@ export function BackCountryDialog({
     setError(null);
 
     const slug = countryCode.toLowerCase();
+    const origin = window.location.origin;
 
     try {
       const result = await callFunction<BackCountryRequest, BackCountryResponse>(
@@ -49,8 +56,8 @@ export function BackCountryDialog({
         {
           countryCode,
           email,
-          successUrl: `${window.location.origin}/expand/${slug}?success=1`,
-          cancelUrl: `${window.location.origin}/expand/${slug}`,
+          successUrl: successUrlOverride || `${origin}/expand/${slug}?success=1`,
+          cancelUrl: cancelUrlOverride || `${origin}/expand/${slug}`,
         }
       );
 

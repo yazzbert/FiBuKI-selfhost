@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -22,6 +21,8 @@ interface BankSelectorProps {
   isLoading?: boolean;
   /** Which provider to use. Defaults to "all" */
   provider?: BankingProvider;
+  /** Called when user clicks a non-live country (inline expand) */
+  onExpandCountry?: (countryCode: string) => void;
 }
 
 export function BankSelector({
@@ -31,8 +32,8 @@ export function BankSelector({
   onBack,
   isLoading = false,
   provider = "all",
+  onExpandCountry,
 }: BankSelectorProps) {
-  const router = useRouter();
   const [countrySearchQuery, setCountrySearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const { institutions, loading, error } = useInstitutions({
@@ -91,7 +92,7 @@ export function BankSelector({
                       if (isLive) {
                         onCountrySelect(country.code);
                       } else {
-                        router.push(`/expand/${country.code.toLowerCase()}`);
+                        onExpandCountry?.(country.code);
                       }
                     }}
                     className="w-full text-left px-3 py-2 rounded-md hover:bg-muted/50 transition-colors flex items-center justify-between"

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ArrowLeft, ExternalLink, Loader2, CheckCircle, Building2, CreditCard, Wallet, AlertCircle, RefreshCw, Trash2, AlertTriangle } from "lucide-react";
 import { BankSelector } from "@/components/sources/bank-selector";
+import { InlineCountryExpand } from "@/components/sources/inline-country-expand";
 import { useBankConnection, BankAccount } from "@/hooks/use-bank-connection";
 import { useAuth } from "@/components/auth/auth-provider";
 import { useSources } from "@/hooks/use-sources";
@@ -57,6 +58,7 @@ function ConnectBankContent() {
   const { user } = useAuth();
   const { sources, deleteSource } = useSources();
   const [deletingInstitutionId, setDeletingInstitutionId] = useState<string | null>(null);
+  const [expandingCountryCode, setExpandingCountryCode] = useState<string | null>(null);
   const [orphanedConnections, setOrphanedConnections] = useState<FinapiConnection[]>([]);
   const [linkedConnections, setLinkedConnections] = useState<FinapiConnection[]>([]);
   const [loadingConnections, setLoadingConnections] = useState(false);
@@ -551,13 +553,21 @@ function ConnectBankContent() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <BankSelector
-            selectedCountry={state.selectedCountry}
-            onCountrySelect={selectCountry}
-            onBankSelect={startConnection}
-            onBack={state.selectedCountry ? goBackToCountry : undefined}
-            isLoading={isLoading}
-          />
+          {expandingCountryCode ? (
+            <InlineCountryExpand
+              countryCode={expandingCountryCode}
+              onBack={() => setExpandingCountryCode(null)}
+            />
+          ) : (
+            <BankSelector
+              selectedCountry={state.selectedCountry}
+              onCountrySelect={selectCountry}
+              onBankSelect={startConnection}
+              onBack={state.selectedCountry ? goBackToCountry : undefined}
+              isLoading={isLoading}
+              onExpandCountry={setExpandingCountryCode}
+            />
+          )}
         </CardContent>
       </Card>
 

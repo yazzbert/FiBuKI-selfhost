@@ -80,7 +80,12 @@ export const backCountryCallable = createCallable<
       );
     }
 
-    const stripe = new Stripe(stripeSecretKey.value());
+    const secretValue = stripeSecretKey.value().trim();
+    if (!secretValue.startsWith("sk_")) {
+      console.error("[backCountry] Invalid Stripe key format, length:", secretValue.length);
+      throw new HttpsError("internal", "Stripe configuration error");
+    }
+    const stripe = new Stripe(secretValue);
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",

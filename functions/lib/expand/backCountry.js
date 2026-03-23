@@ -52,7 +52,12 @@ exports.backCountryCallable = (0, createCallable_1.createCallable)({
     if (!existingBacker.empty) {
         throw new createCallable_1.HttpsError("already-exists", "You have already backed this country");
     }
-    const stripe = new stripe_1.default(stripeSecretKey.value());
+    const secretValue = stripeSecretKey.value().trim();
+    if (!secretValue.startsWith("sk_")) {
+        console.error("[backCountry] Invalid Stripe key format, length:", secretValue.length);
+        throw new createCallable_1.HttpsError("internal", "Stripe configuration error");
+    }
+    const stripe = new stripe_1.default(secretValue);
     const session = await stripe.checkout.sessions.create({
         mode: "payment",
         customer_email: email,
