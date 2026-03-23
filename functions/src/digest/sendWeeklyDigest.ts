@@ -89,9 +89,10 @@ export const sendWeeklyDigest = onSchedule(
             const token = generateUnsubscribeToken(userId);
             const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?uid=${userId}&token=${token}`;
 
+            const name = user.displayName || undefined;
             const subject = buildDigestSubject(stats);
-            const html = buildDigestHtml(stats, unsubscribeUrl);
-            const text = buildDigestText(stats, unsubscribeUrl);
+            const html = buildDigestHtml(stats, unsubscribeUrl, name);
+            const text = buildDigestText(stats, unsubscribeUrl, name);
 
             await sgMail.send({
               to: user.email,

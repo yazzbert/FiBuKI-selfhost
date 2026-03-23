@@ -132,7 +132,8 @@ export type CloudFunctionName =
   // Open seats & invite emails
   | "setOpenSeats"
   | "sendInviteNotification"
-  | "previewEmail";
+  | "previewEmail"
+  | "sendTestEmail";
 
 /**
  * Summary statistics for function calls (for dashboards).

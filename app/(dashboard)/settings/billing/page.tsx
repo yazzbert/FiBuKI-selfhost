@@ -9,7 +9,6 @@ import { BillingPlanComparison } from "@/components/settings/billing-plan-compar
 import { InvestmentsAddonCard } from "@/components/billing/investments-addon-card";
 import { SocialPromoCard } from "@/components/billing/social-promo-card";
 import { ReferralCard } from "@/components/billing/referral-card";
-import { DigestToggle } from "@/components/billing/digest-toggle";
 import { useSubscription } from "@/hooks/use-subscription";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -42,7 +41,6 @@ export default function BillingPage() {
       <BillingPlanComparison />
       <InvestmentsAddonCard subscription={subscription} />
       <ReferralCard />
-      <DigestToggle subscription={subscription} />
       <SocialPromoCard />
     </div>
   );

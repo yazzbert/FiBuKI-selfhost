@@ -3,6 +3,11 @@
  */
 
 import { getFirestore } from "firebase-admin/firestore";
+import {
+  buildBudgetWarningSubject,
+  buildBudgetWarningHtml,
+  buildBudgetWarningText,
+} from "./budgetWarningEmail";
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
 const FROM_EMAIL = "noreply@fibuki.com";
@@ -32,37 +37,10 @@ export async function sendUsageWarning(
   const sgMail = (await import("@sendgrid/mail")).default;
   sgMail.setApiKey(SENDGRID_API_KEY);
 
-  const subject =
-    percent >= 100
-      ? "AI budget exhausted — auto-matching paused"
-      : "You've used 90% of your AI budget";
-
-  const text =
-    percent >= 100
-      ? `Hi,\n\nYou've used ${usageEur.toFixed(2)} EUR of your ${limitEur.toFixed(2)} EUR AI budget this period.\n\nAuto-matching has been paused to prevent unexpected charges. Your files will continue to be extracted, but AI-powered partner lookup and agentic matching are on hold.\n\nTo resume:\n- Add AI credits at https://fibuki.com/settings/billing\n- Or upgrade your plan for a higher budget\n\nBest,\nFiBuKI`
-      : `Hi,\n\nYou've used ${usageEur.toFixed(2)} EUR of your ${limitEur.toFixed(2)} EUR AI budget this period (90%).\n\nOnce you reach 100%, auto-matching will be paused.\n\nTo avoid interruptions:\n- Add AI credits at https://fibuki.com/settings/billing\n- Set an overage cap to allow spending beyond your limit\n- Or upgrade your plan for a higher budget\n\nBest,\nFiBuKI`;
-
-  const html =
-    percent >= 100
-      ? `<p>Hi,</p>
-<p>You've used <strong>${usageEur.toFixed(2)} EUR</strong> of your <strong>${limitEur.toFixed(2)} EUR</strong> AI budget this period.</p>
-<p>Auto-matching has been <strong>paused</strong> to prevent unexpected charges. Your files will continue to be extracted, but AI-powered partner lookup and agentic matching are on hold.</p>
-<p>To resume:</p>
-<ul>
-  <li><a href="https://fibuki.com/settings/billing">Add AI credits</a></li>
-  <li>Or upgrade your plan for a higher budget</li>
-</ul>
-<p>Best,<br/>FiBuKI</p>`
-      : `<p>Hi,</p>
-<p>You've used <strong>${usageEur.toFixed(2)} EUR</strong> of your <strong>${limitEur.toFixed(2)} EUR</strong> AI budget this period (<strong>90%</strong>).</p>
-<p>Once you reach 100%, auto-matching will be paused.</p>
-<p>To avoid interruptions:</p>
-<ul>
-  <li><a href="https://fibuki.com/settings/billing">Add AI credits</a></li>
-  <li>Set an overage cap to allow spending beyond your limit</li>
-  <li>Or upgrade your plan for a higher budget</li>
-</ul>
-<p>Best,<br/>FiBuKI</p>`;
+  const name = user.displayName || undefined;
+  const subject = buildBudgetWarningSubject(percent);
+  const html = buildBudgetWarningHtml({ name, percent, usageEur, limitEur });
+  const text = buildBudgetWarningText({ name, percent, usageEur, limitEur });
 
   await sgMail.send({
     to: email,
