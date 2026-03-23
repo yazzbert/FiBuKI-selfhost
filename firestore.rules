@@ -261,6 +261,12 @@ service cloud.firestore {
       allow write: if false; // Cloud Functions only
     }
 
+    // Config - public read (open seats shown on registration), Cloud Functions write only
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if false; // Cloud Functions only
+    }
+
     // Country expansion - public read (marketing page), Cloud Functions write only
     match /countryExpansion/{countryCode} {
       allow read: if true;

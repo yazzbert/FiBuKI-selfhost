@@ -128,7 +128,11 @@ export type CloudFunctionName =
   | "applyReferralCode"
   | "getReferralStats"
   // Digest email preferences
-  | "updateDigestPreference";
+  | "updateDigestPreference"
+  // Open seats & invite emails
+  | "setOpenSeats"
+  | "sendInviteNotification"
+  | "previewEmail";
 
 /**
  * Summary statistics for function calls (for dashboards).

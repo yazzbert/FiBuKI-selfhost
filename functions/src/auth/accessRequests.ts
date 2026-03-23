@@ -1,5 +1,6 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { sendInviteEmail } from "./sendInviteEmail";
 
 const db = getFirestore();
 
@@ -129,6 +130,11 @@ export const approveAccessRequest = onCall(
       resolvedAt: FieldValue.serverTimestamp(),
       resolvedBy: request.auth.uid,
     });
+
+    // Fire-and-forget invite email
+    sendInviteEmail(data.email).catch((err) =>
+      console.error("[approveAccessRequest] Failed to send invite email:", err)
+    );
 
     return { success: true };
   }

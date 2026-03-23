@@ -101,6 +101,9 @@ export {
 } from "./auth/setAdminClaim";
 export { validateRegistration, markInviteUsed } from "./auth/validateRegistration";
 export { submitAccessRequest, approveAccessRequest, dismissAccessRequest } from "./auth/accessRequests";
+export { setOpenSeatsCallable as setOpenSeats } from "./auth/openSeats";
+export { sendInviteNotificationCallable as sendInviteNotification } from "./auth/sendInviteNotificationCallable";
+export { previewEmailCallable as previewEmail } from "./auth/previewEmail";
 export { migrateUserData, checkMigrationStatus } from "./auth/migrateUserData";
 
 // Export MFA functions

@@ -15,10 +15,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertCircle, CheckCircle, Info, Loader2, Gift } from "lucide-react";
+import { AlertCircle, CheckCircle, Info, Loader2, Gift, Sparkles } from "lucide-react";
 import { FibukiMascot } from "@/components/ui/fibuki-mascot";
 import { logoFont } from "@/app/fonts";
 import { callFunction } from "@/lib/firebase/callable";
+import { doc, onSnapshot } from "firebase/firestore";
+import { db } from "@/lib/firebase/config";
 
 export default function RegisterPage() {
   const [error, setError] = useState("");
@@ -26,7 +28,31 @@ export default function RegisterPage() {
   const [isLogoJumping, setIsLogoJumping] = useState(false);
   const [referralApplied, setReferralApplied] = useState(false);
   const [hasReferral, setHasReferral] = useState(false);
+  const [openSeats, setOpenSeats] = useState<{ total: number; remaining: number } | null>(null);
   const searchParams = useSearchParams();
+
+  // Listen for open seats config (public read, no auth needed)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "config", "openSeats"),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          const remaining = data.remainingSeats as number;
+          const total = data.totalSeats as number;
+          if (remaining > 0) {
+            setOpenSeats({ total, remaining });
+          } else {
+            setOpenSeats(null);
+          }
+        } else {
+          setOpenSeats(null);
+        }
+      },
+      () => setOpenSeats(null)
+    );
+    return () => unsub();
+  }, []);
 
   // Store referral code from URL in localStorage for persistence across OAuth redirects
   useEffect(() => {
@@ -116,10 +142,29 @@ export default function RegisterPage() {
         </div>
         <CardTitle className="text-2xl">Request Access</CardTitle>
         <CardDescription>
-          FiBuKI is invite-only. Sign in to request access.
+          {openSeats ? "Open seats available! Sign in to claim yours." : "FiBuKI is invite-only. Sign in to request access."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {openSeats && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-1.5 font-medium text-green-700 dark:text-green-400">
+                <Sparkles className="h-4 w-4" />
+                {openSeats.remaining} open seat{openSeats.remaining === 1 ? "" : "s"} available
+              </span>
+              <span className="text-muted-foreground text-xs">
+                {openSeats.total - openSeats.remaining}/{openSeats.total} claimed
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-green-500 transition-all duration-500"
+                style={{ width: `${((openSeats.total - openSeats.remaining) / openSeats.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
         {hasReferral && !referralApplied && (
           <Alert className="border-green-200 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950/50 dark:text-green-300">
             <Gift className="h-4 w-4 text-green-600 dark:text-green-400" />

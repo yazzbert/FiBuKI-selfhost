@@ -42,6 +42,34 @@ export const validateRegistration = onCall(
         .get();
 
       if (allowedQuery.empty) {
+        // Check open seats — atomically claim one if available
+        const configRef = db.collection("config").doc("openSeats");
+        const seatClaimed = await db.runTransaction(async (tx) => {
+          const configDoc = await tx.get(configRef);
+          if (!configDoc.exists) return false;
+
+          const data = configDoc.data()!;
+          const remaining = data.remainingSeats as number;
+          if (remaining <= 0) return false;
+
+          // Decrement remaining seats
+          tx.update(configRef, { remainingSeats: remaining - 1 });
+
+          // Create allowedEmails doc so the user is permanently allowed
+          const allowedRef = db.collection("allowedEmails").doc();
+          tx.set(allowedRef, {
+            email: normalizedEmail,
+            addedBy: "open-seat",
+            addedAt: new Date(),
+          });
+
+          return true;
+        });
+
+        if (seatClaimed) {
+          return { allowed: true, reason: "Open seat claimed" };
+        }
+
         return {
           allowed: false,
           reason: "Email not found in invite list. Please request an invite from an admin.",

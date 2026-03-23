@@ -17,6 +17,7 @@ import {
   X,
   UserCheck,
   Ban,
+  Ticket,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +50,7 @@ import { httpsCallable } from "firebase/functions";
 import { functions, db } from "@/lib/firebase/config";
 import {
   collection,
+  doc,
   query,
   orderBy,
   where,
@@ -107,8 +109,31 @@ export default function AdminUsersPage() {
   const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
   const [settingOverride, setSettingOverride] = useState<string | null>(null);
   const [processingRequest, setProcessingRequest] = useState<string | null>(null);
+  const [openSeatTotal, setOpenSeatTotal] = useState(0);
+  const [openSeatRemaining, setOpenSeatRemaining] = useState(0);
+  const [openSeatInput, setOpenSeatInput] = useState("");
+  const [savingSeats, setSavingSeats] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  // Listen for open seats config
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const unsub = onSnapshot(
+      doc(db, "config", "openSeats"),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setOpenSeatTotal(data.totalSeats as number);
+          setOpenSeatRemaining(data.remainingSeats as number);
+        }
+      },
+      (err) => console.error("openSeats listener error:", err)
+    );
+
+    return () => unsub();
+  }, [isAdmin]);
 
   // Load invites from Firestore
   useEffect(() => {
@@ -213,9 +238,12 @@ export default function AdminUsersPage() {
     setInviting(true);
 
     try {
-      await addAllowedEmail({ db, userId }, newEmail.trim());
+      const emailToInvite = newEmail.trim();
+      await addAllowedEmail({ db, userId }, emailToInvite);
+      // Fire-and-forget invite notification email
+      callFunction("sendInviteNotification", { email: emailToInvite }).catch(() => {});
       setNewEmail("");
-      setSuccess(`Invitation sent to ${newEmail.trim()}`);
+      setSuccess(`Invitation sent to ${emailToInvite}`);
       setTimeout(() => setSuccess(""), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send invite");
@@ -309,6 +337,27 @@ export default function AdminUsersPage() {
     }
   };
 
+  const handleSetOpenSeats = async () => {
+    const total = parseInt(openSeatInput, 10);
+    if (isNaN(total) || total < 0) {
+      setError("Enter a valid number of seats");
+      return;
+    }
+
+    setError("");
+    setSavingSeats(true);
+    try {
+      await callFunction("setOpenSeats", { totalSeats: total });
+      setOpenSeatInput("");
+      setSuccess(`Open seats updated to ${total}`);
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update open seats");
+    } finally {
+      setSavingSeats(false);
+    }
+  };
+
   return (
     <ProtectedRoute requireAdmin>
       <div className="h-full overflow-auto p-6">
@@ -333,6 +382,49 @@ export default function AdminUsersPage() {
               <AlertDescription>{success}</AlertDescription>
             </Alert>
           )}
+
+          {/* Open Seats Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Ticket className="h-5 w-5" />
+                Open Seats
+              </CardTitle>
+              <CardDescription>
+                Allow anyone to register without an invite while seats are available
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Total seats"
+                    value={openSeatInput}
+                    onChange={(e) => setOpenSeatInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSetOpenSeats()}
+                  />
+                </div>
+                <Button onClick={handleSetOpenSeats} disabled={savingSeats || !openSeatInput}>
+                  {savingSeats ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    "Update"
+                  )}
+                </Button>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                {openSeatTotal > 0 ? (
+                  <span>
+                    {openSeatRemaining} of {openSeatTotal} remaining ({openSeatTotal - openSeatRemaining} used)
+                  </span>
+                ) : (
+                  <span>No open seats configured</span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Access Requests Card */}
           <Card>

@@ -12,7 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Receipt, Building2, Users, Settings, Activity, Globe, Files, Tag, Link2, User, LogOut, UserPlus, Palette, Shield, Zap, FileText, FlaskConical, Download, CreditCard } from "lucide-react";
+import { Receipt, Building2, Users, Settings, Activity, Globe, Files, Tag, Link2, User, LogOut, UserPlus, Palette, Shield, Zap, FileText, FlaskConical, Download, CreditCard, Mail } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import Link from "next/link";
 import { FibukiMascot } from "@/components/ui/fibuki-mascot";
@@ -359,6 +359,12 @@ function DashboardContent({ children }: { children: React.ReactNode }) {
                       <Link href="/admin/users" className="flex items-center gap-2">
                         <UserPlus className="h-4 w-4" />
                         Manage Users
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/emails" className="flex items-center gap-2">
+                        <Mail className="h-4 w-4" />
+                        Email Templates
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuItem asChild>
