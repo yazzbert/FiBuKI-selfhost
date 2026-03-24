@@ -23,7 +23,6 @@ export function BillingUsageSection() {
   const {
     aiUsage,
     aiLimit,
-    aiCredits,
     aiOverageCap,
     aiOverageUsed,
     aiPaused,
@@ -61,13 +60,6 @@ export function BillingUsageSection() {
             className={cn("h-2", getProgressColor(aiUsagePercent))}
           />
 
-          {aiCredits > 0 && (
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Prepaid Credits</span>
-              <span className="font-medium">{aiCredits.toFixed(2)} EUR</span>
-            </div>
-          )}
-
           {aiOverageCap > 0 && (
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Overage</span>
@@ -80,7 +72,7 @@ export function BillingUsageSection() {
           {aiPaused && (
             <p className="text-xs text-destructive flex items-center gap-1">
               <AlertTriangle className="h-3 w-3" />
-              AI matching is paused. Add credits or increase your overage cap to resume.
+              AI matching is paused. Enable overage spending or increase your cap to resume.
             </p>
           )}
         </CardContent>

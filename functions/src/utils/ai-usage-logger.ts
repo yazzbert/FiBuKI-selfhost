@@ -134,7 +134,6 @@ async function accumulateBudget(
     const sub = subDoc.data()!;
     const fairUseLimit = sub.aiFairUseLimitEur as number;
     const currentUsage = sub.aiUsageCurrentPeriodEur as number;
-    const credits = sub.aiCreditsEur as number;
     const overageCap = sub.aiOverageCapEur as number;
     const currentOverage = sub.aiOverageCurrentPeriodEur as number;
     const plan = (sub.plan || "free") as PlanId;
@@ -143,14 +142,10 @@ async function accumulateBudget(
     const fairUseRemaining = fairUseLimit - currentUsage;
 
     // Determine where to charge (all within transaction — consistent read + write)
+    // Chain: fair_use → overage → paused
     if (fairUseRemaining > 0.001) {
       tx.update(subRef, {
         aiUsageCurrentPeriodEur: currentUsage + costEur,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    } else if (credits > 0.001) {
-      tx.update(subRef, {
-        aiCreditsEur: Math.max(0, credits - costEur),
         updatedAt: FieldValue.serverTimestamp(),
       });
     } else if (overageAllowed && overageCap > 0) {

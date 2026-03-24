@@ -6,7 +6,8 @@ import { db } from "@/lib/firebase/config";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Check, Heart, ExternalLink } from "lucide-react";
+import { Check, Heart, ExternalLink, Calendar } from "lucide-react";
+import { format } from "date-fns";
 import { PLANS, type PlanId } from "@/types/billing";
 import { useSubscription } from "@/hooks/use-subscription";
 import { useAuth } from "@/components/auth/auth-provider";
@@ -199,6 +200,13 @@ export function BillingPlanComparison() {
                       </Badge>
                     )}
                   </div>
+                  {isCurrent && subscription?.currentPeriodEnd && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Calendar className="h-3 w-3" />
+                      Renews {format(subscription.currentPeriodEnd.toDate(), "MMM d, yyyy")}
+                      {subscription.cancelAtPeriodEnd && " (cancels)"}
+                    </p>
+                  )}
                   <div className="mt-1">
                     <span className="text-xl font-bold">
                       {config.monthlyPriceEur === 0
@@ -211,6 +219,24 @@ export function BillingPlanComparison() {
                       )}
                     </span>
                   </div>
+                  {isCurrent && config.monthlyPriceEur > 0 && (() => {
+                    const addons = subscription?.addons;
+                    const addonLines: { label: string; price: number }[] = [];
+                    if (addons?.bmdExport?.active) addonLines.push({ label: "BMD Export", price: 5 });
+                    if (addons?.investments?.active) addonLines.push({ label: "Investments", price: 5 });
+                    if (addons?.prioritySupport?.active) addonLines.push({ label: "Priority Support", price: 50 });
+                    if (addonLines.length === 0) return null;
+                    const total = config.monthlyPriceEur + addonLines.reduce((s, a) => s + a.price, 0);
+                    return (
+                      <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
+                        <div>Base: {config.monthlyPriceEur} EUR</div>
+                        {addonLines.map((a) => (
+                          <div key={a.label}>+ {a.label}: {a.price} EUR</div>
+                        ))}
+                        <div className="font-medium text-foreground">= {total} EUR/mo</div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <ul className="space-y-1.5 text-sm">
@@ -253,7 +279,7 @@ export function BillingPlanComparison() {
                       }
                     )}
                     <p className="text-[11px] text-blue-700/70 dark:text-blue-400/70">
-                      Your €10 covers the first month once enough backers join
+                      Your €10 becomes account credit when you subscribe
                     </p>
                   </div>
                 )}

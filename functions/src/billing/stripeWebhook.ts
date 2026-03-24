@@ -111,7 +111,7 @@ export const stripeWebhook = onRequest(
     try {
       switch (event.type) {
         case "checkout.session.completed":
-          await handleCheckoutCompleted(db, event.data.object as Stripe.Checkout.Session);
+          await handleCheckoutCompleted(db, stripe, event.data.object as Stripe.Checkout.Session);
           break;
 
         case "customer.subscription.updated":
@@ -149,6 +149,7 @@ export const stripeWebhook = onRequest(
 
 async function handleCheckoutCompleted(
   db: FirebaseFirestore.Firestore,
+  stripe: Stripe,
   session: Stripe.Checkout.Session
 ) {
   const userId = session.metadata?.userId;
@@ -242,6 +243,13 @@ async function handleCheckoutCompleted(
     console.error("[StripeWebhook] Failed to clear quotaExceeded:", err)
   );
 
+  // Apply country backer credits (€10 Stripe balance credit per backing)
+  if (customerId) {
+    applyBackerCredits(db, stripe, userId, customerId).catch((err) =>
+      console.error("[StripeWebhook] Failed to apply backer credits:", err)
+    );
+  }
+
   console.log(`[StripeWebhook] Checkout completed: user=${userId} plan=${plan}`);
 }
 
@@ -295,10 +303,14 @@ async function handleSubscriptionDeleted(
     cancelAtPeriodEnd: false,
     aiFairUseLimitEur: freePlan.aiFairUseLimitEur,
     aiOverageCapEur: 0,
+    // Clear all addons on cancellation
+    "addons.bmdExport.active": false,
+    "addons.investments.active": false,
+    "addons.prioritySupport.active": false,
     updatedAt: FieldValue.serverTimestamp(),
   });
 
-  console.log(`[StripeWebhook] Subscription deleted (downgraded to free): user=${userId}`);
+  console.log(`[StripeWebhook] Subscription deleted (downgraded to free, addons cleared): user=${userId}`);
 }
 
 async function handleInvoicePaymentSucceeded(
@@ -445,6 +457,45 @@ async function creditReferrer(
   } catch (err) {
     console.error("[StripeWebhook] Failed to credit referrer:", err);
     // Don't throw — referral credit failure shouldn't break the invoice handler
+  }
+}
+
+// =============================================================================
+// Country Backer Credit Handler
+// =============================================================================
+
+async function applyBackerCredits(
+  db: FirebaseFirestore.Firestore,
+  stripe: Stripe,
+  userId: string,
+  stripeCustomerId: string
+) {
+  // Find paid backings for this user that haven't been credited yet
+  const backersQuery = await db
+    .collection("countryBackers")
+    .where("userId", "==", userId)
+    .where("status", "==", "paid")
+    .get();
+
+  const unCredited = backersQuery.docs.filter((d) => !d.data().creditApplied);
+  if (unCredited.length === 0) return;
+
+  for (const backerDoc of unCredited) {
+    const backer = backerDoc.data();
+    const countryCode = backer.countryCode || "unknown";
+
+    // Apply €10 credit (negative balance = credit in Stripe)
+    await stripe.customers.createBalanceTransaction(stripeCustomerId, {
+      amount: -1000,
+      currency: "eur",
+      description: `Country backing credit: ${countryCode}`,
+    });
+
+    await backerDoc.ref.update({ creditApplied: true });
+
+    console.log(
+      `[StripeWebhook] Backer credit applied: user=${userId} country=${countryCode} amount=€10`
+    );
   }
 }
 

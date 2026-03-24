@@ -19,6 +19,12 @@ export const activateBmdExportAddonCallable = createCallable<
     }
 
     const sub = subSnap.data()!;
+
+    // Require an active Stripe subscription
+    if (!sub.stripeSubscriptionId || sub.stripeSubscriptionStatus === "canceled") {
+      throw new HttpsError("failed-precondition", "Active subscription required");
+    }
+
     if (sub.addons?.bmdExport?.active) {
       return { success: true };
     }

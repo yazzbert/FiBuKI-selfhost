@@ -36,6 +36,11 @@ export const activateInvestmentsAddonCallable = createCallable<
 
     const sub = subSnap.data()!;
 
+    // Require an active Stripe subscription
+    if (!sub.stripeSubscriptionId || sub.stripeSubscriptionStatus === "canceled") {
+      throw new HttpsError("failed-precondition", "Active subscription required");
+    }
+
     // Check if already active
     if (sub.addons?.investments?.active) {
       return { success: true };

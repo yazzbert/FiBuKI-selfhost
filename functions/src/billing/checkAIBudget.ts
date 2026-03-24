@@ -2,7 +2,7 @@
  * AI Budget Check Utility
  *
  * Single-read check to determine if a user can consume AI resources.
- * Priority chain: fair use -> credits -> overage -> denied.
+ * Priority chain: fair use -> overage -> denied.
  */
 
 import { getFirestore } from "firebase-admin/firestore";
@@ -50,7 +50,6 @@ export async function checkAIBudget(
 
   const fairUseLimit = sub.aiFairUseLimitEur as number;
   const currentUsage = sub.aiUsageCurrentPeriodEur as number;
-  const credits = sub.aiCreditsEur as number;
   const overageCap = sub.aiOverageCapEur as number;
   const currentOverage = sub.aiOverageCurrentPeriodEur as number;
   const plan = (sub.plan || "free") as PlanId;
@@ -67,17 +66,7 @@ export async function checkAIBudget(
     };
   }
 
-  // 2. Prepaid credits remaining?
-  if (credits > 0.001) {
-    return {
-      allowed: true,
-      source: "credits",
-      remainingEur: credits,
-      paused: false,
-    };
-  }
-
-  // 3. Overage cap has room?
+  // 2. Overage cap has room?
   if (overageAllowed && overageCap > 0) {
     const overageRemaining = overageCap - currentOverage;
     if (overageRemaining > 0.001) {

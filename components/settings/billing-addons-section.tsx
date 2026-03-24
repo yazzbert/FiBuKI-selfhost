@@ -21,6 +21,8 @@ export function BillingAddonsSection() {
     aiOverageCap > 0 ? aiOverageCap.toString() : "10"
   );
 
+  const hasActiveSubscription = !!subscription?.stripeSubscriptionId &&
+    subscription?.stripeSubscriptionStatus !== "canceled";
   const investmentsActive =
     subscription?.addons?.investments?.active ?? false;
   const bmdExportActive =
@@ -103,6 +105,12 @@ export function BillingAddonsSection() {
         <CardTitle className="text-base">Addons</CardTitle>
       </CardHeader>
       <CardContent className="divide-y">
+        {!hasActiveSubscription && (
+          <p className="text-xs text-muted-foreground pb-3">
+            Subscribe to a paid plan to enable addons.
+          </p>
+        )}
+
         {/* Overage spending */}
         {planConfig.overageAllowed && (
           <div className="py-3 first:pt-0 last:pb-0 space-y-2">
@@ -158,7 +166,7 @@ export function BillingAddonsSection() {
             <Switch
               checked={bmdExportActive}
               onCheckedChange={handleToggleBmdExport}
-              disabled={bmdLoading}
+              disabled={bmdLoading || !hasActiveSubscription}
             />
           </div>
         </div>
@@ -178,7 +186,7 @@ export function BillingAddonsSection() {
             <Switch
               checked={investmentsActive}
               onCheckedChange={handleToggleInvestments}
-              disabled={investmentsLoading}
+              disabled={investmentsLoading || !hasActiveSubscription}
             />
           </div>
         </div>
@@ -198,7 +206,7 @@ export function BillingAddonsSection() {
             <Switch
               checked={prioritySupportActive}
               onCheckedChange={handleTogglePrioritySupport}
-              disabled={priorityLoading}
+              disabled={priorityLoading || !hasActiveSubscription}
             />
           </div>
         </div>
