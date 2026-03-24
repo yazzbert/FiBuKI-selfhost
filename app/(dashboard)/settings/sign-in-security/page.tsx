@@ -35,7 +35,9 @@ import {
 import { useAuth } from "@/components/auth";
 import {
   GoogleAuthProvider,
+  GithubAuthProvider,
   linkWithPopup,
+  linkWithRedirect,
   unlink,
 } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
@@ -47,6 +49,7 @@ import { DeleteAccountSection } from "@/components/settings/delete-account-secti
 export default function SignInSecurityPage() {
   const { user } = useAuth();
   const [linkingGoogle, setLinkingGoogle] = useState(false);
+  const [linkingGitHub, setLinkingGitHub] = useState(false);
   const [unlinkingProvider, setUnlinkingProvider] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [showPasswordSetup, setShowPasswordSetup] = useState(false);
@@ -66,6 +69,7 @@ export default function SignInSecurityPage() {
   }, [user]);
 
   const hasGoogle = providers.some((p) => p.id === "google.com");
+  const hasGitHub = providers.some((p) => p.id === "github.com");
   const hasPassword = providers.some((p) => p.id === "password");
 
   const handleLinkGoogle = async () => {
@@ -84,6 +88,24 @@ export default function SignInSecurityPage() {
       }
     } finally {
       setLinkingGoogle(false);
+    }
+  };
+
+  const handleLinkGitHub = async () => {
+    if (!user) return;
+    setAuthError(null);
+    setLinkingGitHub(true);
+    try {
+      await linkWithRedirect(user, new GithubAuthProvider());
+    } catch (err: unknown) {
+      console.error("Error linking GitHub:", err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (errorMessage.includes("credential-already-in-use")) {
+        setAuthError("This GitHub account is already linked to another user.");
+      } else {
+        setAuthError("Failed to link GitHub account. Please try again.");
+      }
+      setLinkingGitHub(false);
     }
   };
 
@@ -249,6 +271,76 @@ export default function SignInSecurityPage() {
                   disabled={linkingGoogle}
                 >
                   {linkingGoogle && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Connect
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* GitHub Provider */}
+          <div className="flex items-center justify-between py-4 border-b">
+            <div className="flex items-center gap-4">
+              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+              </svg>
+              <div>
+                <p className="font-medium">GitHub</p>
+                <p className="text-sm text-muted-foreground">
+                  {hasGitHub
+                    ? providers.find((p) => p.id === "github.com")?.email
+                    : "Not connected"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {hasGitHub ? (
+                <>
+                  <span className="text-sm text-green-600">Connected</span>
+                  {providers.length > 1 && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-muted-foreground hover:text-destructive"
+                          disabled={unlinkingProvider === "github.com"}
+                        >
+                          {unlinkingProvider === "github.com" ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Unlink GitHub Account?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            You will no longer be able to sign in with GitHub.
+                            Make sure you have another sign-in method available.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleUnlinkProvider("github.com")}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            Unlink
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLinkGitHub}
+                  disabled={linkingGitHub}
+                >
+                  {linkingGitHub && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                   Connect
                 </Button>
               )}
