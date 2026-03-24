@@ -6,7 +6,7 @@ import { db } from "@/lib/firebase/config";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Check, Heart, Crown, ExternalLink } from "lucide-react";
+import { Check, Heart, ExternalLink } from "lucide-react";
 import { PLANS, type PlanId } from "@/types/billing";
 import { useSubscription } from "@/hooks/use-subscription";
 import { useAuth } from "@/components/auth/auth-provider";
@@ -291,56 +291,6 @@ export function BillingPlanComparison() {
           })}
         </div>
 
-        {/* Pro addon section */}
-        {effectivePlan !== "pro" && currentPlan !== "pro" && (
-          <div className="rounded-lg border border-dashed p-4 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Crown className="h-5 w-5 text-amber-500 shrink-0" />
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-semibold text-sm">Pro</h3>
-                  <span className="text-sm text-muted-foreground">
-                    {PLANS.pro.monthlyPriceEur} EUR/mo
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  BMD/NTCS export, 1000 tx/month, 20 EUR AI budget, priority
-                  support
-                </p>
-              </div>
-            </div>
-            <Button
-              size="sm"
-              onClick={() => handlePlanAction("pro")}
-              disabled={loading !== null}
-            >
-              {loading === "pro"
-                ? "Switching..."
-                : hasActiveSubscription
-                  ? "Upgrade to Pro"
-                  : "Get started"}
-            </Button>
-          </div>
-        )}
-
-        {/* Current plan is Pro — show it as highlighted */}
-        {(effectivePlan === "pro" || currentPlan === "pro") && (
-          <div className="rounded-lg border border-primary bg-primary/5 p-4 flex items-center gap-3">
-            <Crown className="h-5 w-5 text-amber-500 shrink-0" />
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold text-sm">Pro</h3>
-                <Badge variant="secondary" className="text-xs">
-                  Current
-                </Badge>
-              </div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                BMD/NTCS export, 1000 tx/month, 20 EUR AI budget, priority
-                support
-              </p>
-            </div>
-          </div>
-        )}
       </CardContent>
     </Card>
   );

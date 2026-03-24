@@ -99,9 +99,13 @@ export function useSubscription() {
       if (isOnTrial) {
         return PLANS.smart.planFeatures[feature];
       }
+      // Check if feature is enabled via addon
+      if (feature === "bmdExport" && subscription?.addons?.bmdExport?.active) {
+        return true;
+      }
       return hasFeatureFn(plan, feature, grandfatheredUntil);
     },
-    [plan, isOnTrial, grandfatheredUntil]
+    [plan, isOnTrial, grandfatheredUntil, subscription?.addons?.bmdExport?.active]
   );
 
   return {

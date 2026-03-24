@@ -111,6 +111,10 @@ export type CloudFunctionName =
   | "calculateCapitalGainsSummary"
   | "activateInvestmentsAddon"
   | "deactivateInvestmentsAddon"
+  | "activateBmdExportAddon"
+  | "deactivateBmdExportAddon"
+  | "activatePrioritySupportAddon"
+  | "deactivatePrioritySupportAddon"
   // Automation mode
   | "updateAutomationMode"
   // Onboarding

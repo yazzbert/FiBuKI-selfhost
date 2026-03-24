@@ -55,8 +55,8 @@ const FEATURE_LABELS: Record<PlanFeatureKey, { title: string; description: strin
   },
   bmdExport: {
     title: "BMD Export",
-    description: "Export transactions in BMD/NTCS format for your tax advisor.",
-    minPlan: "Pro",
+    description: "Export transactions in BMD/NTCS format for your tax advisor. Available as addon (+5 EUR/mo).",
+    minPlan: "Addon",
   },
 };
 

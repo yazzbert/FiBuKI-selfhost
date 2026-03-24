@@ -287,6 +287,14 @@ export {
   activateInvestmentsAddonCallable as activateInvestmentsAddon,
   deactivateInvestmentsAddonCallable as deactivateInvestmentsAddon,
 } from "./billing/investmentsAddon";
+export {
+  activateBmdExportAddonCallable as activateBmdExportAddon,
+  deactivateBmdExportAddonCallable as deactivateBmdExportAddon,
+} from "./billing/bmdExportAddon";
+export {
+  activatePrioritySupportAddonCallable as activatePrioritySupportAddon,
+  deactivatePrioritySupportAddonCallable as deactivatePrioritySupportAddon,
+} from "./billing/prioritySupportAddon";
 
 // Onboarding operations
 export { setOnboardingTrackCallable as setOnboardingTrack } from "./onboarding/setOnboardingTrackCallable";

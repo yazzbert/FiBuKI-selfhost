@@ -306,14 +306,21 @@ export const TRIAL_TRANSACTION_LIMIT = 200;
 /**
  * Check if a plan has a specific feature.
  * For legacy starter plans with grandfathering, checks the grandfatheredUntil date.
+ * Accepts optional addons to check addon-based feature access.
  */
 export function hasFeature(
   planId: PlanId,
   feature: PlanFeatureKey,
-  grandfatheredUntil?: Date | null
+  grandfatheredUntil?: Date | null,
+  addons?: { bmdExport?: { active?: boolean } } | null
 ): boolean {
   const plan = PLANS[planId];
   if (!plan) return false;
+
+  // Check addon-based feature access
+  if (feature === "bmdExport" && addons?.bmdExport?.active) {
+    return true;
+  }
 
   // Legacy starter users get AI features during grandfathering period
   if (planId === "starter" && grandfatheredUntil) {
