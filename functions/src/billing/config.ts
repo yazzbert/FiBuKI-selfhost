@@ -228,16 +228,16 @@ type StripePriceMap = Record<PlanId, Record<BillingPeriod, string | null>>;
 const STRIPE_PRICES_TEST: StripePriceMap = {
   free: { monthly: null, yearly: null },
   data: {
-    monthly: "price_1TEIFnKIIWnfuvheBz9Rwmin",
-    yearly: "price_1TEIFoKIIWnfuvheNIOynGlq",
+    monthly: "price_1TEIi9K7O16U1uWZu4HCSsgl",
+    yearly: "price_1TEIiAK7O16U1uWZfKvaUJH1",
   },
   smart: {
-    monthly: "price_1TEIFrKIIWnfuvhesWCD2IO5",
-    yearly: "price_1TEIFtKIIWnfuvhei9XbEFOS",
+    monthly: "price_1TEIiAK7O16U1uWZrcCVnoIy",
+    yearly: "price_1TEIiAK7O16U1uWZiN0wrRCk",
   },
   pro: {
-    monthly: "price_1TEIFvKIIWnfuvheRXze1EDM",
-    yearly: "price_1TEIFxKIIWnfuvheHa3S2u8z",
+    monthly: "price_1TEIiBK7O16U1uWZjmyZysRt",
+    yearly: "price_1TEIiBK7O16U1uWZV2eLJCi3",
   },
   // Legacy (still active for existing subscribers)
   starter: { monthly: null, yearly: null },
@@ -254,10 +254,10 @@ const STRIPE_PRICES_LIVE: StripePriceMap = {
 };
 
 const STRIPE_PRODUCTS_TEST = {
-  data: "prod_UCheXDjrex5XkH",
-  smart: "prod_UCheb17j8GKvhh",
-  pro: "prod_UChehSV5wMasGa",
-  aiCredits: "prod_UCheWbjlLldShS",
+  data: "prod_UCi8a8Wh6qdOR2",
+  smart: "prod_UCi8uhdzcnNxZD",
+  pro: "prod_UCi8cMYKTlV5gv",
+  aiCredits: "prod_UCi8e3CSqpERqE",
   // Legacy
   starter: null as string | null,
   business: null as string | null,
