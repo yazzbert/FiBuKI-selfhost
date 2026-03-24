@@ -54,6 +54,9 @@ export default function LoginPage() {
     customMfaStatus,
     clearCustomMfaChallenge,
     completeCustomMfaChallenge,
+    oauthError,
+    clearOauthError,
+    pendingLink,
   } = useAuth();
   const { handleMfaRequired, handleCustomMfaRequired } = useMfaChallenge();
   const { hasPasskeys } = usePasskeys();
@@ -91,18 +94,19 @@ export default function LoginPage() {
   // Clear pending redirect state once auth resolves (user logged in or error/timeout)
   useEffect(() => {
     if (!pendingRedirect) return;
-    if (user || accessRequested) {
+    if (user || accessRequested || oauthError) {
       setPendingRedirect(false);
       return;
     }
     // Fallback: clear after 5s in case redirect result fails silently
     const timeout = setTimeout(() => setPendingRedirect(false), 5000);
     return () => clearTimeout(timeout);
-  }, [pendingRedirect, user, accessRequested]);
+  }, [pendingRedirect, user, accessRequested, oauthError]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    clearOauthError();
     setIsLoading(true);
 
     try {
@@ -134,6 +138,7 @@ export default function LoginPage() {
 
   const handleGoogleSignIn = async () => {
     setError("");
+    clearOauthError();
     setIsLoading(true);
 
     try {
@@ -149,6 +154,7 @@ export default function LoginPage() {
 
   const handleGitHubSignIn = async () => {
     setError("");
+    clearOauthError();
     setIsLoading(true);
 
     try {
@@ -202,10 +208,21 @@ export default function LoginPage() {
               </Alert>
             )}
 
-            {error && (
+            {pendingLink && oauthError && (
+              <Alert className="border-amber-200 bg-amber-50 text-amber-900">
+                <AlertCircle className="h-4 w-4 text-amber-600" />
+                <AlertDescription>
+                  <strong>{pendingLink.email}</strong> is already registered.
+                  Sign in with your existing account below to link{" "}
+                  {pendingLink.pendingProvider === "github.com" ? "GitHub" : "Google"}.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {(error || (oauthError && !pendingLink)) && (
               <Alert variant="destructive">
                 <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
+                <AlertDescription>{error || oauthError}</AlertDescription>
               </Alert>
             )}
 

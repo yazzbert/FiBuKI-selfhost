@@ -16,6 +16,8 @@ import {
   getRedirectResult,
   GoogleAuthProvider,
   GithubAuthProvider,
+  OAuthProvider,
+  linkWithCredential,
   signOut as firebaseSignOut,
   MultiFactorError,
   MultiFactorResolver,
@@ -47,6 +49,9 @@ interface AuthContextValue {
   resetPassword: (email: string) => Promise<void>;
   refreshAdminStatus: () => Promise<void>;
   accessRequested: boolean;
+  oauthError: string | null;
+  clearOauthError: () => void;
+  pendingLink: { email: string; pendingProvider: string } | null;
   // MFA challenge state (Firebase native TOTP)
   mfaRequired: boolean;
   mfaResolver: MultiFactorResolver | null;
@@ -64,6 +69,7 @@ const googleProvider = new GoogleAuthProvider();
 const githubProvider = new GithubAuthProvider();
 
 const MFA_SESSION_KEY = "fibuki_mfa_verified";
+const PENDING_LINK_KEY = "fibuki_pending_link";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -72,6 +78,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
   const [accessRequested, setAccessRequested] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const [pendingLink, setPendingLink] = useState<{
+    email: string;
+    pendingProvider: string;
+  } | null>(null);
   // Custom MFA state for passkey-only users
   const [customMfaRequired, setCustomMfaRequired] = useState(false);
   const [customMfaStatus, setCustomMfaStatus] = useState<MfaStatusResponse | null>(null);
@@ -180,6 +191,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const clearOauthError = useCallback(() => setOauthError(null), []);
+
   const clearMfaChallenge = useCallback(() => {
     setMfaRequired(false);
     setMfaResolver(null);
@@ -201,6 +214,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     getRedirectResult(auth)
       .then(async (result) => {
         if (!result) return;
+
+        // Check for pending link credential (account linking flow)
+        const pendingLinkData = sessionStorage.getItem(PENDING_LINK_KEY);
+        if (pendingLinkData) {
+          try {
+            const { providerId, accessToken, idToken } = JSON.parse(pendingLinkData);
+            let credential;
+            if (providerId === "github.com") {
+              credential = GithubAuthProvider.credential(accessToken);
+            } else if (providerId === "google.com") {
+              credential = GoogleAuthProvider.credential(idToken, accessToken);
+            }
+            if (credential) {
+              await linkWithCredential(result.user, credential);
+            }
+          } catch (linkError) {
+            console.warn("Failed to link credential:", linkError);
+          } finally {
+            sessionStorage.removeItem(PENDING_LINK_KEY);
+            setPendingLink(null);
+            setOauthError(null);
+          }
+          return;
+        }
 
         const providerName =
           (sessionStorage.getItem("fibuki_oauth_provider") as "google" | "github") || "google";
@@ -247,6 +284,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         console.error("OAuth redirect error:", error);
+        const code = (error as { code?: string })?.code;
+        if (code === "auth/account-exists-with-different-credential") {
+          // Extract and store the pending credential for linking after next sign-in
+          const credential = OAuthProvider.credentialFromError(error);
+          const email = (error as { customData?: { email?: string } })?.customData?.email;
+          const pendingProvider = credential?.providerId || "unknown";
+
+          if (credential && email) {
+            const linkData = {
+              providerId: credential.providerId,
+              accessToken: (credential as { accessToken?: string }).accessToken || null,
+              idToken: (credential as { idToken?: string }).idToken || null,
+            };
+            sessionStorage.setItem(PENDING_LINK_KEY, JSON.stringify(linkData));
+            setPendingLink({ email, pendingProvider });
+            setOauthError(
+              `This email is already registered with a different method. Sign in with your existing account to link ${
+                pendingProvider === "github.com" ? "GitHub" : "Google"
+              }.`
+            );
+          } else {
+            setOauthError(
+              "An account with this email already exists using a different sign-in method."
+            );
+          }
+        } else if (code) {
+          setOauthError(error.message || "OAuth sign-in failed. Please try again.");
+        }
       });
   }, []);
 
@@ -295,6 +360,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resetPassword,
     refreshAdminStatus,
     accessRequested,
+    oauthError,
+    clearOauthError,
+    pendingLink,
     // MFA challenge state (Firebase native TOTP)
     mfaRequired,
     mfaResolver,
