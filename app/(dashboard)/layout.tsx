@@ -40,7 +40,7 @@ const navItems = [
  * and renders onboarding-related overlays
  */
 function OnboardingController() {
-  const { state, loading, isOnboarding, showCompletion, dismissCompletion } = useOnboarding();
+  const { state, loading, isOnboarding, needsWelcome, showCompletion, dismissCompletion } = useOnboarding();
   const { setSidebarMode, toggleSidebar, isSidebarOpen } = useChat();
   const pathname = usePathname();
   const router = useRouter();
@@ -60,8 +60,8 @@ function OnboardingController() {
 
   // Sync sidebar mode with onboarding state
   useEffect(() => {
-    // Don't show onboarding sidebar on welcome page
-    if (pathname === "/welcome") return;
+    // Don't show onboarding sidebar until track is selected
+    if (needsWelcome || pathname === "/welcome") return;
 
     if (isOnboarding) {
       setSidebarMode("onboarding");
@@ -72,7 +72,7 @@ function OnboardingController() {
     } else {
       setSidebarMode("chat");
     }
-  }, [isOnboarding, setSidebarMode, isSidebarOpen, toggleSidebar, pathname]);
+  }, [isOnboarding, needsWelcome, setSidebarMode, isSidebarOpen, toggleSidebar, pathname]);
 
   // Handle completion dismissal - switch to chat mode
   const handleDismissCompletion = async () => {
