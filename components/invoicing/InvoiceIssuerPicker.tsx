@@ -259,6 +259,31 @@ export function InvoiceIssuerPicker({
     [entities, value?.entityId]
   );
 
+  // Persist an IBAN onto an entity's `ibans` array if it isn't already
+  // listed. This "promotes" inferred-from-sources IBANs into the user's
+  // identity so backend validation (updateInvoice) passes — it requires the
+  // chosen IBAN to live on the entity. No-op if the IBAN is already owned.
+  const persistIbanIfInferred = async (
+    entity: IdentityEntity,
+    iban: string
+  ): Promise<boolean> => {
+    if (!iban) return true;
+    const ownIbans = entity.ibans ?? [];
+    if (ownIbans.includes(iban)) return true;
+    try {
+      const nextIbans = [...ownIbans, iban];
+      if (entity.type === "person") {
+        await updatePersonalEntity({ ibans: nextIbans });
+      } else {
+        await updateCompany(entity.id, { ibans: nextIbans });
+      }
+      return true;
+    } catch (err) {
+      console.error("Failed to persist inferred IBAN to entity:", err);
+      return false;
+    }
+  };
+
   // Auto-pick: prefer the first entity that has an IBAN available; fall back
   // to the first entity if none has one (so we still surface the "add IBAN"
   // sub-form for the most likely candidate).
@@ -269,18 +294,41 @@ export function InvoiceIssuerPicker({
 
     const preferred = entitiesWithIban[0] ?? entities[0];
     const ibans = ibansForEntity.get(preferred.id) ?? [];
-    onChange({ entityId: preferred.id, iban: ibans[0] ?? "" });
+    const ibanToPick = ibans[0] ?? "";
+    const ownIbans = preferred.ibans ?? [];
+    if (ibanToPick && !ownIbans.includes(ibanToPick)) {
+      // Auto-pick landed on an inferred IBAN — persist it first, then fire
+      // onChange so the parent picks up the entity+iban together.
+      (async () => {
+        const ok = await persistIbanIfInferred(preferred, ibanToPick);
+        if (ok) onChange({ entityId: preferred.id, iban: ibanToPick });
+      })();
+    } else {
+      onChange({ entityId: preferred.id, iban: ibanToPick });
+    }
   }, [loading, value?.entityId, entities, entitiesWithIban, ibansForEntity, onChange]);
 
-  const handleEntityChange = (entityId: string) => {
+  const handleEntityChange = async (entityId: string) => {
     const e = entities.find((x) => x.id === entityId);
     if (!e) return;
     const ibans = ibansForEntity.get(e.id) ?? [];
-    onChange({ entityId: e.id, iban: ibans[0] ?? "" });
+    const ibanToPick = ibans[0] ?? "";
+    if (ibanToPick) {
+      const ok = await persistIbanIfInferred(e, ibanToPick);
+      if (!ok) return;
+    }
+    onChange({ entityId: e.id, iban: ibanToPick });
   };
 
-  const handleIbanChange = (iban: string) => {
+  const handleIbanChange = async (iban: string) => {
     if (!selectedEntity) return;
+    // If the picked IBAN isn't already on the entity, it came from the
+    // inferred-from-sources list. The backend updateInvoice validates that
+    // the chosen IBAN lives on the entity's `ibans` array, so we have to
+    // persist it first — otherwise the next autosave fails with
+    // "issuerIban does not belong to entity" / "Issuer entity not found".
+    const ok = await persistIbanIfInferred(selectedEntity, iban);
+    if (!ok) return;
     onChange({ entityId: selectedEntity.id, iban });
   };
 

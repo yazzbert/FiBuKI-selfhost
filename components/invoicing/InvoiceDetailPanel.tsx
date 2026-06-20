@@ -254,6 +254,63 @@ export function InvoiceDetailPanel({
     };
   }, []);
 
+  // ---------------------------------------------------------------------
+  // Phantom draft cleanup: when the panel unmounts (close, navigate away,
+  // invoice id changes), delete the underlying invoice if it's still an
+  // empty draft. We always read the most recent invoice/form via refs so
+  // the cleanup callback doesn't capture stale state.
+  // ---------------------------------------------------------------------
+  const invoiceRef = useRef<Invoice | null>(null);
+  const formRef = useRef<LocalForm | null>(null);
+  useEffect(() => {
+    invoiceRef.current = invoice ?? null;
+  }, [invoice]);
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
+
+  useEffect(() => {
+    const idAtMount = invoiceId;
+    return () => {
+      const inv = invoiceRef.current;
+      const f = formRef.current;
+      // Only act on the invoice this effect was tied to.
+      if (!inv || inv.id !== idAtMount) return;
+      if (inv.status !== "draft") return;
+
+      // "Empty" definition: prefer the local form state if available
+      // (captures unflushed edits), otherwise fall back to the persisted
+      // invoice document.
+      const lineItems = f?.lineItems ?? inv.lineItems ?? [];
+      const allItemsEmpty =
+        lineItems.length === 0 ||
+        lineItems.every(
+          (li) => !li.description?.trim() && (li.unitPrice ?? 0) === 0
+        );
+      const recipientPartnerId = f?.recipient?.partnerId ?? inv.recipient?.partnerId ?? "";
+      const notesValue = (f?.notes ?? inv.notes ?? "").trim();
+      const isEmpty =
+        allItemsEmpty && recipientPartnerId === "" && notesValue === "";
+
+      if (!isEmpty) return;
+
+      // Cancel any pending debounced save BEFORE deleting so we don't
+      // race the autosave back into a freshly-deleted doc.
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+
+      // Fire-and-forget: swallow errors silently (the invoice may have
+      // already been issued, deleted, or otherwise transitioned out of
+      // draft state in the meantime).
+      callFunction<{ invoiceId: string }, { success: boolean }>(
+        "deleteInvoice",
+        { invoiceId: idAtMount }
+      ).catch(() => undefined);
+    };
+  }, [invoiceId]);
+
   const updateForm = useCallback(
     (patch: Partial<LocalForm>) => {
       setForm((prev) => {

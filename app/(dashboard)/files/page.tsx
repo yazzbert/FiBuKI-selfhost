@@ -186,9 +186,26 @@ function FilesContent() {
   } | null>(null);
 
   // Close the invoice viewer whenever the invoice id changes or unmounts.
+  // Tracked via ref so the effect only fires on actual id transitions.
+  const lastInvoiceIdRef = useRef<string | null>(null);
   useEffect(() => {
-    setViewerOpen(false);
+    if (lastInvoiceIdRef.current !== invoiceIdParam) {
+      lastInvoiceIdRef.current = invoiceIdParam;
+      setViewerOpen(false);
+    }
   }, [invoiceIdParam]);
+
+  // When the URL carries ?preview=1 (set by the FAB after creating a new
+  // draft), open the overlay immediately and strip the flag from the URL so
+  // subsequent navigation doesn't keep re-opening it.
+  useEffect(() => {
+    if (searchParams.get("preview") !== "1") return;
+    setViewerOpen(true);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("preview");
+    const newUrl = params.toString() ? `/files?${params.toString()}` : "/files";
+    router.replace(newUrl, { scroll: false });
+  }, [searchParams, router]);
 
   const toggleInvoiceViewer = useCallback(() => {
     setViewerOpen((v) => !v);
@@ -588,13 +605,20 @@ function FilesContent() {
         Record<string, never>,
         { invoiceId: string; fileId?: string }
       >("createInvoice", {});
+      // Route via ?invoiceId= so the page's InvoiceDetailPanel branch mounts
+      // at the page level — that branch wires up the lifted preview-source /
+      // viewer-overlay state, which is required for ?preview=1 below to
+      // auto-open the PDF overlay. (The alternative ?id={fileId} route
+      // mounts InvoiceDetailPanel via the FileDetailPanel fork, which does
+      // NOT lift preview state — so the overlay wouldn't be openable.)
+      // Note: this matches the path handleDuplicate falls back to for
+      // legacy responses without fileId.
       const params = new URLSearchParams();
-      if (res.fileId) {
-        params.set("id", res.fileId);
-      } else {
-        // Legacy response without fileId — fall back to invoiceId routing.
-        params.set("invoiceId", res.invoiceId);
-      }
+      params.set("invoiceId", res.invoiceId);
+      // Signal to the page that the PDF preview overlay should open as soon
+      // as the InvoiceDetailPanel has produced a preview source. The flag is
+      // stripped from the URL by the consuming effect.
+      params.set("preview", "1");
       router.push(`/files?${params.toString()}`, { scroll: false });
     } catch (err) {
       console.error("Failed to create invoice:", err);
