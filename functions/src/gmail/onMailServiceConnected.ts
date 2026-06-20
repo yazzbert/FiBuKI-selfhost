@@ -106,21 +106,23 @@ async function setupGmailIntegration(
 
   console.log(`[MailService] Gmail date range: ${dateFrom.toISOString()} to ${dateTo.toISOString()}`);
 
-  // Mark initial sync as ready but paused (user must manually start)
+  // Granting Gmail OAuth signals intent to sync. Start the initial sync
+  // immediately so the user sees imports without a second manual click.
+  // (Was previously paused-by-default, which confused users adding a 2nd
+  // account: the "Pull New Files" button stays hidden while paused, so
+  // the only visible action was the less-obvious "Resume Sync".)
   const now = Timestamp.now();
   await event.data?.ref.update({
     initialSyncStartedAt: now,
-    isPaused: true,
-    pausedAt: now,
+    isPaused: false,
     updatedAt: now,
   });
 
-  // Create sync queue item (paused - user must manually resume)
   await db.collection("gmailSyncQueue").add({
     userId,
     integrationId,
     type: "initial",
-    status: "paused",
+    status: "pending",
     dateFrom: Timestamp.fromDate(dateFrom),
     dateTo: Timestamp.fromDate(dateTo),
     emailsProcessed: 0,
@@ -133,14 +135,13 @@ async function setupGmailIntegration(
     createdAt: now,
   });
 
-  console.log(`[MailService] Gmail integration ready (paused): ${data.email}`);
+  console.log(`[MailService] Gmail integration auto-started: ${data.email}`);
 
-  // Create notification for user
   await db.collection("notifications").add({
     userId,
     type: "mail_service_connected",
     title: "Gmail Connected",
-    message: `${data.email} is ready. Start syncing from the Integrations page when you're ready.`,
+    message: `${data.email} connected. Syncing recent invoices now.`,
     read: false,
     createdAt: now,
   });

@@ -13,6 +13,7 @@
 
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
+import { randomUUID } from "crypto";
 import { TOOL_DEFINITIONS, TOOL_NAMES } from "./definitions";
 import type { ToolName } from "./definitions";
 import { PLANS } from "../billing/config";
@@ -182,10 +183,9 @@ export async function getSource(userId: string, sourceId: string) {
 // ============================================================================
 
 export async function listTransactions(userId: string, args: Record<string, unknown>) {
-  let query = db
+  let query: FirebaseFirestore.Query = db
     .collection("transactions")
-    .where("userId", "==", userId)
-    .orderBy("date", "desc");
+    .where("userId", "==", userId);
 
   if (args.sourceId) {
     query = query.where("sourceId", "==", args.sourceId);
@@ -194,8 +194,41 @@ export async function listTransactions(userId: string, args: Record<string, unkn
     query = query.where("isComplete", "==", args.isComplete);
   }
 
-  const limit = Math.min((args.limit as number) || 50, 100);
-  query = query.limit(limit);
+  // Date range pushed into the query so filters apply BEFORE the limit.
+  // Dates come in as YYYY-MM-DD (Europe/Vienna). Use local midnight for from,
+  // next-day midnight for to (inclusive end-of-day).
+  if (args.dateFrom) {
+    const fromDate = new Date(`${args.dateFrom as string}T00:00:00+01:00`);
+    if (!isNaN(fromDate.getTime())) {
+      query = query.where("date", ">=", Timestamp.fromDate(fromDate));
+    }
+  }
+  if (args.dateTo) {
+    const toDate = new Date(`${args.dateTo as string}T00:00:00+01:00`);
+    if (!isNaN(toDate.getTime())) {
+      toDate.setDate(toDate.getDate() + 1);
+      query = query.where("date", "<", Timestamp.fromDate(toDate));
+    }
+  }
+
+  query = query.orderBy("date", "desc");
+
+  // Cursor pagination: cursor is the last document id from the previous page.
+  if (args.cursor) {
+    const cursorSnap = await db.collection("transactions").doc(args.cursor as string).get();
+    if (cursorSnap.exists && cursorSnap.data()?.userId === userId) {
+      query = query.startAfter(cursorSnap);
+    }
+  }
+
+  // Search is a substring match that Firestore can't push down. When set we
+  // overfetch (up to 5x the requested limit) and filter in memory, capped to
+  // avoid runaway scans. Callers that need stable pagination should avoid
+  // combining `search` with `cursor`.
+  const requestedLimit = Math.min(Math.max((args.limit as number) || 50, 1), 500);
+  const search = (args.search as string | undefined)?.toLowerCase();
+  const fetchLimit = search ? Math.min(requestedLimit * 5, 1000) : requestedLimit;
+  query = query.limit(fetchLimit);
 
   const snapshot = await query.get();
   let transactions = snapshot.docs.map((doc) => {
@@ -208,24 +241,22 @@ export async function listTransactions(userId: string, args: Record<string, unkn
     } as Record<string, unknown>;
   });
 
-  // Client-side filters (for fields not indexed together)
-  if (args.dateFrom) {
-    transactions = transactions.filter((t) => (t.date as string) >= (args.dateFrom as string));
-  }
-  if (args.dateTo) {
-    transactions = transactions.filter((t) => (t.date as string) <= (args.dateTo as string));
-  }
-  if (args.search) {
-    const search = (args.search as string).toLowerCase();
+  if (search) {
     transactions = transactions.filter(
       (t) =>
         (t.name as string | undefined)?.toLowerCase().includes(search) ||
         (t.description as string | undefined)?.toLowerCase().includes(search) ||
         (t.partner as string | undefined)?.toLowerCase().includes(search)
     );
+    transactions = transactions.slice(0, requestedLimit);
   }
 
-  return transactions;
+  const hasMore = snapshot.docs.length === fetchLimit;
+  const nextCursor = hasMore && transactions.length > 0
+    ? (transactions[transactions.length - 1].id as string)
+    : null;
+
+  return { transactions, nextCursor, count: transactions.length };
 }
 
 export async function getTransaction(userId: string, transactionId: string) {
@@ -906,23 +937,27 @@ export async function uploadFile(userId: string, args: Record<string, unknown>) 
     fileBuffer = Buffer.from(arrayBuffer);
   }
 
-  // Upload to Storage
+  // Upload to Storage with a Firebase download token (avoids signBlob IAM)
   const bucket = getStorage().bucket();
   const storagePath = `users/${userId}/files/${Date.now()}_${fileName}`;
   const file = bucket.file(storagePath);
+  const downloadToken = randomUUID();
 
   await file.save(fileBuffer, {
+    contentType: mimeType as string,
     metadata: {
-      contentType: mimeType as string,
-      metadata: { userId },
+      metadata: {
+        userId,
+        firebaseStorageDownloadTokens: downloadToken,
+      },
     },
   });
 
-  // Get download URL
-  const [downloadUrl] = await file.getSignedUrl({
-    action: "read",
-    expires: "2099-01-01",
-  });
+  const encodedPath = encodeURIComponent(storagePath);
+  const storageEmulatorHost = process.env.FIREBASE_STORAGE_EMULATOR_HOST;
+  const downloadUrl = storageEmulatorHost
+    ? `http://${storageEmulatorHost}/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`
+    : `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
 
   // Create file record in Firestore
   const now = FieldValue.serverTimestamp();

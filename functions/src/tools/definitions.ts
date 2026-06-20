@@ -76,16 +76,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   // =========================================================================
   {
     name: "list_transactions",
-    description: "List transactions with optional filters. Dates are YYYY-MM-DD (local timezone). Amounts in cents.",
+    description: "List transactions with optional filters. Dates are YYYY-MM-DD (local timezone). Amounts in cents. Returns { transactions, nextCursor, count }. Pass nextCursor back as cursor for the next page.",
     inputSchema: {
       type: "object",
       properties: {
         sourceId: { type: "string", description: "Filter by bank account ID" },
-        dateFrom: { type: "string", description: "Start date (YYYY-MM-DD)" },
-        dateTo: { type: "string", description: "End date (YYYY-MM-DD)" },
-        search: { type: "string", description: "Search in name, description, partner" },
+        dateFrom: { type: "string", description: "Start date inclusive (YYYY-MM-DD). Pushed into the query, applied before limit." },
+        dateTo: { type: "string", description: "End date inclusive (YYYY-MM-DD). Pushed into the query, applied before limit." },
+        search: { type: "string", description: "Substring match on name/description/partner. Applied after fetch so pagination is approximate when combined with cursor." },
         isComplete: { type: "boolean", description: "Filter by completion status" },
-        limit: { type: "number", description: "Max results (default 50, max 100)" },
+        limit: { type: "number", description: "Max results per page (default 50, max 500)" },
+        cursor: { type: "string", description: "nextCursor from the previous response to fetch the next page" },
       },
     },
   },
