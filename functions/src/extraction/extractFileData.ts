@@ -28,6 +28,12 @@ export const extractFileDataOnUndelete = onDocumentUpdated(
 
     const fileId = event.params.fileId;
 
+    // Fibuki-generated invoices already have all fields pre-filled; never extract.
+    if (after.isFibukiGenerated) {
+      console.log(`File ${fileId} is Fibuki-generated, skipping extraction`);
+      return;
+    }
+
     // Check if this is an undelete operation
     const wasDeleted = !!before.deletedAt;
     const isNowNotDeleted = !after.deletedAt;
@@ -76,6 +82,12 @@ export const extractFileData = onDocumentCreated(
     // Skip if already processed
     if (fileData.extractionComplete) {
       console.log(`File ${fileId} already processed, skipping`);
+      return;
+    }
+
+    // Fibuki-generated invoices already have all fields pre-filled; never extract.
+    if (fileData.isFibukiGenerated) {
+      console.log(`File ${fileId} is Fibuki-generated, skipping extraction`);
       return;
     }
 

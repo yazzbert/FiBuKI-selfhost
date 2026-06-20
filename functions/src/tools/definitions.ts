@@ -76,13 +76,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   // =========================================================================
   {
     name: "list_transactions",
-    description: "List transactions with optional filters. Returns date, amount (cents), partner, completion status.",
+    description: "List transactions with optional filters. Dates are YYYY-MM-DD (local timezone). Amounts in cents.",
     inputSchema: {
       type: "object",
       properties: {
         sourceId: { type: "string", description: "Filter by bank account ID" },
-        dateFrom: { type: "string", description: "Start date (ISO format)" },
-        dateTo: { type: "string", description: "End date (ISO format)" },
+        dateFrom: { type: "string", description: "Start date (YYYY-MM-DD)" },
+        dateTo: { type: "string", description: "End date (YYYY-MM-DD)" },
         search: { type: "string", description: "Search in name, description, partner" },
         isComplete: { type: "boolean", description: "Filter by completion status" },
         limit: { type: "number", description: "Max results (default 50, max 100)" },
@@ -331,6 +331,167 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       type: "object",
       properties: { transactionId: { type: "string", description: "The transaction ID" } },
       required: ["transactionId"],
+    },
+  },
+
+  // =========================================================================
+  // Invoicing
+  // =========================================================================
+  {
+    name: "create_invoice",
+    description:
+      "Create a new draft invoice for a customer (partner). Amounts in cents, net (pre-VAT). Returns the new invoiceId and a placeholder DRAFT-XXX number. The real number is allocated when the invoice is issued.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        partnerId: { type: "string", description: "Recipient partner ID" },
+        partnerType: {
+          type: "string",
+          enum: ["user", "global"],
+          description: "Partner scope (default: user)",
+        },
+        lineItems: {
+          type: "array",
+          description: "Invoice line items (at least one required to issue)",
+          items: {
+            type: "object",
+            properties: {
+              description: { type: "string", description: "Item description" },
+              quantity: { type: "number", description: "Quantity" },
+              unitPrice: {
+                type: "number",
+                description: "Unit price in cents, net (pre-VAT)",
+              },
+              vatRate: {
+                type: "number",
+                description: "VAT rate in percent (default 20)",
+              },
+            },
+            required: ["description", "quantity", "unitPrice"],
+          },
+        },
+        issueDate: {
+          type: "string",
+          description: "ISO date (YYYY-MM-DD). Defaults to today.",
+        },
+        paymentTerms: {
+          type: "string",
+          description: "Free text e.g. 'Payable within 30 days'",
+        },
+        currency: { type: "string", description: "ISO 4217 (default EUR)" },
+        notes: { type: "string", description: "Free-text footer note" },
+        issuerEntityId: {
+          type: "string",
+          description: "Identity entity to issue from (default: first/default)",
+        },
+        issuerIban: {
+          type: "string",
+          description: "Specific IBAN to use (must belong to the entity)",
+        },
+      },
+      required: ["partnerId"],
+    },
+  },
+  {
+    name: "update_invoice",
+    description:
+      "Patch a draft invoice. Server recomputes totals and due date. Rejected if status is not 'draft'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invoiceId: { type: "string", description: "Invoice ID" },
+        patch: {
+          type: "object",
+          description: "Fields to update (partial)",
+          properties: {
+            partnerId: { type: "string" },
+            partnerType: { type: "string", enum: ["user", "global"] },
+            issuerEntityId: { type: "string" },
+            issuerIban: { type: "string" },
+            issueDate: { type: "string", description: "ISO date YYYY-MM-DD" },
+            paymentTerms: { type: "string" },
+            currency: { type: "string" },
+            lineItems: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  description: { type: "string" },
+                  quantity: { type: "number" },
+                  unitPrice: { type: "number" },
+                  vatRate: { type: "number" },
+                },
+              },
+            },
+            notes: { type: "string" },
+          },
+        },
+      },
+      required: ["invoiceId", "patch"],
+    },
+  },
+  {
+    name: "issue_invoice",
+    description:
+      "Issue a draft invoice: allocates real number, renders the PDF, uploads to Storage, creates the linked TaxFile, and triggers the matching pipeline. Optionally creates a public share link.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        invoiceId: { type: "string", description: "Invoice ID" },
+        createShareLink: {
+          type: "boolean",
+          description: "If true, generate a public share token",
+        },
+      },
+      required: ["invoiceId"],
+    },
+  },
+  {
+    name: "list_invoices",
+    description: "List invoices with optional filters",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["draft", "issued", "sent", "paid", "cancelled"],
+          description: "Filter by status",
+        },
+        partnerId: { type: "string", description: "Filter by recipient partner" },
+        fromDate: { type: "string", description: "Issue date >= (ISO)" },
+        toDate: { type: "string", description: "Issue date <= (ISO)" },
+        limit: { type: "number", description: "Max results (default 100, max 500)" },
+      },
+    },
+  },
+  {
+    name: "get_invoice",
+    description: "Get a single invoice with downloadUrl and shareUrl if available",
+    inputSchema: {
+      type: "object",
+      properties: { invoiceId: { type: "string", description: "Invoice ID" } },
+      required: ["invoiceId"],
+    },
+  },
+  {
+    name: "duplicate_invoice",
+    description:
+      "Duplicate an existing invoice as a new draft. Resets number, file link, share token, and lifecycle timestamps. issueDate becomes today.",
+    inputSchema: {
+      type: "object",
+      properties: { invoiceId: { type: "string", description: "Source invoice ID" } },
+      required: ["invoiceId"],
+    },
+  },
+  {
+    name: "cancel_invoice",
+    description:
+      "Cancel an issued/sent/paid invoice. Sets status to 'cancelled' and soft-deletes the linked file.",
+    inputSchema: {
+      type: "object",
+      properties: { invoiceId: { type: "string", description: "Invoice ID" } },
+      required: ["invoiceId"],
     },
   },
 

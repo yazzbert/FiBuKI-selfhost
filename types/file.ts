@@ -360,6 +360,14 @@ export interface TaxFile {
    */
   invoiceDirection?: InvoiceDirection;
 
+  // === Fibuki-generated invoices ===
+
+  /** If set, this file is a Fibuki-generated invoice. Points to /invoices/{id}. */
+  invoiceId?: string;
+
+  /** When true, file was created by Fibuki (not uploaded). Bypasses extraction trigger. */
+  isFibukiGenerated?: boolean;
+
   // === Soft Delete (for Gmail imports) ===
 
   /** Soft deletion timestamp - file won't be re-imported if deleted */

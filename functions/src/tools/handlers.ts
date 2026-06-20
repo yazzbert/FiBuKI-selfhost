@@ -18,6 +18,19 @@ import type { ToolName } from "./definitions";
 import { PLANS } from "../billing/config";
 import type { PlanId, PlanFeatures } from "../billing/config";
 
+/**
+ * Convert a Firestore Timestamp to YYYY-MM-DD in Europe/Vienna timezone.
+ * Bank transactions are date-only — returning full ISO timestamps causes
+ * timezone confusion (e.g. Dec 1 CET → Nov 30 UTC).
+ */
+function toLocalDate(ts: Timestamp | { toDate?: () => Date } | string | null | undefined): string | null {
+  if (!ts) return null;
+  if (typeof ts === "string") return ts;
+  const date = typeof (ts as Timestamp).toDate === "function" ? (ts as Timestamp).toDate() : null;
+  if (!date) return null;
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Vienna" }).format(date);
+}
+
 export { TOOL_NAMES };
 export type { ToolName };
 
@@ -114,6 +127,22 @@ export async function handleTool(
     case "remove_no_receipt_category":
       return removeNoReceiptCategory(userId, args.transactionId as string);
 
+    // Invoicing
+    case "create_invoice":
+      return createInvoice(userId, args);
+    case "update_invoice":
+      return updateInvoice(userId, args);
+    case "issue_invoice":
+      return issueInvoice(userId, args);
+    case "list_invoices":
+      return listInvoices(userId, args);
+    case "get_invoice":
+      return getInvoice(userId, args);
+    case "duplicate_invoice":
+      return duplicateInvoice(userId, args);
+    case "cancel_invoice":
+      return cancelInvoice(userId, args);
+
     // Status
     case "get_automation_status":
       return getAutomationStatus(userId);
@@ -174,19 +203,17 @@ export async function listTransactions(userId: string, args: Record<string, unkn
     return {
       id: doc.id,
       ...data,
-      date: data.date?.toDate?.()?.toISOString() || data.date,
+      date: toLocalDate(data.date) || data.date,
       amountFormatted: `${((data.amount || 0) / 100).toFixed(2)} ${data.currency || "EUR"}`,
     } as Record<string, unknown>;
   });
 
   // Client-side filters (for fields not indexed together)
   if (args.dateFrom) {
-    const from = new Date(args.dateFrom as string);
-    transactions = transactions.filter((t) => new Date(t.date as string) >= from);
+    transactions = transactions.filter((t) => (t.date as string) >= (args.dateFrom as string));
   }
   if (args.dateTo) {
-    const to = new Date(args.dateTo as string);
-    transactions = transactions.filter((t) => new Date(t.date as string) <= to);
+    transactions = transactions.filter((t) => (t.date as string) <= (args.dateTo as string));
   }
   if (args.search) {
     const search = (args.search as string).toLowerCase();
@@ -213,7 +240,7 @@ export async function getTransaction(userId: string, transactionId: string) {
   return {
     id: doc.id,
     ...data,
-    date: data.date?.toDate?.()?.toISOString() || data.date,
+    date: toLocalDate(data.date) || data.date,
     amountFormatted: `${((data.amount || 0) / 100).toFixed(2)} ${data.currency || "EUR"}`,
   };
 }
@@ -244,7 +271,10 @@ export async function listTransactionsNeedingFiles(userId: string, args: Record<
 
   const snapshot = await query.get();
   let transactions = snapshot.docs
-    .map((doc) => ({ id: doc.id, ...doc.data() } as Record<string, unknown>))
+    .map((doc) => {
+      const data = doc.data();
+      return { id: doc.id, ...data, date: toLocalDate(data.date) || data.date } as Record<string, unknown>;
+    })
     .filter(
       (t) =>
         (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) && !t.noReceiptCategoryId && !t.quotaExceeded
@@ -1036,4 +1066,107 @@ export async function getAutomationStatus(userId: string) {
       month: sub.transactionCountMonth ?? null,
     },
   };
+}
+
+// ============================================================================
+// Invoicing
+// ============================================================================
+
+export async function createInvoice(userId: string, args: Record<string, unknown>) {
+  const { performCreateInvoice } = await import("../invoicing/createInvoice");
+  const result = await performCreateInvoice(db, userId, {
+    partnerId: args.partnerId as string,
+    partnerType: ((args.partnerType as "user" | "global") || "user") as "user" | "global",
+    issuerEntityId: args.issuerEntityId as string | undefined,
+    issuerIban: args.issuerIban as string | undefined,
+    issueDate: args.issueDate as string | undefined,
+    paymentTerms: args.paymentTerms as string | undefined,
+    currency: args.currency as string | undefined,
+    lineItems: args.lineItems as Array<{
+      description: string;
+      quantity: number;
+      unitPrice: number;
+      vatRate?: number;
+    }> | undefined,
+    notes: args.notes as string | undefined,
+  });
+
+  // Look up the freshly-created invoice number for the response.
+  const snap = await db.collection("invoices").doc(result.invoiceId).get();
+  const number = snap.exists ? (snap.data() as { number?: string }).number || "" : "";
+  return { invoiceId: result.invoiceId, status: "draft" as const, number };
+}
+
+export async function updateInvoice(userId: string, args: Record<string, unknown>) {
+  const { performUpdateInvoice } = await import("../invoicing/updateInvoice");
+  if (!args.invoiceId) throw new Error("invoiceId is required");
+  if (!args.patch || typeof args.patch !== "object") {
+    throw new Error("patch is required");
+  }
+  const result = await performUpdateInvoice(db, userId, {
+    invoiceId: args.invoiceId as string,
+    patch: args.patch as Record<string, unknown>,
+  });
+  return { invoiceId: result.invoiceId, status: result.status };
+}
+
+export async function issueInvoice(userId: string, args: Record<string, unknown>) {
+  const { performIssueInvoice } = await import("../invoicing/issueInvoice");
+  const result = await performIssueInvoice(db, userId, {
+    invoiceId: args.invoiceId as string,
+    createShareLink: args.createShareLink as boolean | undefined,
+  });
+  const response: Record<string, unknown> = {
+    invoiceId: result.invoiceId,
+    fileId: result.fileId,
+    downloadUrl: result.downloadUrl,
+  };
+  if (result.shareUrl) response.shareUrl = result.shareUrl;
+  if (result.shareToken) response.shareToken = result.shareToken;
+  return response;
+}
+
+export async function listInvoices(userId: string, args: Record<string, unknown>) {
+  const { performListInvoices } = await import("../invoicing/listInvoices");
+  const result = await performListInvoices(db, userId, {
+    status: args.status as
+      | "draft"
+      | "issued"
+      | "sent"
+      | "paid"
+      | "cancelled"
+      | undefined,
+    partnerId: args.partnerId as string | undefined,
+    fromDate: args.fromDate as string | undefined,
+    toDate: args.toDate as string | undefined,
+    limit: args.limit as number | undefined,
+  });
+  return result.invoices;
+}
+
+export async function getInvoice(userId: string, args: Record<string, unknown>) {
+  const { performGetInvoice } = await import("../invoicing/getInvoice");
+  const result = await performGetInvoice(db, userId, {
+    invoiceId: args.invoiceId as string,
+  });
+  const response: Record<string, unknown> = { invoice: result.invoice };
+  if (result.downloadUrl) response.downloadUrl = result.downloadUrl;
+  if (result.shareUrl) response.shareUrl = result.shareUrl;
+  return response;
+}
+
+export async function duplicateInvoice(userId: string, args: Record<string, unknown>) {
+  const { performDuplicateInvoice } = await import("../invoicing/duplicateInvoice");
+  const result = await performDuplicateInvoice(db, userId, {
+    invoiceId: args.invoiceId as string,
+  });
+  return { invoiceId: result.invoiceId };
+}
+
+export async function cancelInvoice(userId: string, args: Record<string, unknown>) {
+  const { performCancelInvoice } = await import("../invoicing/cancelInvoice");
+  const result = await performCancelInvoice(db, userId, {
+    invoiceId: args.invoiceId as string,
+  });
+  return { invoiceId: result.invoiceId, status: result.status };
 }

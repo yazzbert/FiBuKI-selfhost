@@ -100,6 +100,18 @@ export type CloudFunctionName =
   | "updateBrowserRecipe"
   | "deleteBrowserRecipe"
   | "migrateInvoiceSources"
+  // Invoicing operations
+  | "createInvoice"
+  | "updateInvoice"
+  | "issueInvoice"
+  | "regenerateInvoicePdf"
+  | "duplicateInvoice"
+  | "cancelInvoice"
+  | "deleteInvoice"
+  | "createInvoiceShareLink"
+  | "revokeInvoiceShareLink"
+  | "listInvoices"
+  | "getInvoice"
   // Card reconciliation operations
   | "confirmReconciliation"
   | "rejectReconciliation"

@@ -48,6 +48,19 @@ service cloud.firestore {
       allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
     }
 
+    // Invoices - users can read their own, writes via Cloud Functions only
+    match /invoices/{docId} {
+      allow get: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow list: if isAuthenticated();
+      allow write: if false; // Cloud Functions only
+    }
+
+    // Invoice share tokens - reads via server context (Admin SDK in public route),
+    // writes via Cloud Functions only
+    match /invoiceShares/{token} {
+      allow read, write: if false;
+    }
+
     match /partners/{docId} {
       allow get: if isAuthenticated() && resource.data.userId == request.auth.uid;
       allow list: if isAuthenticated();

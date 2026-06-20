@@ -60,6 +60,7 @@ import { db } from "@/lib/firebase/config";
 import { cn, toDateSafe } from "@/lib/utils";
 import { useAuth } from "@/components/auth";
 import { useChat } from "@/components/chat/chat-provider";
+import { InvoiceDetailPanel } from "@/components/invoicing/InvoiceDetailPanel";
 
 // Helper to determine invoice type status for display
 type InvoiceTypeStatus = 'unknown' | 'analyzing' | 'invoice' | 'not_invoice';
@@ -104,7 +105,21 @@ interface FileDetailPanelProps {
   isConnectTransactionOpen?: boolean;
 }
 
-export function FileDetailPanel({
+export function FileDetailPanel(props: FileDetailPanelProps) {
+  // Fibuki-generated invoice files fork to the invoice editor.
+  if (props.file.invoiceId) {
+    return (
+      <InvoiceDetailPanel
+        invoiceId={props.file.invoiceId}
+        fileId={props.file.id}
+        onClose={props.onClose}
+      />
+    );
+  }
+  return <FileDetailPanelInner {...props} />;
+}
+
+function FileDetailPanelInner({
   file,
   onClose,
   onNavigatePrevious,

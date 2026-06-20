@@ -134,6 +134,23 @@ export {
   deleteTransactionsBySourceCallable as deleteTransactionsBySource,
 } from "./transactions";
 
+// Invoicing operations
+export {
+  createInvoiceCallable as createInvoice,
+  updateInvoiceCallable as updateInvoice,
+  issueInvoiceCallable as issueInvoice,
+  regenerateInvoicePdfCallable as regenerateInvoicePdf,
+  duplicateInvoiceCallable as duplicateInvoice,
+  cancelInvoiceCallable as cancelInvoice,
+  deleteInvoiceCallable as deleteInvoice,
+  createInvoiceShareLinkCallable as createInvoiceShareLink,
+  revokeInvoiceShareLinkCallable as revokeInvoiceShareLink,
+  listInvoicesCallable as listInvoices,
+  getInvoiceCallable as getInvoice,
+  onFileConnectionCreatedSyncInvoice,
+  onFileConnectionDeletedSyncInvoice,
+} from "./invoicing";
+
 // File operations
 export {
   createFileCallable as createFile,
