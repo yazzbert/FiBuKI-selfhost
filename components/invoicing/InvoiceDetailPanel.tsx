@@ -27,6 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import { callFunction } from "@/lib/firebase/callable";
 import { db } from "@/lib/firebase/config";
 import { useInvoice } from "@/hooks/use-invoice";
+import { useUserData } from "@/hooks/use-user-data";
 import {
   DEFAULT_PAYMENT_TERMS,
   Invoice,
@@ -145,10 +146,65 @@ export function InvoiceDetailPanel({
   onToggleViewer,
 }: InvoiceDetailPanelProps) {
   const { invoice, loading } = useInvoice(invoiceId);
+  const { userData } = useUserData();
   const [form, setForm] = useState<LocalForm | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const initRef = useRef(false);
+
+  // Reactively re-snapshot the issuer when the user edits identity in another
+  // tab. The backend re-snapshots whenever issuerEntityId is in the patch, so
+  // we just resend the current ids and let the server pull fresh name / VAT /
+  // address from userData.
+  const issuerEntityId = invoice?.issuer?.entityId;
+  const issuerIban = invoice?.issuer?.iban;
+  const issuerSignature = useMemo(() => {
+    if (!userData || !issuerEntityId) return null;
+    const all = [
+      userData.personalEntity,
+      ...(userData.companies ?? []),
+    ].filter((e): e is NonNullable<typeof e> => !!e);
+    const entity = all.find((e) => e.id === issuerEntityId);
+    if (!entity) return null;
+    // Address is stored in Firestore but not on the formal IdentityEntity
+    // type, so read it via an indexed access cast.
+    const address =
+      (entity as unknown as { address?: unknown }).address ?? null;
+    return JSON.stringify({
+      name: entity.name ?? "",
+      vatId: entity.vatId ?? "",
+      address,
+    });
+  }, [userData, issuerEntityId]);
+
+  const lastIssuerSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!invoice || invoice.status !== "draft") return;
+    if (!issuerEntityId || !issuerIban) return;
+    if (issuerSignature === null) return;
+    if (lastIssuerSignatureRef.current === null) {
+      // First seen for this invoice — just remember.
+      lastIssuerSignatureRef.current = issuerSignature;
+      return;
+    }
+    if (lastIssuerSignatureRef.current === issuerSignature) return;
+    lastIssuerSignatureRef.current = issuerSignature;
+    // Fire-and-forget patch with same ids; server re-snapshots from userData.
+    callFunction<
+      { invoiceId: string; patch: Record<string, unknown> },
+      { invoiceId: string; status: string }
+    >("updateInvoice", {
+      invoiceId,
+      patch: { issuerEntityId, issuerIban },
+    }).catch((err) => {
+      console.error("Issuer re-snapshot failed:", err);
+    });
+  }, [invoice, issuerEntityId, issuerIban, issuerSignature, invoiceId]);
+
+  // Reset the tracking ref when switching invoices
+  useEffect(() => {
+    lastIssuerSignatureRef.current = null;
+  }, [invoiceId]);
 
   // Hydrate the local form from the invoice once it loads (and whenever the
   // invoice id changes).
@@ -593,7 +649,10 @@ export function InvoiceDetailPanel({
                       onClick={onToggleViewer}
                       active={viewerOpen}
                     />
-                    <p className="text-xs text-muted-foreground text-center mt-1">
+                    {/* Fixed-width caption so its width doesn't pulse between
+                        "Klicken zum Schließen" and the shorter "Aktualisiere…"
+                        which causes the surrounding layout to jump. */}
+                    <p className="text-xs text-muted-foreground text-center mt-1 mx-auto" style={{ minWidth: "13ch" }}>
                       {draftRendering
                         ? "Aktualisiere…"
                         : viewerOpen

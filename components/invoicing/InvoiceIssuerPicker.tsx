@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Loader2, Settings } from "lucide-react";
+import { ExternalLink, Loader2, Settings } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -364,9 +364,23 @@ export function InvoiceIssuerPicker({
       )}
 
       {selectedEntity && (
-        <div className="text-xs text-muted-foreground space-y-0.5 pl-1">
-          {selectedEntity.vatId && <div>UID: {selectedEntity.vatId}</div>}
-          {derivedBic && <div>BIC: {derivedBic}</div>}
+        <div className="text-xs text-muted-foreground pl-1 flex items-start justify-between gap-2">
+          <div className="space-y-0.5 min-w-0 flex-1">
+            {selectedEntity.vatId && <div>UID: {selectedEntity.vatId}</div>}
+            {derivedBic && <div>BIC: {derivedBic}</div>}
+          </div>
+          {!disabled && (
+            <Link
+              href="/settings/identity"
+              target="_blank"
+              rel="noopener"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline flex-shrink-0"
+              title="Identität in neuem Tab bearbeiten"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Bearbeiten
+            </Link>
+          )}
         </div>
       )}
 
