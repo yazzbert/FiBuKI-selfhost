@@ -1,6 +1,28 @@
 import { doc, getDoc, setDoc, Timestamp } from "firebase/firestore";
-import { UserData, UserDataFormData, IdentityEntity } from "@/types/user-data";
+import {
+  IdentityEntity,
+  IdentityEntityAddress,
+  UserData,
+  UserDataFormData,
+} from "@/types/user-data";
 import { OperationsContext } from "./types";
+
+/**
+ * Strip empty strings from an address; return undefined if nothing
+ * meaningful is left. Firestore doesn't accept undefined fields, so
+ * callers omit the whole `address` key when this returns undefined.
+ */
+function normalizeIdentityAddress(
+  raw: IdentityEntityAddress | undefined | null
+): IdentityEntityAddress | undefined {
+  if (!raw) return undefined;
+  const trimmed: IdentityEntityAddress = {};
+  if (raw.street?.trim()) trimmed.street = raw.street.trim();
+  if (raw.postalCode?.trim()) trimmed.postalCode = raw.postalCode.trim();
+  if (raw.city?.trim()) trimmed.city = raw.city.trim();
+  if (raw.country?.trim()) trimmed.country = raw.country.trim().toUpperCase();
+  return Object.keys(trimmed).length > 0 ? trimmed : undefined;
+}
 
 const SETTINGS_COLLECTION = "settings";
 const USER_DATA_DOC = "userData";
@@ -182,6 +204,10 @@ export async function saveUserData(
     // Only include optional fields if they have values (Firestore doesn't accept undefined)
     if (personalVatId) personalEntity.vatId = personalVatId;
     if (personalPartnerId) personalEntity.partnerId = personalPartnerId;
+    const personalAddress = normalizeIdentityAddress(
+      data.personalEntity.address ?? existingData?.personalEntity?.address
+    );
+    if (personalAddress) personalEntity.address = personalAddress;
 
     userData.personalEntity = personalEntity;
   } else if (existingData?.personalEntity) {
@@ -205,6 +231,8 @@ export async function saveUserData(
       // Only include optional fields if they have values
       if (companyVatId) company.vatId = companyVatId;
       if (c.partnerId) company.partnerId = c.partnerId;
+      const companyAddress = normalizeIdentityAddress(c.address);
+      if (companyAddress) company.address = companyAddress;
 
       return company;
     });

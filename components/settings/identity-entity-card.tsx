@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { IdentityEntityFormData } from "@/types/user-data";
+import { IdentityEntityAddress, IdentityEntityFormData } from "@/types/user-data";
 import { cn } from "@/lib/utils";
 
 interface InferredIban {
@@ -132,6 +132,68 @@ export function IdentityEntityCard({
               className="font-mono"
             />
           </div>
+        </div>
+
+        {/* Address (shown on issued invoices) */}
+        <div className="space-y-2">
+          <Label>Address</Label>
+          <div className="space-y-2">
+            <Input
+              placeholder="Street and number"
+              value={entity.address?.street ?? ""}
+              onChange={(e) =>
+                onChange({
+                  address: {
+                    ...(entity.address ?? {}),
+                    street: e.target.value,
+                  } as IdentityEntityAddress,
+                })
+              }
+            />
+            <div className="grid grid-cols-[1fr_2fr] gap-2">
+              <Input
+                placeholder="Postal code"
+                value={entity.address?.postalCode ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    address: {
+                      ...(entity.address ?? {}),
+                      postalCode: e.target.value,
+                    } as IdentityEntityAddress,
+                  })
+                }
+              />
+              <Input
+                placeholder="City"
+                value={entity.address?.city ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    address: {
+                      ...(entity.address ?? {}),
+                      city: e.target.value,
+                    } as IdentityEntityAddress,
+                  })
+                }
+              />
+            </div>
+            <Input
+              placeholder="Country (e.g., AT)"
+              value={entity.address?.country ?? ""}
+              onChange={(e) =>
+                onChange({
+                  address: {
+                    ...(entity.address ?? {}),
+                    country: e.target.value.toUpperCase().slice(0, 2),
+                  } as IdentityEntityAddress,
+                })
+              }
+              className="font-mono uppercase"
+              maxLength={2}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Shown as the sender block on issued invoices.
+          </p>
         </div>
 
         {/* Aliases */}

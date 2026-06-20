@@ -11,6 +11,19 @@ import { FinanzOnlineConfig } from "./finanzonline";
 export type TaxCountryCode = "AT" | "DE" | "CH";
 
 /**
+ * Postal address used on issued invoices. All parts optional so
+ * partial addresses are fine at draft time; UI nudges the user to fill
+ * in what they want shown on the PDF.
+ */
+export interface IdentityEntityAddress {
+  street?: string;
+  postalCode?: string;
+  city?: string;
+  /** ISO 3166-1 alpha-2 country code, e.g. "AT", "DE". */
+  country?: string;
+}
+
+/**
  * A single identity entity (person or company)
  * Each entity can have its own name, VAT ID, IBANs, and aliases
  */
@@ -32,6 +45,9 @@ export interface IdentityEntity {
 
   /** Bank accounts for this entity */
   ibans: string[];
+
+  /** Postal address shown on issued invoices (sender block). */
+  address?: IdentityEntityAddress;
 
   /** Linked partner ID (created automatically for matching) */
   partnerId?: string;
@@ -149,6 +165,7 @@ export interface IdentityEntityFormData {
   aliases: string[];
   vatId?: string;
   ibans: string[];
+  address?: IdentityEntityAddress;
   partnerId?: string;
   order?: number;
 }

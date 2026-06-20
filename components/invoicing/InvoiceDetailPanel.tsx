@@ -166,14 +166,10 @@ export function InvoiceDetailPanel({
     ].filter((e): e is NonNullable<typeof e> => !!e);
     const entity = all.find((e) => e.id === issuerEntityId);
     if (!entity) return null;
-    // Address is stored in Firestore but not on the formal IdentityEntity
-    // type, so read it via an indexed access cast.
-    const address =
-      (entity as unknown as { address?: unknown }).address ?? null;
     return JSON.stringify({
       name: entity.name ?? "",
       vatId: entity.vatId ?? "",
-      address,
+      address: entity.address ?? null,
     });
   }, [userData, issuerEntityId]);
 
