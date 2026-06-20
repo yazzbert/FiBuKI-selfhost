@@ -1,5 +1,5 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
   normalizeIban,
   normalizeCompanyName,
@@ -359,15 +359,159 @@ export const generatePromotionCandidates = onCall(
         candidatesCreated++;
       }
 
+      // 7. Auto-approve VIES-verified candidates
+      // Query all existing global partners with VAT IDs for merge lookup
+      const globalPartnersSnapshot = await db
+        .collection("globalPartners")
+        .where("isActive", "==", true)
+        .get();
+
+      const globalPartnersByVat = new Map<string, { id: string; data: FirebaseFirestore.DocumentData }>();
+      for (const doc of globalPartnersSnapshot.docs) {
+        const data = doc.data();
+        if (data.vatId) {
+          const normalizedVat = data.vatId.replace(/\s+/g, "").toUpperCase();
+          globalPartnersByVat.set(normalizedVat, { id: doc.id, data });
+        }
+      }
+
+      // Commit candidates batch, then post-process VIES-verified ones
       await batch.commit();
 
-      console.log(`Created ${candidatesCreated} promotion candidates (including single-user)`);
+      // Now scan pending candidates and auto-approve VIES-verified ones
+      const pendingCandidates = await db
+        .collection("promotionCandidates")
+        .where("status", "==", "pending")
+        .get();
+
+      let autoApproved = 0;
+      const autoApproveBatch = db.batch();
+
+      for (const candidateDoc of pendingCandidates.docs) {
+        const candidate = candidateDoc.data();
+        const up = candidate.userPartner;
+
+        if (!up?.viesVerified || !up?.vatId) continue;
+
+        const normalizedVat = up.vatId.replace(/\s+/g, "").toUpperCase();
+        const existingGlobal = globalPartnersByVat.get(normalizedVat);
+
+        // The id of the global we end up linked to (existing or newly created).
+        // Used below to backlink the originating user partner so the picker
+        // doesn't show both copies side by side.
+        let linkedGlobalId: string;
+
+        if (existingGlobal) {
+          // Merge into existing global partner
+          const gData = existingGlobal.data;
+          const updates: Record<string, unknown> = {
+            updatedAt: FieldValue.serverTimestamp(),
+          };
+
+          // Add new IBANs not already present
+          if (up.ibans?.length) {
+            const existingNormalized = (gData.ibans || []).map((i: string) => normalizeIban(i));
+            const newIbans = up.ibans.filter(
+              (iban: string) => !existingNormalized.includes(normalizeIban(iban))
+            );
+            if (newIbans.length > 0) {
+              updates.ibans = [...(gData.ibans || []), ...newIbans];
+            }
+          }
+
+          // Add candidate name + aliases as new aliases (if not already present)
+          const existingAliases = (gData.aliases || []).map((a: string) => a.toLowerCase());
+          const candidateNames = [up.name, ...(up.aliases || [])].filter(Boolean);
+          const newAliases = candidateNames.filter(
+            (n: string) =>
+              n.toLowerCase() !== (gData.name || "").toLowerCase() &&
+              !existingAliases.includes(n.toLowerCase())
+          );
+          if (newAliases.length > 0) {
+            updates.aliases = [...(gData.aliases || []), ...newAliases];
+          }
+
+          // Fill in missing fields (don't overwrite existing)
+          if (!gData.website && up.website) {
+            updates.website = up.website;
+          }
+          if (!gData.address && up.address) {
+            updates.address = up.address;
+          }
+          if (!gData.country && up.address?.country) {
+            updates.country = up.address.country;
+          }
+
+          autoApproveBatch.update(
+            db.collection("globalPartners").doc(existingGlobal.id),
+            updates
+          );
+          linkedGlobalId = existingGlobal.id;
+        } else {
+          // Create new global partner
+          const newDocId = `vies_${normalizedVat.toLowerCase()}`;
+          const now = Timestamp.now();
+          autoApproveBatch.set(
+            db.collection("globalPartners").doc(newDocId),
+            stripUndefined({
+              name: up.name,
+              aliases: up.aliases || [],
+              address: up.address || null,
+              country: up.address?.country || normalizedVat.slice(0, 2),
+              vatId: normalizedVat,
+              ibans: up.ibans || [],
+              website: up.website || null,
+              externalIds: null,
+              source: "user_promoted",
+              sourceDetails: {
+                contributingUserIds: candidate.contributingUserIds || [],
+                confidence: candidate.confidence || 95,
+                verifiedAt: now,
+                verifiedBy: "vies",
+              },
+              patterns: [],
+              isActive: true,
+              createdAt: now,
+              updatedAt: now,
+            })
+          );
+          linkedGlobalId = newDocId;
+        }
+
+        // Backlink the originating user partner to the global it was promoted
+        // into. Without this, the user keeps seeing both their local copy and
+        // the new global in pickers (was the root cause of the PHH duplicate
+        // reported in the field).
+        if (up.id) {
+          autoApproveBatch.update(
+            db.collection("partners").doc(up.id),
+            {
+              globalPartnerId: linkedGlobalId,
+              updatedAt: FieldValue.serverTimestamp(),
+            }
+          );
+        }
+
+        // Mark candidate as auto-approved
+        autoApproveBatch.update(candidateDoc.ref, { status: "auto_approved" });
+        autoApproved++;
+      }
+
+      if (autoApproved > 0) {
+        await autoApproveBatch.commit();
+      }
+
+      const pendingCount = candidatesCreated - autoApproved;
+      console.log(
+        `Created ${candidatesCreated} candidates: ${autoApproved} auto-approved, ${pendingCount} pending review`
+      );
 
       return {
         candidatesCreated,
+        autoApproved,
         groupsAnalyzed: groups.length,
         partnersAnalyzed: partners.length,
-        message: `Successfully created ${candidatesCreated} promotion candidates`,
+        message: `Created ${candidatesCreated} candidates: ${autoApproved} auto-approved (VIES-verified), ${pendingCount} pending review`,
       };
     } catch (error) {
       console.error("Error generating promotion candidates:", error);
