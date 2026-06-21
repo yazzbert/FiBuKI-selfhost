@@ -13,6 +13,7 @@ import {
   Loader2,
   Send,
   Share2,
+  Trash2,
   X,
   XCircle,
 } from "lucide-react";
@@ -23,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { PanelHeader } from "@/components/ui/detail-panel-primitives";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -80,6 +82,12 @@ interface InvoiceDetailPanelProps {
   viewerOpen?: boolean;
   /** Toggles the parent-rendered viewer. */
   onToggleViewer?: () => void;
+  /** Up-arrow navigation (previous row in the file list). */
+  onNavigatePrevious?: () => void;
+  /** Down-arrow navigation (next row in the file list). */
+  onNavigateNext?: () => void;
+  hasPrevious?: boolean;
+  hasNext?: boolean;
 }
 
 // Convert Firestore Timestamp-ish to yyyy-MM-dd
@@ -169,6 +177,10 @@ export function InvoiceDetailPanel({
   onPreviewSourceChange,
   viewerOpen = false,
   onToggleViewer,
+  onNavigatePrevious,
+  onNavigateNext,
+  hasPrevious = false,
+  hasNext = false,
 }: InvoiceDetailPanelProps) {
   const { invoice, loading } = useInvoice(invoiceId);
   const { userData } = useUserData();
@@ -273,8 +285,12 @@ export function InvoiceDetailPanel({
   // ---------------------------------------------------------------------
   const [issuedFile, setIssuedFile] = useState<TaxFile | null>(null);
   useEffect(() => {
+    // Always clear synchronously when the fileId prop changes — otherwise
+    // a brief render with the *previous* invoice's file leaks into the
+    // memoized `previewSource` below, which the parent then lifts up and
+    // the thumbnail click opens against a stale URL.
+    setIssuedFile(null);
     if (!fileId) {
-      setIssuedFile(null);
       return;
     }
     const unsub = onSnapshot(
@@ -539,9 +555,38 @@ export function InvoiceDetailPanel({
     };
   }, [invoice, form]);
 
+  // Keep the latest livePreviewInvoice in a ref so the render effect can
+  // read it WITHOUT re-running every time the object identity changes.
+  // We only want the render to re-fire when the PDF-relevant *content*
+  // changes (see signature below).
+  const livePreviewInvoiceRef = useRef<Invoice | null>(null);
+  livePreviewInvoiceRef.current = livePreviewInvoice;
+
+  // Stable content signature for the PDF — only the fields the PDF
+  // actually renders. Without this, the effect re-fires every time the
+  // Firestore onSnapshot pushes a new `invoice` object reference (even
+  // when nothing relevant changed), which caused the "renders twice on
+  // create" bug: 1st render from the initial empty draft snapshot, 2nd
+  // from the re-snapshot triggered by the issuer-signature autosave.
+  const previewSignature = useMemo(() => {
+    if (!livePreviewInvoice) return null;
+    return JSON.stringify({
+      n: livePreviewInvoice.number,
+      i: livePreviewInvoice.issuer,
+      r: livePreviewInvoice.recipient,
+      iso: livePreviewInvoice.issueDate?.toDate?.()?.toISOString?.() ?? null,
+      dso: livePreviewInvoice.dueDate?.toDate?.()?.toISOString?.() ?? null,
+      pt: livePreviewInvoice.paymentTerms,
+      li: livePreviewInvoice.lineItems,
+      no: livePreviewInvoice.notes,
+      cu: livePreviewInvoice.currency,
+      t: livePreviewInvoice.total,
+    });
+  }, [livePreviewInvoice]);
+
   useEffect(() => {
     // Only generate live blob URLs for drafts
-    if (!isDraft || !livePreviewInvoice) {
+    if (!isDraft || !previewSignature) {
       return;
     }
 
@@ -550,18 +595,23 @@ export function InvoiceDetailPanel({
     setDraftRendering(true);
 
     renderTimerRef.current = setTimeout(async () => {
+      const current = livePreviewInvoiceRef.current;
+      if (!current) {
+        setDraftRendering(false);
+        return;
+      }
       try {
         // Generate EPC QR if we have an IBAN
         let qrDataUrl: string | undefined;
-        const iban = livePreviewInvoice.issuer?.iban;
+        const iban = current.issuer?.iban;
         if (iban) {
           const epc = buildEpcPayload({
-            bic: livePreviewInvoice.issuer?.bic,
-            name: livePreviewInvoice.issuer?.name ?? "",
+            bic: current.issuer?.bic,
+            name: current.issuer?.name ?? "",
             iban,
-            amountCents: livePreviewInvoice.total ?? 0,
-            remittance: livePreviewInvoice.number
-              ? `Rechnung ${livePreviewInvoice.number}`
+            amountCents: current.total ?? 0,
+            remittance: current.number
+              ? `Rechnung ${current.number}`
               : undefined,
           });
           try {
@@ -575,7 +625,7 @@ export function InvoiceDetailPanel({
         const { pdf } = await import("@react-pdf/renderer");
         const blob = await pdf(
           <InvoiceDocument
-            invoice={livePreviewInvoice}
+            invoice={current}
             qrDataUrl={qrDataUrl}
           />
         ).toBlob();
@@ -605,7 +655,7 @@ export function InvoiceDetailPanel({
       cancelled = true;
       if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
     };
-  }, [isDraft, livePreviewInvoice]);
+  }, [isDraft, previewSignature]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -648,6 +698,19 @@ export function InvoiceDetailPanel({
   useEffect(() => {
     onPreviewSourceChange?.(previewSource);
   }, [onPreviewSourceChange, previewSource]);
+
+  // Reset the lifted preview source IMMEDIATELY whenever the invoice id
+  // changes. Without this, navigating between two OLD issued invoices
+  // leaves the parent holding the previous file's downloadUrl until the
+  // new file snapshot arrives — and any click on the thumbnail in the
+  // meantime opens the stale preview (or appears to do nothing if the
+  // stale source has already been GC'd). We push null first so the
+  // overlay can't open against a stale URL; the next effect re-pushes
+  // the fresh source as soon as it's computed.
+  useEffect(() => {
+    onPreviewSourceChange?.(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoiceId]);
 
   // Clear the lifted state on unmount.
   useEffect(() => {
@@ -746,25 +809,25 @@ export function InvoiceDetailPanel({
   return (
     <>
       <div className="h-full flex flex-col">
-        {/* Header — status + invoice number + close. All actions live in the
-            sticky footer below (mirrors partner-detail-panel). */}
-        <div className="flex items-center justify-between gap-2 h-[53px] border-b px-4 flex-shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <h2 className="text-sm font-semibold truncate">
-              Rechnung {liveDisplayName}
-            </h2>
+        {/* Header — uses the shared PanelHeader so the visual treatment
+            matches the file-detail-panel exactly (h-[53px], text-lg title,
+            navigation arrows). For non-draft invoices we omit the status
+            badge (the file list already conveys "issued/sent/paid" via the
+            row state) so the header doesn't stand out vs. regular files.
+            Drafts keep the "Entwurf" badge because that state is meaningful
+            to the user during editing. */}
+        <PanelHeader
+          title={`Rechnung ${liveDisplayName}`}
+          onClose={onClose}
+          onNavigatePrevious={onNavigatePrevious}
+          onNavigateNext={onNavigateNext}
+          hasPrevious={hasPrevious}
+          hasNext={hasNext}
+        >
+          {invoice.status === "draft" && (
             <InvoiceStatusBadge status={invoice.status} />
-          </div>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={onClose}
-            className="h-8 w-8"
-            title="Schließen"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+          )}
+        </PanelHeader>
 
         {errorBanner && (
           <div className="flex-shrink-0 border-b bg-destructive/10 text-destructive px-4 py-2 text-xs flex items-start gap-2">
@@ -1031,24 +1094,30 @@ export function InvoiceDetailPanel({
           )}
           {(invoice.status === "issued" || invoice.status === "sent") && (
             <>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => setShareOpen(true)}
-                disabled={actionBusy !== null}
-              >
-                <Share2 className="h-4 w-4 mr-2" />
-                Teilen
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={handleDuplicate}
-                disabled={actionBusy !== null}
-              >
-                <Copy className="h-4 w-4 mr-2" />
-                Duplizieren
-              </Button>
+              {/* Share + Duplicate sit in a single 2-column row so the
+                  destructive action stands alone below them. */}
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setShareOpen(true)}
+                  disabled={actionBusy !== null}
+                >
+                  <Share2 className="h-4 w-4 mr-2" />
+                  Teilen
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDuplicate}
+                  disabled={actionBusy !== null}
+                >
+                  <Copy className="h-4 w-4 mr-2" />
+                  Duplizieren
+                </Button>
+              </div>
+              {/* Labelled "Löschen" per UX: the underlying server action is
+                  still cancelInvoice (no hard delete), but the user mental
+                  model maps to "delete" — there's no separate notion of a
+                  cancelled-but-not-deleted invoice in this UI. */}
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
@@ -1056,18 +1125,18 @@ export function InvoiceDetailPanel({
                     className="w-full text-destructive hover:text-destructive hover:bg-destructive/10"
                     disabled={actionBusy !== null}
                   >
-                    <XCircle className="h-4 w-4 mr-2" />
-                    Stornieren
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Löschen
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>Rechnung stornieren?</AlertDialogTitle>
+                    <AlertDialogTitle>Rechnung löschen?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      Die Rechnung wird als storniert markiert und das
-                      verknüpfte PDF wird ausgeblendet. Dieser Schritt lässt
-                      sich nicht rückgängig machen — du kannst die Rechnung
-                      aber duplizieren, um einen neuen Entwurf zu erstellen.
+                      Die Rechnung wird gelöscht und das verknüpfte PDF wird
+                      ausgeblendet. Dieser Schritt lässt sich nicht rückgängig
+                      machen — du kannst die Rechnung aber duplizieren, um
+                      einen neuen Entwurf zu erstellen.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
@@ -1082,7 +1151,7 @@ export function InvoiceDetailPanel({
                       {actionBusy === "cancel" && (
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       )}
-                      Stornieren
+                      Löschen
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -1090,10 +1159,9 @@ export function InvoiceDetailPanel({
             </>
           )}
           {invoice.status === "paid" && (
-            <>
+            <div className="grid grid-cols-2 gap-2">
               <Button
                 variant="outline"
-                className="w-full"
                 onClick={() => setShareOpen(true)}
                 disabled={actionBusy !== null}
               >
@@ -1102,14 +1170,13 @@ export function InvoiceDetailPanel({
               </Button>
               <Button
                 variant="outline"
-                className="w-full"
                 onClick={handleDuplicate}
                 disabled={actionBusy !== null}
               >
                 <Copy className="h-4 w-4 mr-2" />
                 Duplizieren
               </Button>
-            </>
+            </div>
           )}
           {invoice.status === "cancelled" && (
             <Button

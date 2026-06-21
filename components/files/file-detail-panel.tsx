@@ -107,13 +107,20 @@ interface FileDetailPanelProps {
 }
 
 export function FileDetailPanel(props: FileDetailPanelProps) {
-  // Fibuki-generated invoice files fork to the invoice editor.
+  // Fibuki-generated invoice files fork to the invoice editor. Forward the
+  // file-list navigation props so up/down arrows work the same as on
+  // regular file rows — invoices ARE files in this list and the user
+  // expects to scrub through them.
   if (props.file.invoiceId) {
     return (
       <InvoiceDetailPanel
         invoiceId={props.file.invoiceId}
         fileId={props.file.id}
         onClose={props.onClose}
+        onNavigatePrevious={props.onNavigatePrevious}
+        onNavigateNext={props.onNavigateNext}
+        hasPrevious={props.hasPrevious}
+        hasNext={props.hasNext}
       />
     );
   }

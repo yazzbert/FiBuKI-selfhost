@@ -413,6 +413,18 @@ function FilesContent() {
     return match?.id ?? null;
   }, [invoiceIdParam, files]);
 
+  // Invoices are also rows in the files list (each issued invoice has a
+  // backing TaxFile). Find the index of the invoice's file so up/down
+  // navigation can move through the same list the user sees.
+  const invoiceFileIndex = useMemo(() => {
+    if (!invoiceFileId) return -1;
+    return files.findIndex((f) => f.id === invoiceFileId);
+  }, [invoiceFileId, files]);
+
+  const invoiceHasPrevious = invoiceFileIndex > 0;
+  const invoiceHasNext =
+    invoiceFileIndex >= 0 && invoiceFileIndex < files.length - 1;
+
   // Set page title
   usePageTitle("Files", selectedFile?.fileName);
 
@@ -550,6 +562,35 @@ function FilesContent() {
       handleSelectFile(files[currentIndex + 1]);
     }
   }, [currentIndex, files, handleSelectFile]);
+
+  // Navigate from the invoice panel through the files list. When the
+  // destination row backs another invoice, route via ?invoiceId= so the
+  // page mounts the invoice panel again (with preview lifting); for
+  // regular files, route via ?id= so they get the standard file panel.
+  const navigateInvoiceTo = useCallback(
+    (target: TaxFile) => {
+      const params = new URLSearchParams();
+      if (target.invoiceId) {
+        params.set("invoiceId", target.invoiceId);
+      } else {
+        params.set("id", target.id);
+      }
+      router.push(`/files?${params.toString()}`, { scroll: false });
+    },
+    [router]
+  );
+
+  const handleInvoiceNavigatePrevious = useCallback(() => {
+    if (invoiceFileIndex > 0) {
+      navigateInvoiceTo(files[invoiceFileIndex - 1]);
+    }
+  }, [invoiceFileIndex, files, navigateInvoiceTo]);
+
+  const handleInvoiceNavigateNext = useCallback(() => {
+    if (invoiceFileIndex >= 0 && invoiceFileIndex < files.length - 1) {
+      navigateInvoiceTo(files[invoiceFileIndex + 1]);
+    }
+  }, [invoiceFileIndex, files, navigateInvoiceTo]);
 
   const handleDelete = useCallback(async () => {
     if (!selectedFile) return;
@@ -898,6 +939,10 @@ function FilesContent() {
               onPreviewSourceChange={setInvoicePreviewSource}
               viewerOpen={viewerOpen}
               onToggleViewer={toggleInvoiceViewer}
+              onNavigatePrevious={handleInvoiceNavigatePrevious}
+              onNavigateNext={handleInvoiceNavigateNext}
+              hasPrevious={invoiceHasPrevious}
+              hasNext={invoiceHasNext}
             />
           </div>
         </div>

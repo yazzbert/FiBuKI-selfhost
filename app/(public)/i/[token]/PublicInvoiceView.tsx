@@ -7,10 +7,12 @@
  */
 
 import { Download } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/utils";
 import { computeLineItemTotals } from "@/types/invoice";
+import { buildEpcPayload } from "@/lib/invoicing/epcPayload";
 
 import type { SerializedInvoice } from "./page";
 
@@ -56,6 +58,20 @@ export function PublicInvoiceView({
 
   const showStatusBadge =
     invoice.status === "paid" || invoice.status === "cancelled";
+
+  // EPC / Girocode QR — only when we have an IBAN and a non-zero total.
+  // The PDF footer renders the same payload; the HTML view stays close to
+  // the PDF layout for printability.
+  const epcPayload =
+    invoice.issuer.iban && invoice.total > 0
+      ? buildEpcPayload({
+          bic: invoice.issuer.bic,
+          name: invoice.issuer.name,
+          iban: invoice.issuer.iban,
+          amountCents: invoice.total,
+          remittance: invoice.number ? `Rechnung ${invoice.number}` : undefined,
+        })
+      : null;
 
   return (
     <div className="min-h-full bg-muted/30 py-8 px-4 sm:py-12">
@@ -242,6 +258,57 @@ export function PublicInvoiceView({
               </div>
             </div>
           </section>
+
+          {/* Payment block — IBAN/BIC text on the left, EPC/Girocode QR
+              on the right. Mirrors the PDF footer so the HTML view prints
+              close to the PDF. Only rendered when we have enough data to
+              produce a valid EPC payload (issuer.iban + non-zero total). */}
+          {(invoice.issuer.iban || epcPayload) && (
+            <section className="pt-4 border-t">
+              <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                Zahlung
+              </h2>
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                <div className="text-sm space-y-0.5 min-w-0">
+                  <div className="font-medium">{invoice.issuer.name}</div>
+                  {invoice.issuer.iban && (
+                    <div className="text-muted-foreground">
+                      IBAN: <span className="font-mono">{invoice.issuer.iban}</span>
+                    </div>
+                  )}
+                  {invoice.issuer.bic && (
+                    <div className="text-muted-foreground">
+                      BIC: <span className="font-mono">{invoice.issuer.bic}</span>
+                    </div>
+                  )}
+                  <div className="text-muted-foreground pt-1">
+                    Verwendungszweck:{" "}
+                    <span className="font-mono">Rechnung {invoice.number}</span>
+                  </div>
+                  <div className="text-muted-foreground">
+                    Betrag:{" "}
+                    <span className="tabular-nums font-medium text-foreground">
+                      {formatCurrency(invoice.total, invoice.currency)}
+                    </span>
+                  </div>
+                </div>
+                {epcPayload && (
+                  <div className="flex flex-col items-center sm:items-end gap-1 shrink-0">
+                    <div className="rounded-md border bg-white p-2">
+                      <QRCodeSVG
+                        value={epcPayload}
+                        size={128}
+                        level="M"
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      Mit Banking-App scannen
+                    </span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           {/* Notes */}
           {invoice.notes && (
