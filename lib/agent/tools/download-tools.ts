@@ -41,7 +41,6 @@ export const downloadGmailAttachmentTool = tool(
             ...(authHeader ? { Authorization: authHeader } : {}),
           },
           body: JSON.stringify({
-            integrationId: attachment.integrationId,
             messageId: attachment.messageId,
             attachmentId: attachment.attachmentId,
             filename: attachment.filename,
@@ -135,14 +134,13 @@ export const downloadGmailAttachmentTool = tool(
   {
     name: "downloadGmailAttachment",
     description:
-      "Download Gmail attachments. In matching flows, run waitForFileExtraction for new file IDs and verify extracted data before connecting.",
+      "Download Gmail attachments. In matching flows, run waitForFileExtraction for new file IDs and verify extracted data before connecting. messageId/attachmentId MUST be copied verbatim from a prior search result.",
     schema: z.object({
       attachments: z
         .array(
           z.object({
-            messageId: z.string().describe("Gmail message ID"),
-            attachmentId: z.string().describe("Gmail attachment ID"),
-            integrationId: z.string().describe("Gmail integration ID"),
+            messageId: z.string().describe("Gmail message ID — copy verbatim from a prior search result"),
+            attachmentId: z.string().describe("Gmail attachment ID — copy verbatim from a prior search result"),
             filename: z.string().describe("Attachment filename"),
             emailSubject: z.string().optional().describe("Email subject for context"),
             emailFrom: z.string().optional().describe("Email sender"),
@@ -159,7 +157,7 @@ export const downloadGmailAttachmentTool = tool(
 // ============================================================================
 
 export const convertEmailToPdfTool = tool(
-  async ({ integrationId, messageId, emailSubject, emailFrom }, config) => {
+  async ({ messageId, emailSubject, emailFrom }, config) => {
     const authHeader = config?.configurable?.authHeader;
     const workerType = config?.configurable?.workerType as string | undefined;
 
@@ -175,7 +173,6 @@ export const convertEmailToPdfTool = tool(
           ...(authHeader ? { Authorization: authHeader } : {}),
         },
         body: JSON.stringify({
-          integrationId,
           messageId,
           // No transactionId - let automation handle matching
           gmailMessageFrom: emailFrom,
@@ -229,10 +226,9 @@ export const convertEmailToPdfTool = tool(
   {
     name: "convertEmailToPdf",
     description:
-      "Convert an email body to a PDF. Use when the email itself is the invoice, then run waitForFileExtraction(fileId) and verify before connecting.",
+      "Convert an email body to a PDF. Use when the email itself is the invoice, then run waitForFileExtraction(fileId) and verify before connecting. messageId MUST be copied verbatim from a prior search result.",
     schema: z.object({
-      integrationId: z.string().describe("Gmail integration ID"),
-      messageId: z.string().describe("Gmail message ID"),
+      messageId: z.string().describe("Gmail message ID — copy verbatim from a prior search result"),
       emailSubject: z.string().optional().describe("Email subject for filename"),
       emailFrom: z.string().optional().describe("Email sender"),
     }),

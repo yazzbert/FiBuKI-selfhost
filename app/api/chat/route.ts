@@ -283,8 +283,8 @@ export async function POST(req: Request) {
   const userId = await getServerUserIdWithFallback(req);
   const { messages: rawMessages, modelProvider: requestedProvider } = await req.json();
 
-  // Determine model provider (default to gemini for cost savings, anthropic as backup)
-  const modelProvider: "anthropic" | "gemini" = requestedProvider || "gemini";
+  // Determine model provider (default to anthropic for tool-call reliability; gemini opt-in)
+  const modelProvider: "anthropic" | "gemini" = requestedProvider || "anthropic";
 
   console.log(`[Chat API] Starting LangGraph agent with ${modelProvider}, ${rawMessages.length} messages`);
 

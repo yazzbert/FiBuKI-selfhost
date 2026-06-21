@@ -5,6 +5,7 @@ import { Timestamp, FieldValue } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
 import { createHash, randomUUID } from "crypto";
 import { callFirebaseFunction } from "@/lib/api/firebase-callable";
+import { GmailResolutionError, resolveGmailIntegration } from "@/lib/gmail/resolve-integration";
 
 interface ConvertHtmlToPdfResponse {
   success: boolean;
@@ -14,8 +15,6 @@ interface ConvertHtmlToPdfResponse {
 
 const db = getAdminDb();
 
-const INTEGRATIONS_COLLECTION = "emailIntegrations";
-const TOKENS_COLLECTION = "emailTokens";
 const FILES_COLLECTION = "files";
 const TRANSACTIONS_COLLECTION = "transactions";
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
@@ -62,8 +61,8 @@ interface GmailMessage {
  * Convert email HTML to PDF and save as a file
  *
  * Body: {
- *   integrationId: string;
  *   messageId: string;
+ *   integrationId?: string; // optional; if absent, resolved from messageId
  *   transactionId?: string;
  * }
  */
@@ -80,69 +79,30 @@ export async function POST(request: NextRequest) {
       gmailMessageFromName,
     } = body;
 
-    if (!integrationId || !messageId) {
+    if (!messageId) {
       return NextResponse.json(
-        { error: "integrationId and messageId are required" },
+        { error: "messageId is required" },
         { status: 400 }
       );
     }
 
-    // Verify integration
-    const integrationRef = db.collection(INTEGRATIONS_COLLECTION).doc(integrationId);
-    const integrationSnap = await integrationRef.get();
-
-    if (!integrationSnap.exists) {
-      return NextResponse.json(
-        { error: "Integration not found" },
-        { status: 404 }
-      );
+    let ctx;
+    try {
+      ctx = await resolveGmailIntegration({ integrationId, messageId }, userId);
+    } catch (err) {
+      if (err instanceof GmailResolutionError) {
+        return NextResponse.json({ error: err.message, code: err.code }, { status: err.status });
+      }
+      throw err;
     }
-
-    const integration = integrationSnap.data()!;
-    if (integration.userId !== userId) {
-      return NextResponse.json(
-        { error: "Integration not found" },
-        { status: 404 }
-      );
-    }
-
-    if (integration.needsReauth) {
-      return NextResponse.json(
-        { error: "Re-authentication required", code: "REAUTH_REQUIRED" },
-        { status: 403 }
-      );
-    }
-
-    // Get tokens
-    const tokenSnap = await db.collection(TOKENS_COLLECTION).doc(integrationId).get();
-    if (!tokenSnap.exists) {
-      return NextResponse.json(
-        { error: "Tokens not found. Please reconnect Gmail.", code: "TOKENS_MISSING" },
-        { status: 403 }
-      );
-    }
-
-    const tokens = tokenSnap.data()!;
-
-    // Check token expiry
-    if (tokens.expiresAt.toDate() < new Date()) {
-      await integrationRef.update({
-        needsReauth: true,
-        lastError: "Access token expired",
-        updatedAt: Timestamp.now(),
-      });
-      return NextResponse.json(
-        { error: "Token expired", code: "TOKEN_EXPIRED" },
-        { status: 403 }
-      );
-    }
+    const integration = ctx.integration;
 
     // Fetch the message
     const messageResponse = await fetch(
       `${GMAIL_API_BASE}/users/me/messages/${messageId}?format=full`,
       {
         headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
+          Authorization: `Bearer ${ctx.accessToken}`,
           "Content-Type": "application/json",
         },
       }
@@ -218,7 +178,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           originalName: filename,
           gmailMessageId: messageId,
-          gmailIntegrationId: integrationId,
+          gmailIntegrationId: ctx.integrationId,
           convertedFromEmail: "true",
           firebaseStorageDownloadTokens: downloadToken,
         },

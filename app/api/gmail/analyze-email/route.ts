@@ -1,14 +1,10 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminDb } from "@/lib/firebase/admin";
-import { Timestamp } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
 import { VertexAI } from "@google-cloud/vertexai";
 import { MODELS } from "@/types/ai-usage";
+import { GmailResolutionError, resolveGmailIntegration } from "@/lib/gmail/resolve-integration";
 
-const db = getAdminDb();
-const INTEGRATIONS_COLLECTION = "emailIntegrations";
-const TOKENS_COLLECTION = "emailTokens";
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
 
 const GEMINI_MODEL = MODELS.geminiLite;
@@ -42,9 +38,9 @@ interface GmailMessage {
  * Analyze an email for invoice links or determine if it's an HTML invoice
  *
  * Body: {
- *   integrationId: string;
  *   messageId: string;
- *   transaction: {
+ *   integrationId?: string; // optional; if absent, resolved from messageId
+ *   transaction?: {
  *     name: string;
  *     partner?: string;
  *     amount: number;
@@ -57,62 +53,21 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { integrationId, messageId, transaction } = body;
 
-    if (!integrationId || !messageId) {
+    if (!messageId) {
       return NextResponse.json(
-        { error: "integrationId and messageId are required" },
+        { error: "messageId is required" },
         { status: 400 }
       );
     }
 
-    // Verify integration
-    const integrationRef = db.collection(INTEGRATIONS_COLLECTION).doc(integrationId);
-    const integrationSnap = await integrationRef.get();
-
-    if (!integrationSnap.exists) {
-      return NextResponse.json(
-        { error: "Integration not found" },
-        { status: 404 }
-      );
-    }
-
-    const integration = integrationSnap.data()!;
-    if (integration.userId !== userId) {
-      return NextResponse.json(
-        { error: "Integration not found" },
-        { status: 404 }
-      );
-    }
-
-    if (integration.needsReauth) {
-      return NextResponse.json(
-        { error: "Re-authentication required", code: "REAUTH_REQUIRED" },
-        { status: 403 }
-      );
-    }
-
-    // Get tokens
-    const tokenSnap = await db.collection(TOKENS_COLLECTION).doc(integrationId).get();
-    if (!tokenSnap.exists) {
-      return NextResponse.json(
-        { error: "Tokens not found. Please reconnect Gmail.", code: "TOKENS_MISSING" },
-        { status: 403 }
-      );
-    }
-
-    const tokens = tokenSnap.data()!;
-
-    // Check if token is expired
-    const expiresAt = tokens.expiresAt.toDate();
-    if (expiresAt < new Date()) {
-      await integrationRef.update({
-        needsReauth: true,
-        lastError: "Access token expired",
-        updatedAt: Timestamp.now(),
-      });
-      return NextResponse.json(
-        { error: "Access token expired. Please reconnect Gmail.", code: "TOKEN_EXPIRED" },
-        { status: 403 }
-      );
+    let ctx;
+    try {
+      ctx = await resolveGmailIntegration({ integrationId, messageId }, userId);
+    } catch (err) {
+      if (err instanceof GmailResolutionError) {
+        return NextResponse.json({ error: err.message, code: err.code }, { status: err.status });
+      }
+      throw err;
     }
 
     // Fetch the message
@@ -120,7 +75,7 @@ export async function POST(request: NextRequest) {
       `${GMAIL_API_BASE}/users/me/messages/${messageId}?format=full`,
       {
         headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
+          Authorization: `Bearer ${ctx.accessToken}`,
           "Content-Type": "application/json",
         },
       }

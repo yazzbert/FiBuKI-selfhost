@@ -1424,7 +1424,7 @@ interface AnalyzeEmailResponse {
 }
 
 export const analyzeEmailTool = tool(
-  async ({ integrationId, messageId, transactionId }, config) => {
+  async ({ messageId, transactionId }, config) => {
     const userId = config?.configurable?.userId;
     const authHeader = config?.configurable?.authHeader;
     const workerType = config?.configurable?.workerType as string | undefined;
@@ -1434,12 +1434,6 @@ export const analyzeEmailTool = tool(
     }
 
     const db = await getDb();
-
-    // Verify integration belongs to user
-    const integrationDoc = await db.collection("emailIntegrations").doc(integrationId).get();
-    if (!integrationDoc.exists || integrationDoc.data()?.userId !== userId) {
-      return { error: "Gmail integration not found" };
-    }
 
     // Get transaction context if provided
     let transaction = null;
@@ -1464,7 +1458,6 @@ export const analyzeEmailTool = tool(
         ...(authHeader ? { Authorization: authHeader } : {}),
       },
       body: JSON.stringify({
-        integrationId,
         messageId,
         transaction,
       }),
@@ -1515,10 +1508,9 @@ export const analyzeEmailTool = tool(
   {
     name: "analyzeEmail",
     description:
-      "Use AI to deeply analyze an email for invoice content. Determines if the email body IS an invoice, or if it contains links to download an invoice. Returns extracted URLs and confidence scores.",
+      "Use AI to deeply analyze an email for invoice content. Determines if the email body IS an invoice, or if it contains links to download an invoice. Returns extracted URLs and confidence scores. messageId MUST be copied verbatim from a prior searchGmailEmails/searchGmailAttachments result — never invent or paraphrase it.",
     schema: z.object({
-      integrationId: z.string().describe("Gmail integration ID"),
-      messageId: z.string().describe("Gmail message ID to analyze"),
+      messageId: z.string().describe("Gmail message ID — must be copied verbatim from a prior searchGmailEmails result (e.g. '19e887bfc6749b98'). Do NOT invent placeholder IDs."),
       transactionId: z.string().optional().describe("Transaction ID for context (improves accuracy)"),
     }),
   }
