@@ -12,9 +12,9 @@ import {
   SuggestionType,
 } from "./generateSearchQueries";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 
-// Using Flash-Lite for speed and low cost
-const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
+const GEMINI_MODEL = MODELS.geminiLite;
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || "europe-west1";
 
 function getProjectId(): string {

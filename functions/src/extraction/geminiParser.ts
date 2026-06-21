@@ -1,17 +1,13 @@
 import { VertexAI, Part } from "@google-cloud/vertexai";
 import { PDFDocument } from "pdf-lib";
+import { MODELS } from "../utils/models";
 
 // Model options for comparison (fastest to most accurate)
-// gemini-2.0-flash-lite-001: Fastest, lowest cost
+// gemini-2.5-flash-lite: Fastest, lowest cost
 // gemini-2.0-flash-001: Fast, good balance
-// gemini-2.5-flash-preview-05-20: Better accuracy, slower
-export type GeminiModel =
-  | "gemini-2.0-flash-lite-001"
-  | "gemini-2.0-flash-001"
-  | "gemini-2.5-flash-preview-05-20";
+export type GeminiModel = typeof MODELS.geminiLite | typeof MODELS.geminiFlash;
 
-// Using Flash-Lite for maximum speed - good enough for invoice extraction
-export const DEFAULT_GEMINI_MODEL: GeminiModel = "gemini-2.0-flash-lite-001";
+export const DEFAULT_GEMINI_MODEL: GeminiModel = MODELS.geminiLite;
 
 // Get project ID from environment (Firebase sets this automatically)
 function getProjectId(): string {

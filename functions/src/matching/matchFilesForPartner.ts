@@ -12,6 +12,7 @@
 
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { MODELS } from "../utils/models";
 
 const db = getFirestore();
 
@@ -217,7 +218,7 @@ async function matchWithAI(
     location: process.env.VERTEX_LOCATION || "europe-west1",
   });
 
-  const model = vertexAI.getGenerativeModel({ model: "gemini-2.0-flash-001" });
+  const model = vertexAI.getGenerativeModel({ model: MODELS.geminiFlash });
 
   // Build file summaries
   const fileSummaries = files.map((doc) => {

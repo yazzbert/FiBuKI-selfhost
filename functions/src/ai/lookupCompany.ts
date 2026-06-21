@@ -2,6 +2,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { VertexAI } from "@google-cloud/vertexai";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 import { AutomationMeta } from "../automation/types";
 
 // =============================================================================
@@ -162,7 +163,7 @@ If no company info found, return {}. Return ONLY the JSON, no explanation.`
     if (userId && usageMetadata) {
       await logAIUsage(userId, {
         function: "companyLookup",
-        model: "gemini-2.0-flash-001",
+        model: MODELS.geminiFlash,
         inputTokens: usageMetadata.promptTokenCount || 0,
         outputTokens: usageMetadata.candidatesTokenCount || 0,
       });
@@ -197,7 +198,7 @@ async function searchByUrl(
   // Use model with Google Search grounding (snake_case for API)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const googleSearchTool = { google_search: {} } as any;
-  const modelName = "gemini-2.0-flash-001";
+  const modelName = MODELS.geminiFlash;
 
   const model = vertexAI.getGenerativeModel({
     model: modelName,
@@ -280,7 +281,7 @@ export async function searchByName(
   // Use model with Google Search grounding (snake_case for API)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const googleSearchTool = { google_search: {} } as any;
-  const modelName = "gemini-2.0-flash-001";
+  const modelName = MODELS.geminiFlash;
 
   const model = vertexAI.getGenerativeModel({
     model: modelName,
@@ -362,7 +363,7 @@ export const lookupCompany = onCall<LookupCompanyRequest>(
     const projectId = getProjectId();
     const vertexAI = new VertexAI({ project: projectId, location: VERTEX_LOCATION });
     // Model without grounding for extracting from fetched content
-    const extractionModel = vertexAI.getGenerativeModel({ model: "gemini-2.0-flash-001" });
+    const extractionModel = vertexAI.getGenerativeModel({ model: MODELS.geminiFlash });
 
     try {
       // Name-only search (uses Google Search grounding)

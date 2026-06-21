@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { VertexAI } from "@google-cloud/vertexai";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 
 // Get project ID from environment (Firebase sets this automatically)
 function getProjectId(): string {
@@ -113,7 +114,7 @@ ONE word:`;
     try {
       const projectId = getProjectId();
       const vertexAI = new VertexAI({ project: projectId, location: VERTEX_LOCATION });
-      const model = vertexAI.getGenerativeModel({ model: "gemini-2.0-flash-lite-001" });
+      const model = vertexAI.getGenerativeModel({ model: MODELS.geminiLite });
 
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -130,7 +131,7 @@ ONE word:`;
       if (userId && usageMetadata) {
         logAIUsage(userId, {
           function: "fileSearchQuery",
-          model: "gemini-2.0-flash-lite-001",
+          model: MODELS.geminiLite,
           inputTokens: usageMetadata.promptTokenCount || 0,
           outputTokens: usageMetadata.candidatesTokenCount || 0,
         }).catch((err) => {

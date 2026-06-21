@@ -1,8 +1,9 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { VertexAI } from "@google-cloud/vertexai";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 
-const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
+const GEMINI_MODEL = MODELS.geminiLite;
 
 function getProjectId(): string {
   const projectId =

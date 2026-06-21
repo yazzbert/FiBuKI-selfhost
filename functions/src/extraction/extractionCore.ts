@@ -13,6 +13,7 @@ import {
   getDefaultProvider,
 } from "./documentExtractor";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 
 const db = getFirestore();
 
@@ -585,7 +586,7 @@ export async function runExtraction(
 
   // Get provider and model config
   const provider = getDefaultProvider();
-  const geminiModel = options.geminiModel || process.env.GEMINI_MODEL || "gemini-2.0-flash-lite-001";
+  const geminiModel = options.geminiModel || process.env.GEMINI_MODEL || MODELS.geminiLite;
   const userId = fileData.userId as string;
   console.log(`[+${Date.now() - t0}ms] Starting ${provider} extraction (model: ${geminiModel})`);
 

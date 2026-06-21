@@ -11,6 +11,7 @@
 
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { StructuredToolInterface } from "@langchain/core/tools";
+import { MODELS } from "@/types/ai-usage";
 
 export type ModelProvider = "anthropic" | "gemini";
 
@@ -21,8 +22,8 @@ export interface ModelConfig {
 
 // Model identifiers
 const MODEL_IDS = {
-  anthropic: "claude-sonnet-4-20250514",
-  gemini: "gemini-2.0-flash-001",
+  anthropic: MODELS.chatAgent,
+  gemini: MODELS.geminiFlash,
 } as const;
 
 // Vertex AI config - uses same region as Cloud Functions

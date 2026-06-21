@@ -8,6 +8,7 @@
 
 import { createVertexAI } from "./lookupCompany";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 
 export interface DomainValidationResult {
   isOwner: boolean;
@@ -32,7 +33,7 @@ export async function geminiValidateDomainOwnership(
   userId: string
 ): Promise<DomainValidationResult> {
   const vertexAI = createVertexAI();
-  const modelName = "gemini-2.0-flash-lite-001";
+  const modelName = MODELS.geminiLite;
 
   const model = vertexAI.getGenerativeModel({
     model: modelName,

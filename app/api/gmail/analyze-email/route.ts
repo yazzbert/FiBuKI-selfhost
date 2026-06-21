@@ -4,13 +4,14 @@ import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
 import { VertexAI } from "@google-cloud/vertexai";
+import { MODELS } from "@/types/ai-usage";
 
 const db = getAdminDb();
 const INTEGRATIONS_COLLECTION = "emailIntegrations";
 const TOKENS_COLLECTION = "emailTokens";
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
 
-const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
+const GEMINI_MODEL = MODELS.geminiLite;
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "taxstudio-f12fb";
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || "europe-west1";
 

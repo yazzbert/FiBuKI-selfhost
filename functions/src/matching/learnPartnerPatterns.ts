@@ -2,11 +2,11 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { VertexAI } from "@google-cloud/vertexai";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 import { matchPatternFlexible } from "../utils/pattern-utils";
 import { learnPatterns, TxSample, CollisionTxSample } from "./patternEngine";
 
-// Using Gemini Flash Lite for pattern learning
-const GEMINI_MODEL = "gemini-2.0-flash-lite-001";
+const GEMINI_MODEL = MODELS.geminiLite;
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION || "europe-west1";
 
 // Get project ID from environment (Firebase sets this automatically)

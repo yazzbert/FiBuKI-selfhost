@@ -31,6 +31,7 @@ import {
 import { geminiValidateDomainOwnership } from "../ai/validateDomainOwnership";
 import { AutomationMeta } from "../automation/types";
 import { logAIUsage } from "../utils/ai-usage-logger";
+import { MODELS } from "../utils/models";
 import { ensureGlobalPartnerFromVies } from "../utils/globalPartnerUpsert";
 import { checkAIBudget } from "../billing/checkAIBudget";
 import { isPassiveMode } from "../utils/checkAutomationMode";
@@ -731,7 +732,7 @@ async function findExistingPartnerWithLLM(
     // 2. Use LLM to verify if any candidate is the same company
     const vertexAI = createVertexAI();
     const model = vertexAI.getGenerativeModel({
-      model: "gemini-2.0-flash-lite-001",
+      model: MODELS.geminiLite,
       generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
     });
 
@@ -761,7 +762,7 @@ Rules:
     if (usageMetadata) {
       logAIUsage(userId, {
         function: "partnerDedup",
-        model: "gemini-2.0-flash-lite-001",
+        model: MODELS.geminiLite,
         inputTokens: usageMetadata.promptTokenCount || 0,
         outputTokens: usageMetadata.candidatesTokenCount || 0,
       }).catch((err) => {

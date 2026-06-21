@@ -89,10 +89,11 @@ function formatModelName(model: string): string {
   if (model.includes("sonnet")) return "Sonnet 4";
   if (model.includes("haiku")) return "Haiku 3.5";
   if (model.includes("opus")) return "Opus";
-  // Gemini models
-  if (model.includes("gemini-2.0-flash-lite")) return "Gemini Flash Lite";
-  if (model.includes("gemini-2.0-flash")) return "Gemini Flash";
+  // Gemini models — check "lite" variants before non-lite to avoid prefix collision
+  if (model.includes("gemini-2.5-flash-lite")) return "Gemini 2.5 Flash Lite";
   if (model.includes("gemini-2.5-flash")) return "Gemini 2.5 Flash";
+  if (model.includes("gemini-2.0-flash-lite")) return "Gemini 2.0 Flash Lite";
+  if (model.includes("gemini-2.0-flash")) return "Gemini 2.0 Flash";
   if (model.includes("gemini")) return "Gemini";
   return model.split("-").slice(0, 2).join(" ");
 }
