@@ -9,6 +9,27 @@ import { getMessages, getLocale } from "next-intl/server";
 export const metadata: Metadata = {
   title: "FiBuKI - Tax Management Tool",
   description: "Manage your transactions and receipts for tax purposes",
+  openGraph: {
+    title: "FiBuKI - Bank Access for AI-natives",
+    description: "Manage your transactions and receipts for tax purposes",
+    url: "https://fibuki.com",
+    siteName: "FiBuKI",
+    images: [
+      {
+        url: "https://fibuki.com/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "FiBuKI - Bank Access for AI-natives",
+      },
+    ],
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "FiBuKI - Bank Access for AI-natives",
+    description: "Manage your transactions and receipts for tax purposes",
+    images: ["https://fibuki.com/og-image.png"],
+  },
 };
 
 export default async function RootLayout({

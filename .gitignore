@@ -71,3 +71,4 @@ PLAN-*.md
 
 # Separate npm packages (published independently)
 /mcp-server/
+.gstack/
