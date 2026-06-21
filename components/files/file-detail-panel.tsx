@@ -123,6 +123,8 @@ export function FileDetailPanel(props: FileDetailPanelProps) {
         hasNext={props.hasNext}
         onOpenConnectTransaction={props.onOpenConnectTransaction}
         isConnectTransactionOpen={props.isConnectTransactionOpen}
+        viewerOpen={props.viewerOpen}
+        onToggleViewer={props.onOpenViewer}
       />
     );
   }
