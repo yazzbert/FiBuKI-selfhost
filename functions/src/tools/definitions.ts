@@ -250,6 +250,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "List the user's identity entities (personalEntity + companies). Each entry has id, name, type (person|company), optional vatId, ibans[], and optional address. Use the returned id as `issuerEntityId` in update_invoice / create_invoice.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "update_identity_entity",
+    description: "Patch an existing identity entity (personal or company). Accepts a sparse patch of name, vatId, ibans (full replacement array), aliases, and address ({street, postalCode, city, country}). Use this to bring an entity up to invoice-ready state without going through the settings UI.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entityId: { type: "string", description: "Identity entity id (from list_identity_entities)" },
+        patch: {
+          type: "object",
+          description: "Sparse patch — only include fields you want to change",
+          properties: {
+            name: { type: "string" },
+            vatId: { type: "string" },
+            ibans: { type: "array", items: { type: "string" } },
+            aliases: { type: "array", items: { type: "string" } },
+            address: {
+              type: "object",
+              properties: {
+                street: { type: "string" },
+                postalCode: { type: "string" },
+                city: { type: "string" },
+                country: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+      required: ["entityId", "patch"],
+    },
+  },
 
   // =========================================================================
   // Partners

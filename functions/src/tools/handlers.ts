@@ -112,6 +112,8 @@ export async function handleTool(
     // sender). Returns id + name + vatId + ibans + address per entity.
     case "list_identity_entities":
       return listIdentityEntities(userId);
+    case "update_identity_entity":
+      return updateIdentityEntity(userId, args);
 
     // Partners
     case "list_partners":
@@ -639,6 +641,76 @@ export async function listIdentityEntities(userId: string) {
     }
   }
   return { entities };
+}
+
+/**
+ * Patch an existing identity entity (personalEntity or one of companies[]).
+ * Accepts a sparse patch of name / vatId / ibans / address. Used by MCP
+ * agents to bring a company entity up to invoice-ready state (IBAN, VAT,
+ * address) without forcing the user into the settings UI.
+ */
+export async function updateIdentityEntity(
+  userId: string,
+  args: Record<string, unknown>,
+) {
+  const entityId = String(args.entityId || "");
+  if (!entityId) throw new Error("entityId is required");
+  const patch = (args.patch as Record<string, unknown>) || {};
+
+  const docRef = db.doc(`users/${userId}/settings/userData`);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(docRef);
+    if (!snap.exists) throw new Error("User data not found");
+    const data = snap.data() as Record<string, unknown>;
+
+    const applyPatch = (entity: Record<string, unknown>) => {
+      const next: Record<string, unknown> = { ...entity };
+      if (typeof patch.name === "string") next.name = patch.name.trim();
+      if (typeof patch.vatId === "string") {
+        const v = patch.vatId.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (v) next.vatId = v; else delete next.vatId;
+      }
+      if (Array.isArray(patch.ibans)) {
+        next.ibans = (patch.ibans as unknown[])
+          .map((i) => String(i).trim().toUpperCase().replace(/\s+/g, ""))
+          .filter(Boolean);
+      }
+      if (Array.isArray(patch.aliases)) {
+        next.aliases = (patch.aliases as unknown[])
+          .map((a) => String(a).trim())
+          .filter(Boolean);
+      }
+      if (patch.address !== undefined) {
+        const addr = (patch.address as Record<string, string> | null) || null;
+        if (addr) {
+          const clean: Record<string, string> = {};
+          if (addr.street?.trim()) clean.street = addr.street.trim();
+          if (addr.postalCode?.trim()) clean.postalCode = addr.postalCode.trim();
+          if (addr.city?.trim()) clean.city = addr.city.trim();
+          if (addr.country?.trim()) clean.country = addr.country.trim().toUpperCase();
+          if (Object.keys(clean).length > 0) next.address = clean;
+        } else {
+          delete next.address;
+        }
+      }
+      return next;
+    };
+
+    const personal = data.personalEntity as Record<string, unknown> | undefined;
+    if (personal && personal.id === entityId) {
+      data.personalEntity = applyPatch(personal);
+    } else {
+      const companies = (data.companies as Array<Record<string, unknown>>) || [];
+      const idx = companies.findIndex((c) => c.id === entityId);
+      if (idx < 0) throw new Error(`Identity entity ${entityId} not found`);
+      companies[idx] = applyPatch(companies[idx]);
+      data.companies = companies;
+    }
+    data.updatedAt = FieldValue.serverTimestamp();
+    tx.set(docRef, data, { merge: true });
+  });
+
+  return { success: true, entityId };
 }
 
 export async function listPartners(userId: string, args: Record<string, unknown>) {
