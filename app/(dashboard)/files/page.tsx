@@ -28,7 +28,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -747,16 +746,10 @@ function FilesContent() {
       <div {...getRootProps()} className="h-full overflow-hidden relative">
         <input {...getInputProps()} />
 
-      {/* Upload FAB — z-60 so it stays visible above the right-side detail panel (z-50) */}
+      {/* Upload dialog — controlled via the FAB rendered inside the content
+          column below so the FAB tracks the file-list area when the sidebar
+          opens, instead of overlapping it. */}
       <Dialog open={isUploadDialogOpen} onOpenChange={setIsUploadDialogOpen}>
-        <DialogTrigger asChild>
-          <Button
-            className="fixed bottom-6 right-6 z-[60] h-14 w-14 rounded-full shadow-lg"
-            size="icon"
-          >
-            <Upload className="h-6 w-6" />
-          </Button>
-        </DialogTrigger>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Upload File</DialogTitle>
@@ -765,30 +758,44 @@ function FilesContent() {
         </DialogContent>
       </Dialog>
 
-      {/* Create Invoice FAB: opens an empty draft directly in the sidebar */}
-      <Button
-        variant="secondary"
-        className="fixed bottom-24 right-6 z-[60] h-14 w-14 rounded-full shadow-lg"
-        size="icon"
-        title="Rechnung erstellen"
-        onClick={handleCreateInvoice}
-        disabled={creatingInvoice}
-      >
-        {creatingInvoice ? (
-          <Loader2 className="h-6 w-6 animate-spin" />
-        ) : (
-          <FileText className="h-6 w-6" />
-        )}
-      </Button>
-
-      {/* Main content */}
+      {/* Main content. `relative` so the FABs below can anchor here via
+          absolute positioning — they then slide with the content when the
+          right-side detail panel opens (instead of sitting fixed against
+          the viewport and overlapping the sidebar). */}
       <div
-        className="h-full flex flex-col transition-[margin] duration-200 ease-in-out"
+        className="relative h-full flex flex-col transition-[margin] duration-200 ease-in-out"
         style={{
           marginRight:
             selectedFile || showBulkPanel || invoiceIdParam ? panelWidth : 0,
         }}
       >
+        {/* FABs — anchored to the content column so they live within the
+            visible file list area. z-30 keeps them above the table but
+            below the FileViewerOverlay (z-40) so the overlay can cover
+            them while previewing a file. */}
+        <Button
+          className="absolute bottom-6 right-6 z-30 h-14 w-14 rounded-full shadow-lg"
+          size="icon"
+          onClick={() => setIsUploadDialogOpen(true)}
+          title="Datei hochladen"
+        >
+          <Upload className="h-6 w-6" />
+        </Button>
+        <Button
+          variant="secondary"
+          className="absolute bottom-24 right-6 z-30 h-14 w-14 rounded-full shadow-lg"
+          size="icon"
+          title="Rechnung erstellen"
+          onClick={handleCreateInvoice}
+          disabled={creatingInvoice}
+        >
+          {creatingInvoice ? (
+            <Loader2 className="h-6 w-6 animate-spin" />
+          ) : (
+            <FileText className="h-6 w-6" />
+          )}
+        </Button>
+
         <div className="flex-1 overflow-hidden relative">
           {/* Drag overlay — inside the margin-constrained area so it doesn't extend behind the detail panel */}
           {isDragActive && (

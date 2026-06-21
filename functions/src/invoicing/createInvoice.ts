@@ -172,6 +172,35 @@ export async function performCreateInvoice(
   }
   const { subtotal, vatAmount, total } = computeInvoiceTotals(lineItems);
 
+  // Pre-fill numberSeq with (highest existing seq for this user+year) + 1.
+  // We deliberately don't filter by namePrefix to avoid an extra composite
+  // index; the seq is shared across all of the user's invoices in this year.
+  // Issued invoices remain stable (number is frozen at issue time), so this
+  // only affects what the upcoming draft's seq looks like.
+  const issueYear = issueDate.toDate().getFullYear();
+  let numberSeq = 1;
+  try {
+    const yearStart = Timestamp.fromDate(new Date(issueYear, 0, 1));
+    const yearEnd = Timestamp.fromDate(new Date(issueYear + 1, 0, 1));
+    const seqQuery = await db
+      .collection("invoices")
+      .where("userId", "==", userId)
+      .where("issueDate", ">=", yearStart)
+      .where("issueDate", "<", yearEnd)
+      .get();
+    let maxSeq = 0;
+    seqQuery.forEach((doc) => {
+      const data = doc.data() as { numberSeq?: number };
+      if (typeof data.numberSeq === "number" && data.numberSeq > maxSeq) {
+        maxSeq = data.numberSeq;
+      }
+    });
+    numberSeq = maxSeq + 1;
+  } catch (err) {
+    // Non-fatal — fall back to 1 and let the user adjust manually.
+    console.warn("createInvoice: failed to compute next numberSeq", err);
+  }
+
   const now = Timestamp.now();
   const docRef = db.collection("invoices").doc();
   const fileRef = db.collection("files").doc();
@@ -180,6 +209,7 @@ export async function performCreateInvoice(
     userId,
     number: `DRAFT-${shortRandomId()}`,
     status: "draft",
+    numberSeq,
     issuer,
     recipient,
     issueDate,

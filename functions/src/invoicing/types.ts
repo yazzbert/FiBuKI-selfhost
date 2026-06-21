@@ -39,6 +39,10 @@ export interface Invoice {
   userId: string;
   number: string;
   status: InvoiceStatus;
+  /** Optional user prefix used to compose the display name (e.g. "INV"). */
+  namePrefix?: string;
+  /** Integer sequence used to compose the display name (zero-padded). */
+  numberSeq?: number;
   issuer: InvoiceIssuerSnapshot;
   recipient: InvoiceRecipientSnapshot;
   issueDate: Timestamp;
@@ -100,6 +104,27 @@ export function computeInvoiceTotals(lineItems: InvoiceLineItem[]): {
     vatAmount += vatCents;
   }
   return { subtotal, vatAmount, total: subtotal + vatAmount };
+}
+
+export function partnerAbbrev(name?: string): string {
+  if (!name) return "XXX";
+  const letters = name.replace(/[^A-Za-zÄÖÜäöüß]/g, "");
+  const upper = letters.toUpperCase();
+  if (upper.length === 0) return "XXX";
+  return upper.slice(0, 3).padEnd(3, "X");
+}
+
+export function composeInvoiceName(parts: {
+  namePrefix?: string;
+  recipientName?: string;
+  year?: number;
+  numberSeq?: number;
+}): string {
+  const seq = parts.numberSeq;
+  const year = parts.year;
+  if (!year || !seq || seq < 1) return "(Entwurf)";
+  const prefix = parts.namePrefix?.trim() || partnerAbbrev(parts.recipientName);
+  return `${prefix}-${year}-${String(seq).padStart(4, "0")}`;
 }
 
 export function parsePaymentTermsToDays(terms: string): number {

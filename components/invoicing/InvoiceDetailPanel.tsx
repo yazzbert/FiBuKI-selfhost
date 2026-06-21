@@ -8,10 +8,9 @@ import {
   useState,
 } from "react";
 import {
-  Check,
+  AlertCircle,
   Copy,
   Loader2,
-  RefreshCw,
   Send,
   Share2,
   X,
@@ -24,6 +23,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { callFunction } from "@/lib/firebase/callable";
 import { db } from "@/lib/firebase/config";
 import { useInvoice } from "@/hooks/use-invoice";
@@ -32,6 +42,7 @@ import {
   DEFAULT_PAYMENT_TERMS,
   Invoice,
   InvoiceLineItem,
+  composeInvoiceName,
   computeInvoiceTotals,
   parsePaymentTermsToDays,
 } from "@/types/invoice";
@@ -116,6 +127,9 @@ interface LocalForm {
   dueDate: string; // yyyy-MM-dd
   lineItems: InvoiceLineItem[];
   notes: string;
+  namePrefix: string;
+  /** Stored as string so the user can clear/edit freely; parsed at save time. */
+  numberSeq: string;
 }
 
 function invoiceToForm(invoice: Invoice): LocalForm {
@@ -134,7 +148,18 @@ function invoiceToForm(invoice: Invoice): LocalForm {
     dueDate: toDateInput(invoice.dueDate),
     lineItems: invoice.lineItems ?? [],
     notes: invoice.notes ?? "",
+    namePrefix: invoice.namePrefix ?? "",
+    numberSeq:
+      typeof invoice.numberSeq === "number"
+        ? String(invoice.numberSeq)
+        : "",
   };
+}
+
+function getInvoiceErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "string") return err;
+  return "Unbekannter Fehler. Bitte versuche es erneut.";
 }
 
 export function InvoiceDetailPanel({
@@ -150,7 +175,24 @@ export function InvoiceDetailPanel({
   const [form, setForm] = useState<LocalForm | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initRef = useRef(false);
+
+  // Lightweight inline toast: show a dismissible error banner inside the
+  // panel header. Auto-clears after 6s so it doesn't linger forever. The app
+  // doesn't ship a global toast library, so this is the most consistent
+  // pattern with the rest of the codebase (see InvoiceIssuerPicker).
+  const showError = useCallback((message: string) => {
+    setErrorBanner(message);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => setErrorBanner(null), 6000);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    };
+  }, []);
 
   // Reactively re-snapshot the issuer when the user edits identity in another
   // tab. The backend re-snapshots whenever issuerEntityId is in the patch, so
@@ -194,8 +236,11 @@ export function InvoiceDetailPanel({
       patch: { issuerEntityId, issuerIban },
     }).catch((err) => {
       console.error("Issuer re-snapshot failed:", err);
+      showError(
+        `Absender konnte nicht aktualisiert werden: ${getInvoiceErrorMessage(err)}`,
+      );
     });
-  }, [invoice, issuerEntityId, issuerIban, issuerSignature, invoiceId]);
+  }, [invoice, issuerEntityId, issuerIban, issuerSignature, invoiceId, showError]);
 
   // Reset the tracking ref when switching invoices
   useEffect(() => {
@@ -218,7 +263,9 @@ export function InvoiceDetailPanel({
   }, [invoiceId]);
 
   const isDraft = invoice?.status === "draft";
-  const disabled = !isDraft;
+  // Editing is now allowed in any non-cancelled state. Cancelled invoices stay
+  // locked because their accounting record must remain immutable.
+  const disabled = invoice?.status === "cancelled";
 
   // ---------------------------------------------------------------------
   // Issued invoice: subscribe to the linked TaxFile so we can show its real
@@ -251,14 +298,43 @@ export function InvoiceDetailPanel({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSentRef = useRef<string>("");
 
+  // Throttle PDF regen for issued invoices so we don't hammer the backend
+  // on every keystroke. We let updateInvoice fire on the regular autosave
+  // cadence and only trigger regen at most every 5 seconds.
+  const lastRegenRef = useRef<number>(0);
+  const REGEN_THROTTLE_MS = 5000;
+  const triggerRegen = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastRegenRef.current < REGEN_THROTTLE_MS) return;
+    lastRegenRef.current = now;
+    try {
+      await callFunction<
+        { invoiceId: string },
+        { downloadUrl: string }
+      >("regenerateInvoicePdf", { invoiceId });
+    } catch (err) {
+      console.error("regenerateInvoicePdf (auto) failed:", err);
+      showError(
+        `PDF konnte nicht neu erzeugt werden: ${getInvoiceErrorMessage(err)}`,
+      );
+    }
+  }, [invoiceId, showError]);
+
   const sendUpdate = useCallback(
     async (next: LocalForm) => {
-      if (!invoice || invoice.status !== "draft") return;
+      if (!invoice || invoice.status === "cancelled") return;
       const patch: Record<string, unknown> = {
         paymentTerms: next.paymentTerms,
         lineItems: next.lineItems,
         notes: next.notes,
+        namePrefix: next.namePrefix.trim() === "" ? null : next.namePrefix.trim(),
       };
+      // Only send numberSeq when it parses to a valid positive integer to
+      // avoid bouncing off the server validation while the user is mid-typing.
+      const parsedSeq = parseInt(next.numberSeq, 10);
+      if (Number.isInteger(parsedSeq) && parsedSeq >= 1 && parsedSeq <= 9999) {
+        patch.numberSeq = parsedSeq;
+      }
       if (next.issueDate) {
         patch.issueDate = fromDateInput(next.issueDate)?.toISOString();
       }
@@ -281,11 +357,20 @@ export function InvoiceDetailPanel({
           { invoiceId: string; patch: Record<string, unknown> },
           { invoiceId: string; status: string }
         >("updateInvoice", { invoiceId, patch });
+        // Auto-regenerate the PDF after edits to issued invoices so the
+        // user-visible PDF stays in sync. Drafts render the PDF client-side
+        // via @react-pdf/renderer, so no regen needed there.
+        if (invoice.status !== "draft") {
+          triggerRegen();
+        }
       } catch (err) {
         console.error("updateInvoice failed:", err);
+        showError(
+          `Änderungen konnten nicht gespeichert werden: ${getInvoiceErrorMessage(err)}`,
+        );
       }
     },
-    [invoice, invoiceId]
+    [invoice, invoiceId, showError, triggerRegen]
   );
 
   const queueSave = useCallback(
@@ -386,6 +471,50 @@ export function InvoiceDetailPanel({
     if (!form) return { subtotal: 0, vatAmount: 0, total: 0 };
     return computeInvoiceTotals(form.lineItems);
   }, [form]);
+
+  // Live composed name — uses the user's in-progress edits so the sidebar
+  // header reflects what the issued invoice will be called BEFORE save.
+  const liveDisplayName = useMemo(() => {
+    if (!invoice) return "(Entwurf)";
+    // Issued invoices already have a frozen number — show it as-is.
+    if (invoice.number && !invoice.number.startsWith("DRAFT-")) {
+      return invoice.number;
+    }
+    const yearStr = form?.issueDate?.slice(0, 4);
+    const year = yearStr ? parseInt(yearStr, 10) : undefined;
+    const parsedSeq = form ? parseInt(form.numberSeq, 10) : NaN;
+    return composeInvoiceName({
+      namePrefix: form?.namePrefix,
+      recipientName: invoice.recipient?.name,
+      year:
+        Number.isInteger(year) && year !== undefined && year > 0
+          ? year
+          : invoice.issueDate?.toDate().getFullYear(),
+      numberSeq:
+        Number.isInteger(parsedSeq) && parsedSeq >= 1
+          ? parsedSeq
+          : invoice.numberSeq,
+    });
+  }, [invoice, form]);
+
+  // Compute issuability for the sticky-footer button. We list every missing
+  // field individually so the user knows exactly what to fill in.
+  const issuabilityIssues = useMemo<string[]>(() => {
+    if (!form) return [];
+    const issues: string[] = [];
+    if (!form.recipient?.partnerId) issues.push("Empfänger");
+    if (!form.issuer?.entityId) issues.push("Absender");
+    if (!form.issuer?.iban) issues.push("Absender-IBAN");
+    const hasValidLine = form.lineItems.some(
+      (li) =>
+        li.description.trim() !== "" &&
+        (li.unitPrice ?? 0) > 0 &&
+        (li.quantity ?? 0) > 0,
+    );
+    if (!hasValidLine) issues.push("mindestens eine Position mit Preis");
+    return issues;
+  }, [form]);
+  const canIssue = issuabilityIssues.length === 0;
 
   // ---------------------------------------------------------------------
   // Live PDF preview (drafts only)
@@ -494,9 +623,10 @@ export function InvoiceDetailPanel({
   const previewSource = useMemo(() => {
     if (isDraft) {
       if (!draftBlobUrl) return null;
-      const fileName = invoice?.number
-        ? `Rechnung-${invoice.number}.pdf`
-        : "Rechnungsentwurf.pdf";
+      const fileName =
+        liveDisplayName && liveDisplayName !== "(Entwurf)"
+          ? `${liveDisplayName}.pdf`
+          : "Rechnungsentwurf.pdf";
       return {
         downloadUrl: draftBlobUrl,
         fileName,
@@ -511,7 +641,7 @@ export function InvoiceDetailPanel({
       };
     }
     return null;
-  }, [isDraft, draftBlobUrl, invoice?.number, issuedFile]);
+  }, [isDraft, draftBlobUrl, liveDisplayName, issuedFile]);
 
   // Lift preview source up to the page so it can render the standard
   // FileViewerOverlay over the file list area.
@@ -531,6 +661,13 @@ export function InvoiceDetailPanel({
   // Action handlers
   // -----------------------------------------------------------------
 
+  const ACTION_ERROR_LABELS: Record<string, string> = {
+    issue: "Rechnung konnte nicht ausgestellt werden",
+    cancel: "Rechnung konnte nicht storniert werden",
+    duplicate: "Rechnung konnte nicht dupliziert werden",
+    regen: "PDF konnte nicht neu erzeugt werden",
+  };
+
   const doAction = useCallback(
     async (name: string, fn: () => Promise<void>) => {
       setActionBusy(name);
@@ -538,11 +675,14 @@ export function InvoiceDetailPanel({
         await fn();
       } catch (err) {
         console.error(`${name} failed:`, err);
+        const label = ACTION_ERROR_LABELS[name] || "Aktion fehlgeschlagen";
+        showError(`${label}: ${getInvoiceErrorMessage(err)}`);
       } finally {
         setActionBusy(null);
       }
     },
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showError]
   );
 
   const handleIssue = () =>
@@ -564,6 +704,10 @@ export function InvoiceDetailPanel({
         { invoiceId: string },
         { invoiceId: string; status: string }
       >("cancelInvoice", { invoiceId });
+      // Close the sidebar after a successful cancel — the invoice is no
+      // longer something the user is actively working with, and leaving the
+      // panel open showing a now-cancelled record is just clutter.
+      onClose();
     });
 
   const handleDuplicate = () =>
@@ -587,14 +731,6 @@ export function InvoiceDetailPanel({
       }
     });
 
-  const handleRegen = () =>
-    doAction("regen", async () => {
-      await callFunction<
-        { invoiceId: string },
-        { downloadUrl: string }
-      >("regenerateInvoicePdf", { invoiceId });
-    });
-
   // -----------------------------------------------------------------
   // Loading state
   // -----------------------------------------------------------------
@@ -615,7 +751,7 @@ export function InvoiceDetailPanel({
         <div className="flex items-center justify-between gap-2 h-[53px] border-b px-4 flex-shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <h2 className="text-sm font-semibold truncate">
-              Rechnung {invoice.number || "(Entwurf)"}
+              Rechnung {liveDisplayName}
             </h2>
             <InvoiceStatusBadge status={invoice.status} />
           </div>
@@ -629,6 +765,21 @@ export function InvoiceDetailPanel({
             <X className="h-4 w-4" />
           </Button>
         </div>
+
+        {errorBanner && (
+          <div className="flex-shrink-0 border-b bg-destructive/10 text-destructive px-4 py-2 text-xs flex items-start gap-2">
+            <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+            <span className="flex-1">{errorBanner}</span>
+            <button
+              type="button"
+              onClick={() => setErrorBanner(null)}
+              className="flex-shrink-0 opacity-70 hover:opacity-100"
+              aria-label="Hinweis schließen"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Body: single-column editor with embedded preview thumbnail */}
         <ScrollArea className="flex-1">
@@ -668,7 +819,7 @@ export function InvoiceDetailPanel({
                   {isDraft ? "Entwurf" : "Rechnung"}
                 </div>
                 <div className="text-base font-semibold truncate">
-                  {invoice.number || "(Entwurf)"}
+                  {liveDisplayName}
                 </div>
                 {invoice.recipient?.name && (
                   <div className="text-muted-foreground truncate">
@@ -679,6 +830,65 @@ export function InvoiceDetailPanel({
                   {formatEur(liveTotals.total)}
                 </div>
               </div>
+            </div>
+
+            <Separator />
+
+            {/* Naming + sequence — sits above the Absender so the user sees
+                the invoice number first. Both fields are optional; when
+                empty the displayed name falls back to a 3-letter recipient
+                abbreviation + auto-incremented sequence. */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">
+                Rechnungs-Nummerierung
+              </Label>
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="invoice-name-prefix"
+                    className="text-[10px] uppercase tracking-wider text-muted-foreground"
+                  >
+                    Rechnungsname
+                  </Label>
+                  <Input
+                    id="invoice-name-prefix"
+                    value={form.namePrefix}
+                    onChange={(e) =>
+                      updateForm({ namePrefix: e.target.value })
+                    }
+                    placeholder="z. B. INV"
+                    maxLength={16}
+                    disabled={disabled}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="invoice-number-seq"
+                    className="text-[10px] uppercase tracking-wider text-muted-foreground"
+                  >
+                    Nummer
+                  </Label>
+                  <Input
+                    id="invoice-number-seq"
+                    type="number"
+                    min={1}
+                    max={9999}
+                    inputMode="numeric"
+                    value={form.numberSeq}
+                    onChange={(e) =>
+                      updateForm({
+                        numberSeq: e.target.value.replace(/[^0-9]/g, ""),
+                      })
+                    }
+                    className="w-24 tabular-nums"
+                    placeholder="0001"
+                    disabled={disabled}
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Vorschau: <span className="font-mono">{liveDisplayName}</span>
+              </p>
             </div>
 
             <Separator />
@@ -776,12 +986,13 @@ export function InvoiceDetailPanel({
               />
             </div>
 
-            {!isDraft && (
+            {invoice.status === "cancelled" && (
               <div className="text-xs text-muted-foreground bg-muted/40 border rounded-md p-2 flex items-start gap-2">
-                <Check className="h-3.5 w-3.5 mt-0.5" />
+                <XCircle className="h-3.5 w-3.5 mt-0.5" />
                 <span>
-                  Diese Rechnung ist nicht mehr editierbar. Dupliziere sie,
-                  um einen neuen Entwurf zu erstellen.
+                  Diese Rechnung wurde storniert und ist nicht mehr
+                  editierbar. Dupliziere sie, um einen neuen Entwurf zu
+                  erstellen.
                 </span>
               </div>
             )}
@@ -795,12 +1006,20 @@ export function InvoiceDetailPanel({
             an empty draft (see phantom-cleanup effect above), so Löschen
             is redundant, and Duplizieren of a half-filled draft is
             confusing. */}
+        {/* "What's missing" hint — sits directly above the sticky footer.
+            Only visible for draft invoices that aren't yet issuable. */}
+        {invoice.status === "draft" && issuabilityIssues.length > 0 && (
+          <div className="flex-shrink-0 border-t bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+            Fehlend: {issuabilityIssues.join(", ")}
+          </div>
+        )}
+
         <div className="flex-shrink-0 border-t bg-background p-4 space-y-2">
           {invoice.status === "draft" && (
             <Button
               className="w-full"
               onClick={handleIssue}
-              disabled={actionBusy !== null}
+              disabled={actionBusy !== null || !canIssue}
             >
               {actionBusy === "issue" ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -821,40 +1040,53 @@ export function InvoiceDetailPanel({
                 <Share2 className="h-4 w-4 mr-2" />
                 Teilen
               </Button>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={handleRegen}
-                  disabled={actionBusy !== null}
-                  title="PDF neu erzeugen"
-                >
-                  {actionBusy === "regen" ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                  )}
-                  PDF neu
-                </Button>
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={handleDuplicate}
-                  disabled={actionBusy !== null}
-                >
-                  <Copy className="h-4 w-4 mr-2" />
-                  Duplizieren
-                </Button>
-              </div>
               <Button
                 variant="outline"
-                className="w-full text-destructive hover:text-destructive hover:bg-destructive/10"
-                onClick={handleCancel}
+                className="w-full"
+                onClick={handleDuplicate}
                 disabled={actionBusy !== null}
               >
-                <XCircle className="h-4 w-4 mr-2" />
-                Stornieren
+                <Copy className="h-4 w-4 mr-2" />
+                Duplizieren
               </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="w-full text-destructive hover:text-destructive hover:bg-destructive/10"
+                    disabled={actionBusy !== null}
+                  >
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Stornieren
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Rechnung stornieren?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Die Rechnung wird als storniert markiert und das
+                      verknüpfte PDF wird ausgeblendet. Dieser Schritt lässt
+                      sich nicht rückgängig machen — du kannst die Rechnung
+                      aber duplizieren, um einen neuen Entwurf zu erstellen.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={actionBusy === "cancel"}>
+                      Abbrechen
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleCancel}
+                      disabled={actionBusy !== null}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      {actionBusy === "cancel" && (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      )}
+                      Stornieren
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </>
           )}
           {invoice.status === "paid" && (

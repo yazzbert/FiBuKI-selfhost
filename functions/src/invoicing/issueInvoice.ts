@@ -13,7 +13,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import * as crypto from "crypto";
 import { createCallable, HttpsError } from "../utils/createCallable";
-import { Invoice, InvoicePartnerAddress } from "./types";
+import { Invoice, InvoicePartnerAddress, composeInvoiceName } from "./types";
 import { allocateInvoiceNumber } from "./numberAllocator";
 import { renderInvoicePdf } from "./renderInvoicePdf";
 
@@ -80,8 +80,21 @@ export async function performIssueInvoice(
     throw new HttpsError("failed-precondition", "Pick a sender bank account first");
   }
 
-  // 1. Allocate the real invoice number
-  const number = await allocateInvoiceNumber(db, userId);
+  // 1. Compose the invoice number from namePrefix + year + numberSeq. Legacy
+  // drafts without numberSeq fall back to the atomic per-user allocator so we
+  // never end up with an unnumbered issued invoice.
+  const issueYear = current.issueDate.toDate().getFullYear();
+  let number: string;
+  if (typeof current.numberSeq === "number" && current.numberSeq >= 1) {
+    number = composeInvoiceName({
+      namePrefix: current.namePrefix,
+      recipientName: current.recipient?.name,
+      year: issueYear,
+      numberSeq: current.numberSeq,
+    });
+  } else {
+    number = await allocateInvoiceNumber(db, userId);
+  }
   const now = Timestamp.now();
 
   // Build the issued invoice in-memory for the PDF (don't rely on a re-read)
@@ -124,7 +137,8 @@ export async function performIssueInvoice(
   }));
 
   const fileFields: Record<string, unknown> = {
-    fileName: `Rechnung-${number}.pdf`,
+    // File name mirrors the composed invoice number, e.g. "INV-2026-0007.pdf".
+    fileName: `${number}.pdf`,
     fileType: "application/pdf",
     fileSize: pdfBuffer.length,
     storagePath,

@@ -1,9 +1,10 @@
 /**
- * Update a draft invoice.
+ * Update an invoice.
  * Server recomputes totals + dueDate when relevant fields change.
  * Re-snapshots issuer/recipient if their refs change.
  *
- * Rejects if status !== "draft".
+ * Allowed in any status except "cancelled" — the frontend auto-regenerates
+ * the PDF after edits to issued/sent/paid invoices.
  */
 
 import { Timestamp } from "firebase-admin/firestore";
@@ -42,6 +43,10 @@ export interface UpdateInvoicePatch {
   currency?: string;
   lineItems?: UpdateInvoiceLineItemInput[];
   notes?: string | null;
+  /** Optional name prefix (e.g. "INV"). Set to "" / null to clear. */
+  namePrefix?: string | null;
+  /** Positive integer (<= 9999) representing the invoice sequence. */
+  numberSeq?: number;
 }
 
 export interface UpdateInvoiceRequest {
@@ -108,8 +113,14 @@ export async function performUpdateInvoice(
   if (current.userId !== userId) {
     throw new HttpsError("permission-denied", "Not your invoice");
   }
-  if (current.status !== "draft") {
-    throw new HttpsError("failed-precondition", "Only drafts may be edited");
+  // Cancelled invoices are frozen; everything else (draft, issued, sent, paid)
+  // remains editable. The user can fix typos/numbers post-issue; the caller is
+  // expected to re-render the PDF after edits to non-draft invoices.
+  if (current.status === "cancelled") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Cancelled invoices cannot be edited",
+    );
   }
 
   const updates: Record<string, unknown> = {};
@@ -149,6 +160,32 @@ export async function performUpdateInvoice(
       throw new HttpsError("invalid-argument", "issuerIban does not belong to entity");
     }
     updates.issuer = buildIssuerSnapshot(entity, iban);
+  }
+
+  // namePrefix / numberSeq
+  if (patch.namePrefix !== undefined) {
+    if (patch.namePrefix === null || patch.namePrefix === "") {
+      updates.namePrefix = null;
+    } else {
+      const trimmed = String(patch.namePrefix).trim();
+      if (trimmed.length > 16) {
+        throw new HttpsError(
+          "invalid-argument",
+          "namePrefix is too long (max 16 characters)",
+        );
+      }
+      updates.namePrefix = trimmed;
+    }
+  }
+  if (patch.numberSeq !== undefined) {
+    const n = Number(patch.numberSeq);
+    if (!Number.isInteger(n) || n < 1 || n > 9999) {
+      throw new HttpsError(
+        "invalid-argument",
+        "numberSeq must be a positive integer up to 9999",
+      );
+    }
+    updates.numberSeq = n;
   }
 
   // Simple scalar fields

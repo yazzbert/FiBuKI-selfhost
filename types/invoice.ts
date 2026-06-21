@@ -35,6 +35,19 @@ export interface Invoice {
   number: string;
   status: InvoiceStatus;
 
+  /**
+   * Optional short user-defined prefix used to compose the display name, e.g.
+   * "INV" -> "INV-2026-0007". When absent, the composed name falls back to a
+   * 3-letter uppercase abbreviation of the recipient's name.
+   */
+  namePrefix?: string;
+  /**
+   * The integer sequence number for this invoice within its
+   * (year, namePrefix) bucket. Persisted from draft time so the user can see
+   * and edit the upcoming number. Zero-padded to 4 digits at display time.
+   */
+  numberSeq?: number;
+
   issuer: InvoiceIssuerSnapshot;
   recipient: InvoiceRecipientSnapshot;
 
@@ -115,6 +128,38 @@ export function computeInvoiceTotals(lineItems: InvoiceLineItem[]): {
     vatAmount += vatCents;
   }
   return { subtotal, vatAmount, total: subtotal + vatAmount };
+}
+
+/**
+ * Build a 3-letter uppercase abbreviation from a recipient name. Strips
+ * non-letter characters (so "P.H. Häusler" -> "PHH") and pads with "X" if the
+ * name is shorter than 3 alphabetic characters.
+ */
+export function partnerAbbrev(name?: string): string {
+  if (!name) return "XXX";
+  const letters = name.replace(/[^A-Za-zÄÖÜäöüß]/g, "");
+  const upper = letters.toUpperCase();
+  if (upper.length === 0) return "XXX";
+  return upper.slice(0, 3).padEnd(3, "X");
+}
+
+/**
+ * Compose the human-readable invoice name from its parts. The shape is:
+ *   {namePrefix || partnerAbbrev(recipient)}-{year}-{padded numberSeq}
+ *
+ * Falls back to "(Entwurf)" when there's no year or sequence yet.
+ */
+export function composeInvoiceName(parts: {
+  namePrefix?: string;
+  recipientName?: string;
+  year?: number;
+  numberSeq?: number;
+}): string {
+  const seq = parts.numberSeq;
+  const year = parts.year;
+  if (!year || !seq || seq < 1) return "(Entwurf)";
+  const prefix = parts.namePrefix?.trim() || partnerAbbrev(parts.recipientName);
+  return `${prefix}-${year}-${String(seq).padStart(4, "0")}`;
 }
 
 export function parsePaymentTermsToDays(terms: string): number {
