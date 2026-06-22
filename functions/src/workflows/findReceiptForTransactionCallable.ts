@@ -31,7 +31,7 @@ import {
 // Secrets required for Gmail token refresh (mirrors searchGmailCallable)
 const googleClientId = defineSecret("GOOGLE_CLIENT_ID");
 const googleClientSecret = defineSecret("GOOGLE_CLIENT_SECRET");
-const tokenEncryptionKey = defineSecret("TOKEN_ENCRYPTION_KEY");
+const tokenEncryptionKey = defineSecret("GMAIL_TOKEN_ENCRYPTION_KEY");
 
 interface FindReceiptCallableRequest {
   transactionId: string;
