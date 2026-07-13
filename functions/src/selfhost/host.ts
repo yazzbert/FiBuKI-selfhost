@@ -24,6 +24,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import type { AuthData, CallableFunction, FunctionsErrorCode, HttpsFunction } from "./https-shim";
 import { HttpsError } from "./https-shim";
 import { EXCLUDED_EXPORTS } from "./manifest";
+import { createDataPlane } from "./data-plane";
 
 export type TokenVerifier = (token: string) => Promise<AuthData | null>;
 
@@ -178,6 +179,12 @@ export function createHost(
     }
     // Triggers registered themselves on the in-process bus at import time.
   }
+
+  // Client data plane (work item 6): query/get/write for the frontend
+  // firestore shim. "__data" can't collide with barrel exports (JS
+  // identifiers don't start with "__d" in the barrel — and the loop above
+  // mounted its routes first anyway).
+  app.use("/__data", createDataPlane(options.verifyToken, { jsonLimit: options.jsonLimit }));
 
   app.get("/healthz", (_req, res) => {
     res.json({
