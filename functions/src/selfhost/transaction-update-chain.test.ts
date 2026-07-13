@@ -24,27 +24,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { getFirestore, Timestamp, __resetFirestoreShim } from "./firestore-shim";
 import { drainTriggers, __resetTriggerShim } from "./trigger-shim";
+import { waitFor } from "./test-helpers";
 
 // REAL trigger module, unmodified:
 import "../matching/onTransactionUpdate";
 
 const db = getFirestore();
 const USER = "stefan-test";
-
-/**
- * Poll until cond() holds, draining trigger queues between checks. Needed
- * for the fire-and-forget branches (reconciliation, receipt search) that
- * the handler intentionally does not await.
- */
-async function waitFor(cond: () => Promise<boolean>, timeoutMs = 5000): Promise<void> {
-  const start = Date.now();
-  for (;;) {
-    await drainTriggers();
-    if (await cond()) return;
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor: condition not met in time");
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
 
 async function seedSubscription(mode: "active" | "passive") {
   await db.collection("subscriptions").doc(USER).set({

@@ -579,20 +579,35 @@ class WriteBatch {
 }
 
 class TransactionShim {
+  // Writes queue up and apply at commit time (after the callback resolves),
+  // matching real Firestore transaction semantics — reads never see the
+  // transaction's own writes, and nothing lands if the callback throws.
+  private ops: Array<() => Promise<void>> = [];
+
   async get(refOrQuery: DocRef | Query): Promise<DocSnapshot | QuerySnapshot> {
     return refOrQuery.get() as Promise<DocSnapshot | QuerySnapshot>;
   }
   set(ref: DocRef, data: Record<string, unknown>, opts?: { merge?: boolean }): TransactionShim {
-    void ref.set(data, opts);
+    this.ops.push(async () => {
+      await ref.set(data, opts);
+    });
     return this;
   }
   update(ref: DocRef, data: Record<string, unknown>): TransactionShim {
-    void ref.update(data);
+    this.ops.push(async () => {
+      await ref.update(data);
+    });
     return this;
   }
   delete(ref: DocRef): TransactionShim {
-    void ref.delete();
+    this.ops.push(async () => {
+      await ref.delete();
+    });
     return this;
+  }
+  async __commit(): Promise<void> {
+    for (const op of this.ops) await op();
+    this.ops = [];
   }
 }
 
@@ -624,7 +639,10 @@ class FirestoreShim {
 
   async runTransaction<T>(fn: (tx: TransactionShim) => Promise<T>): Promise<T> {
     // Spike: no isolation — single-user, single-writer. Production wraps in PG tx.
-    return fn(new TransactionShim());
+    const tx = new TransactionShim();
+    const result = await fn(tx);
+    await tx.__commit();
+    return result;
   }
 
   async getAll(...refs: DocRef[]): Promise<DocSnapshot[]> {

@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { getFirestore, Timestamp, __resetFirestoreShim } from "./firestore-shim";
 import { drainTriggers, __resetTriggerShim } from "./trigger-shim";
 import { HttpsError } from "./https-shim";
+import { waitFor } from "./test-helpers";
 
 // REAL application code, unmodified:
 import { bulkCreateTransactionsCallable } from "../imports/bulkCreateTransactions";
@@ -25,16 +26,6 @@ import { bulkCreateTransactionsCallable } from "../imports/bulkCreateTransaction
 const db = getFirestore();
 const USER = "stefan-test";
 const CURRENT_MONTH = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-
-async function waitFor(cond: () => Promise<boolean>, timeoutMs = 5000): Promise<void> {
-  const start = Date.now();
-  for (;;) {
-    await drainTriggers();
-    if (await cond()) return;
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor: condition not met in time");
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
 
 function csvTx(i: number, overrides: Record<string, unknown> = {}) {
   return {
