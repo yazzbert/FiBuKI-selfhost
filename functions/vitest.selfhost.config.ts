@@ -16,6 +16,7 @@ export default defineConfig({
     alias: {
       "firebase-admin/firestore": shim("firestore-shim.ts"),
       "firebase-functions/v2/firestore": shim("trigger-shim.ts"),
+      "firebase-functions/v2/https": shim("https-shim.ts"),
       "firebase-admin/auth": shim("auth-shim.ts"),
       "@google-cloud/vertexai": shim("vertexai-stub.ts"),
     },
