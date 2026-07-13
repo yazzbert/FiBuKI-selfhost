@@ -358,6 +358,12 @@ export class Query {
     protected readonly orders: Array<{ field: string; dir: "asc" | "desc" }> = [],
     protected readonly limitN: number | null = null,
     protected readonly offsetN: number = 0,
+    /**
+     * collectionGroup mode: collectionPath is a bare collection ID matched
+     * against the LAST path segment of every collection (top-level or
+     * subcollection) — same semantics as Firestore collection group queries.
+     */
+    protected readonly isGroup: boolean = false,
   ) {}
 
   where(field: string, op: string, value: unknown): Query {
@@ -367,6 +373,7 @@ export class Query {
       this.orders,
       this.limitN,
       this.offsetN,
+      this.isGroup,
     );
   }
 
@@ -377,15 +384,16 @@ export class Query {
       [...this.orders, { field, dir }],
       this.limitN,
       this.offsetN,
+      this.isGroup,
     );
   }
 
   limit(n: number): Query {
-    return new Query(this.collectionPath, this.filters, this.orders, n, this.offsetN);
+    return new Query(this.collectionPath, this.filters, this.orders, n, this.offsetN, this.isGroup);
   }
 
   offset(n: number): Query {
-    return new Query(this.collectionPath, this.filters, this.orders, this.limitN, n);
+    return new Query(this.collectionPath, this.filters, this.orders, this.limitN, n, this.isGroup);
   }
 
   select(..._fields: string[]): Query {
@@ -395,12 +403,24 @@ export class Query {
   async get(): Promise<QuerySnapshot> {
     const pg = await getPg();
     // Spike: fetch the collection, filter in JS. Production: push filters to SQL.
-    const res = await pg.query<{ id: string; data: unknown }>(
-      `SELECT id, data FROM docs WHERE collection_path = $1`,
-      [this.collectionPath],
-    );
+    const res = this.isGroup
+      ? await pg.query<{ id: string; collection_path: string; data: unknown }>(
+          // Escape LIKE wildcards in the collection ID — the segment match
+          // must be literal.
+          `SELECT id, collection_path, data FROM docs
+           WHERE collection_path = $1 OR collection_path LIKE $2 ESCAPE '\\'`,
+          [
+            this.collectionPath,
+            `%/${this.collectionPath.replace(/([\\%_])/g, "\\$1")}`,
+          ],
+        )
+      : await pg.query<{ id: string; collection_path: string; data: unknown }>(
+          `SELECT id, collection_path, data FROM docs WHERE collection_path = $1`,
+          [this.collectionPath],
+        );
     let rows = res.rows.map((r) => ({
       id: r.id,
+      collectionPath: r.collection_path,
       data: decodeValue(r.data) as Record<string, unknown>,
     }));
     for (const f of this.filters) rows = rows.filter((r) => matchesFilter(r.data, f));
@@ -413,7 +433,7 @@ export class Query {
     if (this.offsetN) rows = rows.slice(this.offsetN);
     if (this.limitN !== null) rows = rows.slice(0, this.limitN);
     const docs = rows.map(
-      (r) => new DocSnapshot(r.id, r.data, new DocRef(this.collectionPath, r.id)),
+      (r) => new DocSnapshot(r.id, r.data, new DocRef(r.collectionPath, r.id)),
     );
     return new QuerySnapshot(docs);
   }
@@ -629,8 +649,11 @@ class FirestoreShim {
     return new DocRef(segs.join("/"), id);
   }
 
-  collectionGroup(_name: string): never {
-    throw new Error("selfhost firestore shim: collectionGroup not implemented (spike)");
+  collectionGroup(name: string): Query {
+    if (!name || name.includes("/")) {
+      throw new Error(`selfhost firestore shim: collectionGroup takes a collection ID, got '${name}'`);
+    }
+    return new Query(name, [], [], null, 0, true);
   }
 
   batch(): WriteBatch {
