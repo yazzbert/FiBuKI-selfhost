@@ -6,7 +6,8 @@
  * Env:
  *   FIBUKI_SMTP_HOST     e.g. "smtp.migadu.com" (required)
  *   FIBUKI_SMTP_PORT     default 465
- *   FIBUKI_SMTP_SECURE   "false" to disable implicit TLS (default on for 465)
+ *   FIBUKI_SMTP_SECURE   "true"/"false" to force implicit TLS on or off
+ *                        (default: on for port 465, off otherwise)
  *   FIBUKI_SMTP_USER     auth mailbox (required)
  *   FIBUKI_SMTP_PASS     (required)
  *   FIBUKI_SMTP_FROM_NAME  display name, default "FiBuKI"
@@ -48,7 +49,9 @@ async function getTransport(): Promise<Transporter> {
     transporter = nodemailer.createTransport({
       host: process.env.FIBUKI_SMTP_HOST,
       port,
-      secure: process.env.FIBUKI_SMTP_SECURE !== "false" && port === 465,
+      secure:
+        process.env.FIBUKI_SMTP_SECURE === "true" ||
+        (process.env.FIBUKI_SMTP_SECURE !== "false" && port === 465),
       auth: {
         user: process.env.FIBUKI_SMTP_USER,
         pass: process.env.FIBUKI_SMTP_PASS,
@@ -71,14 +74,21 @@ export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
   const fromName = process.env.FIBUKI_SMTP_FROM_NAME || "FiBuKI";
   const transport = await getTransport();
 
-  await transport.sendMail({
-    from: `${fromName} <${user}>`,
-    to: options.to,
-    subject: options.subject,
-    html: options.html,
-    text: options.text,
-    ...(options.headers ? { headers: options.headers } : {}),
-  });
+  try {
+    await transport.sendMail({
+      from: `${fromName} <${user}>`,
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
+      text: options.text,
+      ...(options.headers ? { headers: options.headers } : {}),
+    });
+  } catch (err) {
+    // Upstream's Resend path never rejects (the SDK reports errors in its
+    // return value), so callers have no try/catch — keep that contract.
+    console.error(`[Mailer:selfhost] SMTP send failed for "${options.subject}":`, err);
+    return false;
+  }
 
   return true;
 }

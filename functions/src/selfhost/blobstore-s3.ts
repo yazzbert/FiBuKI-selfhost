@@ -11,12 +11,17 @@
  * Design notes:
  * - S3 lowercases user-metadata keys, but call sites read camelCase keys
  *   back (`firebaseStorageDownloadTokens`), so custom metadata rides in a
- *   single JSON-encoded header (`x-amz-meta-fibuki-custom`) instead of one
- *   header per key.
+ *   single header (`x-amz-meta-fibuki-custom`) as base64-encoded JSON —
+ *   base64 because header values must be ASCII on the wire (raw umlauts in
+ *   Gmail attachment filenames would break the V4 signature) and JSON to
+ *   preserve key casing.
  * - S3 DELETE is idempotent (204 on missing object); the shim's 404
  *   contract needs a stat first.
  * - S3 can't patch metadata in place; setMeta is a self-copy with
- *   metadata replace.
+ *   MetadataDirective REPLACE. System headers (Content-Type etc.) must go
+ *   via `Headers` there — CopyDestinationOptions.getHeaders() prefixes
+ *   every `UserMetadata` key with x-amz-meta-, unlike putObject's header
+ *   handling which keeps known system headers unprefixed.
  */
 
 import { Client, CopyDestinationOptions, CopySourceOptions } from "minio";
@@ -50,20 +55,29 @@ export class S3BlobStore implements BlobStore {
         if (!(await this.client.bucketExists(this.bucket))) {
           await this.client.makeBucket(this.bucket);
         }
-      })();
+      })().catch((err) => {
+        // Don't cache a rejected promise — this is a long-lived server, a
+        // transient MinIO outage must not wedge storage until restart.
+        this.ready = undefined;
+        throw err;
+      });
     }
     return this.ready;
   }
 
-  private toHeaders(meta: BlobMetadata): Record<string, string> {
+  private systemHeaders(meta: BlobMetadata): Record<string, string> {
     const h: Record<string, string> = {};
     if (meta.contentType) h["Content-Type"] = meta.contentType;
     if (meta.cacheControl) h["Cache-Control"] = meta.cacheControl;
     if (meta.contentDisposition) h["Content-Disposition"] = meta.contentDisposition;
-    if (meta.metadata && Object.keys(meta.metadata).length > 0) {
-      h[CUSTOM_META_KEY] = JSON.stringify(meta.metadata);
-    }
     return h;
+  }
+
+  private customHeader(meta: BlobMetadata): Record<string, string> {
+    if (!meta.metadata || Object.keys(meta.metadata).length === 0) return {};
+    return {
+      [CUSTOM_META_KEY]: Buffer.from(JSON.stringify(meta.metadata), "utf8").toString("base64"),
+    };
   }
 
   private fromStat(path: string, stat: {
@@ -73,10 +87,10 @@ export class S3BlobStore implements BlobStore {
   }): BlobMetadata {
     const md = stat.metaData ?? {};
     let custom: Record<string, string> | undefined;
-    const rawCustom = md[CUSTOM_META_KEY] ?? md[`x-amz-meta-${CUSTOM_META_KEY}`];
+    const rawCustom = md[CUSTOM_META_KEY];
     if (rawCustom) {
       try {
-        custom = JSON.parse(rawCustom);
+        custom = JSON.parse(Buffer.from(rawCustom, "base64").toString("utf8"));
       } catch {
         custom = undefined;
       }
@@ -97,7 +111,12 @@ export class S3BlobStore implements BlobStore {
 
   async put(path: string, data: Buffer, meta: BlobMetadata): Promise<void> {
     await this.ensureBucket();
-    await this.client.putObject(this.bucket, path, data, data.length, this.toHeaders(meta));
+    // putObject keeps known system headers unprefixed and x-amz-meta-
+    // prefixes only the custom key, so one merged map is correct here.
+    await this.client.putObject(this.bucket, path, data, data.length, {
+      ...this.systemHeaders(meta),
+      ...this.customHeader(meta),
+    });
   }
 
   async head(path: string): Promise<BlobMetadata | null> {
@@ -114,12 +133,18 @@ export class S3BlobStore implements BlobStore {
   async get(path: string): Promise<{ data: Buffer; meta: BlobMetadata } | null> {
     const meta = await this.head(path);
     if (!meta) return null;
-    const stream = await this.client.getObject(this.bucket, path);
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    try {
+      const stream = await this.client.getObject(this.bucket, path);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      return { data: Buffer.concat(chunks), meta };
+    } catch (err) {
+      // Deleted between head and get — keep the null/404 contract.
+      if (isNotFound(err)) return null;
+      throw err;
     }
-    return { data: Buffer.concat(chunks), meta };
   }
 
   async delete(path: string): Promise<boolean> {
@@ -149,7 +174,8 @@ export class S3BlobStore implements BlobStore {
       new CopyDestinationOptions({
         Bucket: this.bucket,
         Object: path,
-        UserMetadata: this.toHeaders(meta),
+        UserMetadata: this.customHeader(meta),
+        Headers: this.systemHeaders(meta),
         MetadataDirective: "REPLACE",
       }),
     );

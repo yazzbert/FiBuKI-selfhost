@@ -52,6 +52,11 @@ export interface BlobStore {
 /* Backends                                                            */
 /* ------------------------------------------------------------------ */
 
+/** GCS hands out fresh metadata objects; mutating callers must not corrupt the store. */
+function copyMeta(meta: BlobMetadata): BlobMetadata {
+  return { ...meta, metadata: meta.metadata ? { ...meta.metadata } : undefined };
+}
+
 class MemoryBlobStore implements BlobStore {
   private blobs = new Map<string, { data: Buffer; meta: BlobMetadata }>();
 
@@ -59,11 +64,12 @@ class MemoryBlobStore implements BlobStore {
     this.blobs.set(path, { data: Buffer.from(data), meta });
   }
   async head(path: string): Promise<BlobMetadata | null> {
-    return this.blobs.get(path)?.meta ?? null;
+    const b = this.blobs.get(path);
+    return b ? copyMeta(b.meta) : null;
   }
   async get(path: string): Promise<{ data: Buffer; meta: BlobMetadata } | null> {
     const b = this.blobs.get(path);
-    return b ? { data: Buffer.from(b.data), meta: b.meta } : null;
+    return b ? { data: Buffer.from(b.data), meta: copyMeta(b.meta) } : null;
   }
   async delete(path: string): Promise<boolean> {
     return this.blobs.delete(path);
