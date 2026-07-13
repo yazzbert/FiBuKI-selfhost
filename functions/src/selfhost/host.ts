@@ -1,0 +1,205 @@
+/**
+ * The fibuki-api HTTP host (work item 3): an Express app that walks the
+ * index.ts barrel exports and mounts everything the https-shim marked —
+ * `__selfhostCallable` behind the Firebase callable wire protocol,
+ * `__selfhostRequest` as plain Express handlers (they are written against
+ * Express req/res already; firebase-functions v2 onRequest IS Express).
+ *
+ * Callable wire protocol (matches the firebase-functions client contract,
+ * so the future client-SDK shim can reuse `callFunction()` unmodified):
+ *   POST /<exportName>   body { data: ... }   Authorization: Bearer <token>
+ *   200 → { result: ... }
+ *   error → mapped HTTP status, body { error: { message, status, details? } }
+ *
+ * Auth is pluggable: the host takes a TokenVerifier (production: Authentik
+ * OIDC; tests: fake). A missing Authorization header yields request.auth
+ * undefined and lets the callable decide (createCallable throws
+ * unauthenticated unless allowUnauthenticated) — same as Firebase. An
+ * INVALID token is rejected at the host, stricter than Firebase's
+ * "treat as anonymous", deliberately.
+ */
+
+import express from "express";
+import type { Express, NextFunction, Request, Response } from "express";
+import type { AuthData, CallableFunction, FunctionsErrorCode, HttpsFunction } from "./https-shim";
+import { HttpsError } from "./https-shim";
+import { EXCLUDED_EXPORTS } from "./manifest";
+
+export type TokenVerifier = (token: string) => Promise<AuthData | null>;
+
+export interface CreateHostOptions {
+  verifyToken: TokenVerifier;
+  /** Barrel exports NOT to mount. Defaults to manifest EXCLUDED_EXPORTS. */
+  exclude?: ReadonlySet<string>;
+  /** JSON body limit for callable payloads (CSV imports are chunky). */
+  jsonLimit?: string;
+  log?: (message: string) => void;
+}
+
+export interface HostInventory {
+  callables: string[];
+  requests: string[];
+  scheduled: string[];
+  excluded: string[];
+}
+
+// Canonical gRPC-code → HTTP status mapping used by Cloud Functions callables.
+const CODE_TO_HTTP: Record<FunctionsErrorCode, number> = {
+  ok: 200,
+  cancelled: 499,
+  unknown: 500,
+  "invalid-argument": 400,
+  "deadline-exceeded": 504,
+  "not-found": 404,
+  "already-exists": 409,
+  "permission-denied": 403,
+  "resource-exhausted": 429,
+  "failed-precondition": 400,
+  aborted: 409,
+  "out-of-range": 400,
+  unimplemented: 501,
+  internal: 500,
+  unavailable: 503,
+  "data-loss": 500,
+  unauthenticated: 401,
+};
+
+function wireStatus(code: FunctionsErrorCode): string {
+  return code.toUpperCase().replace(/-/g, "_");
+}
+
+function sendError(res: Response, code: FunctionsErrorCode, message: string, details?: unknown) {
+  res
+    .status(CODE_TO_HTTP[code] ?? 500)
+    .json({ error: { message, status: wireStatus(code), ...(details !== undefined ? { details } : {}) } });
+}
+
+function isCallable(v: unknown): v is CallableFunction {
+  return typeof v === "function" && "__selfhostCallable" in v;
+}
+
+function isRequestFn(v: unknown): v is HttpsFunction {
+  return typeof v === "function" && "__selfhostRequest" in v;
+}
+
+function isScheduled(v: unknown): boolean {
+  return typeof v === "object" && v !== null && "__selfhostSchedule" in v;
+}
+
+export function createHost(
+  barrel: Record<string, unknown>,
+  options: CreateHostOptions,
+): { app: Express; inventory: HostInventory } {
+  const exclude = options.exclude ?? EXCLUDED_EXPORTS;
+  const log = options.log ?? (() => undefined);
+  const app = express();
+
+  // Cloud Functions pre-parses JSON/urlencoded bodies and keeps the raw
+  // bytes on req.rawBody; some onRequest handlers (webhooks) rely on that.
+  const captureRaw = (req: Request, _res: Response, buf: Buffer) => {
+    (req as Request & { rawBody?: Buffer }).rawBody = buf;
+  };
+  const jsonParser = express.json({ limit: options.jsonLimit ?? "32mb", verify: captureRaw });
+  const urlencodedParser = express.urlencoded({ extended: true, verify: captureRaw });
+
+  const inventory: HostInventory = { callables: [], requests: [], scheduled: [], excluded: [] };
+
+  const bearerToken = (req: Request): string | undefined => {
+    const header = req.headers.authorization;
+    if (!header?.startsWith("Bearer ")) return undefined;
+    return header.slice("Bearer ".length);
+  };
+
+  for (const [name, value] of Object.entries(barrel)) {
+    if (exclude.has(name)) {
+      if (isCallable(value) || isRequestFn(value) || isScheduled(value)) {
+        inventory.excluded.push(name);
+      }
+      continue;
+    }
+
+    if (isCallable(value)) {
+      inventory.callables.push(name);
+      app.post(`/${name}`, jsonParser, async (req: Request, res: Response) => {
+        try {
+          let auth: AuthData | undefined;
+          const token = bearerToken(req);
+          if (token !== undefined) {
+            const verified = await options.verifyToken(token);
+            if (verified === null) {
+              sendError(res, "unauthenticated", "Invalid authentication token.");
+              return;
+            }
+            auth = verified;
+          }
+
+          const body: unknown = req.body;
+          if (typeof body !== "object" || body === null || !("data" in body)) {
+            sendError(res, "invalid-argument", "Request body must be JSON of shape { data: ... }.");
+            return;
+          }
+
+          const result = await value.run({
+            data: (body as { data: unknown }).data,
+            auth,
+            rawRequest: req,
+          });
+          res.status(200).json({ result: result ?? null });
+        } catch (err) {
+          if (err instanceof HttpsError) {
+            sendError(res, err.code, err.message, err.details);
+          } else {
+            log(`callable ${name} crashed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+            sendError(res, "internal", "INTERNAL");
+          }
+        }
+      });
+      continue;
+    }
+
+    if (isRequestFn(value)) {
+      inventory.requests.push(name);
+      // app.use strips the mount path, so req.path inside the handler is
+      // relative to the function root — same as Cloud Functions.
+      app.use(
+        `/${name}`,
+        jsonParser,
+        urlencodedParser,
+        (req: Request, res: Response, next: NextFunction) => {
+          Promise.resolve(value(req, res)).catch(next);
+        },
+      );
+      continue;
+    }
+
+    if (isScheduled(value)) {
+      inventory.scheduled.push(name);
+      // Mounted by the cron host (work item 4), not over HTTP.
+    }
+    // Triggers registered themselves on the in-process bus at import time.
+  }
+
+  app.get("/healthz", (_req, res) => {
+    res.json({
+      ok: true,
+      callables: inventory.callables.length,
+      requests: inventory.requests.length,
+      scheduled: inventory.scheduled.length,
+      excluded: inventory.excluded.length,
+    });
+  });
+
+  // Anything unmounted (unknown names, excluded exports, GET on a callable)
+  // gets a callable-protocol NOT_FOUND so the client shim sees one shape.
+  app.use((_req: Request, res: Response) => {
+    sendError(res, "not-found", "NOT_FOUND");
+  });
+
+  // Express error handler signature requires 4 args.
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    log(`request handler crashed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    if (!res.headersSent) sendError(res, "internal", "INTERNAL");
+  });
+
+  return { app, inventory };
+}

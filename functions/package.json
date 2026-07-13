@@ -12,7 +12,8 @@
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "selfhost:api": "vite-node --config vitest.selfhost.config.ts src/selfhost/server.ts"
   },
   "engines": {
     "node": "22"
@@ -29,6 +30,7 @@
     "archiver": "^7.0.1",
     "busboy": "^1.6.0",
     "cologne-phonetic": "^1.1.1",
+    "express": "^4.22.2",
     "firebase-admin": "^13.10.0",
     "firebase-functions": "^7.2.5",
     "mailparser": "^3.9.11",
@@ -55,6 +57,7 @@
     "@types/soap": "^0.21.0",
     "@types/unzipper": "^0.10.11",
     "typescript": "^6.0.3",
+    "vite-node": "^6.0.0",
     "vitest": "^4.1.9"
   },
   "private": true
