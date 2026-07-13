@@ -13,16 +13,22 @@ const shim = (f: string) => path.resolve(__dirname, "src/selfhost", f);
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "firebase-admin/firestore": shim("firestore-shim.ts"),
-      "firebase-functions/v2/firestore": shim("trigger-shim.ts"),
-      "firebase-functions/v2/https": shim("https-shim.ts"),
-      "firebase-admin/auth": shim("auth-shim.ts"),
-      "firebase-admin/storage": shim("storage-shim.ts"),
-      "firebase-functions/v2/scheduler": shim("scheduler-shim.ts"),
-      "firebase-functions/params": shim("params-shim.ts"),
-      "@google-cloud/vertexai": shim("vertexai-stub.ts"),
-    },
+    alias: [
+      { find: "firebase-admin/firestore", replacement: shim("firestore-shim.ts") },
+      { find: "firebase-functions/v2/firestore", replacement: shim("trigger-shim.ts") },
+      { find: "firebase-functions/v2/https", replacement: shim("https-shim.ts") },
+      { find: "firebase-admin/auth", replacement: shim("auth-shim.ts") },
+      { find: "firebase-admin/storage", replacement: shim("storage-shim.ts") },
+      { find: "firebase-functions/v2/scheduler", replacement: shim("scheduler-shim.ts") },
+      { find: "firebase-functions/params", replacement: shim("params-shim.ts") },
+      { find: "@google-cloud/vertexai", replacement: shim("vertexai-stub.ts") },
+      // The central mailer is app code imported by relative path, so the
+      // swap matches the module suffix instead of a bare specifier. The
+      // pattern spans the whole specifier — regex aliases are applied via
+      // String.replace, and a partial match would leave "../" prefixed to
+      // the absolute replacement path.
+      { find: /^.*\/utils\/mailer$/, replacement: shim("mailer-shim.ts") },
+    ],
   },
   test: {
     include: ["src/selfhost/**/*.test.ts"],
