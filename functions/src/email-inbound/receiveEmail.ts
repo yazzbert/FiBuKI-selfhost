@@ -8,6 +8,7 @@
  */
 
 import { onRequest } from "firebase-functions/v2/https";
+import { buildStorageObjectUrl } from "../utils/buildDownloadUrl";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import * as crypto from "crypto";
@@ -285,7 +286,7 @@ async function uploadToStorage(
   // Make file publicly accessible
   await file.makePublic();
 
-  const downloadUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+  const downloadUrl = buildStorageObjectUrl(bucket.name, storagePath);
 
   return { storagePath, downloadUrl };
 }
