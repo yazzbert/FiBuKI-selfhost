@@ -67,8 +67,6 @@ function sendError(res: Response, code: string, message: string): void {
 
 interface Resolved {
   policy: CollectionPolicy;
-  /** rows must satisfy data.userId === uid; queries get the filter injected */
-  ownerScoped: boolean;
   /** doc id must equal uid (subscriptions/{uid}) */
   uidKeyed: boolean;
 }
@@ -102,11 +100,11 @@ function resolveCollection(segments: string[], uid: string): Resolved {
     if (!policy) {
       throw new DataPlaneError("permission-denied", `users subtree "${segments[2]}" is not client-accessible`);
     }
-    return { policy, ownerScoped: false, uidKeyed: false };
+    return { policy, uidKeyed: false };
   }
 
   if (segments.length === 3 && segments[0] === "transactions" && segments[2] === "history") {
-    return { policy: TRANSACTION_HISTORY_POLICY, ownerScoped: false, uidKeyed: false };
+    return { policy: TRANSACTION_HISTORY_POLICY, uidKeyed: false };
   }
 
   if (segments.length !== 1) {
@@ -119,7 +117,6 @@ function resolveCollection(segments: string[], uid: string): Resolved {
   }
   return {
     policy,
-    ownerScoped: policy.read === "owner" || policy.create === "owner",
     uidKeyed: policy.read === "uidKey",
   };
 }
@@ -133,7 +130,7 @@ function resolveDoc(segments: string[], uid: string): Resolved {
     if (segments[1] !== uid) {
       throw new DataPlaneError("permission-denied", "cannot access another user's document");
     }
-    return { policy: USER_DOC_POLICY, ownerScoped: false, uidKeyed: false };
+    return { policy: USER_DOC_POLICY, uidKeyed: false };
   }
   return resolveCollection(segments.slice(0, -1), uid);
 }
@@ -169,6 +166,36 @@ function deepGet(data: unknown, dotted: string): unknown {
     v = (v as Record<string, unknown>)[part];
   }
   return v;
+}
+
+// The shim's update/merge path splits field-path keys on "." and walks into
+// nested objects (deepSet). A client key like "a.__proto__.x" would reach
+// Object.prototype — reject any path segment that names a prototype hook.
+const FORBIDDEN_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+
+function assertSafeFieldPaths(record: Record<string, unknown>): void {
+  for (const key of Object.keys(record)) {
+    for (const segment of key.split(".")) {
+      if (FORBIDDEN_SEGMENTS.has(segment)) {
+        throw new DataPlaneError("invalid-argument", `unsafe field path "${key}"`);
+      }
+    }
+  }
+}
+
+/** Precondition check shared by update/set/delete — 409 aborts on mismatch. */
+function checkPrecondition(
+  existing: Record<string, unknown> | undefined,
+  ifUnchanged: Record<string, unknown> | undefined,
+  docPath: string,
+): void {
+  if (!ifUnchanged) return;
+  for (const [field, wireExpected] of Object.entries(ifUnchanged)) {
+    const expected = decodeWire(wireExpected, false);
+    if (!wireEquals(deepGet(existing, field), expected)) {
+      throw new DataPlaneError("aborted", `precondition failed on ${docPath}: field "${field}" changed`);
+    }
+  }
 }
 
 function wireEquals(a: unknown, b: unknown): boolean {
@@ -287,12 +314,15 @@ export function createDataPlane(
         }
         q = q.orderBy(o.field, o.dir);
       }
+      // A limit at the query level would slice BEFORE the __name__ and
+      // uidKey post-filters run, dropping own rows that sort behind foreign
+      // ones — defer to a post-slice whenever a post-filter is in play.
+      const postFilter = nameFilters.length > 0 || resolved.uidKeyed;
       if (limit !== undefined) {
         if (typeof limit !== "number" || limit < 0 || !Number.isInteger(limit)) {
           throw new DataPlaneError("invalid-argument", "limit must be a non-negative integer");
         }
-        // With __name__ filters the limit applies after post-filtering.
-        if (nameFilters.length === 0) q = q.limit(limit);
+        if (!postFilter) q = q.limit(limit);
       }
 
       const snap = await q.get();
@@ -303,7 +333,7 @@ export function createDataPlane(
         );
       }
       if (resolved.uidKeyed) docs = docs.filter((d) => d.id === auth.uid);
-      if (typeof limit === "number" && nameFilters.length > 0) docs = docs.slice(0, limit);
+      if (typeof limit === "number" && postFilter) docs = docs.slice(0, limit);
 
       res.json({ docs: docs.map((d) => ({ id: d.id, data: encodeWire(d.data()) })) });
     } catch (err) {
@@ -364,6 +394,7 @@ export function createDataPlane(
             throw new DataPlaneError("invalid-argument", "add op needs an object data payload");
           }
           const record = data as Record<string, unknown>;
+          assertSafeFieldPaths(record);
           if (resolved.policy.create === "owner" && record.userId !== auth.uid) {
             throw new DataPlaneError("permission-denied", `create in ${segments[0]} requires userId === your uid`);
           }
@@ -388,6 +419,7 @@ export function createDataPlane(
           throw new DataPlaneError("invalid-argument", `${op.type} op needs an object data payload`);
         }
         const record = data as Record<string, unknown> | undefined;
+        if (record) assertSafeFieldPaths(record);
         // An owner-scoped write may never point userId at someone else.
         if (ownerRules && record && "userId" in record && record.userId !== auth.uid) {
           throw new DataPlaneError("permission-denied", "cannot write a foreign userId");
@@ -406,6 +438,7 @@ export function createDataPlane(
             }
           }
           if (!record) throw new DataPlaneError("invalid-argument", "set op needs data");
+          checkPrecondition(existing, op.ifUnchanged, docPath);
           prepared.push({ kind: "set", ref, data: record, merge: op.merge === true, id });
         } else if (op.type === "update") {
           requireAccess(resolved.policy.update, auth, `update on ${docPath}`);
@@ -414,20 +447,11 @@ export function createDataPlane(
             throw new DataPlaneError("permission-denied", "document belongs to another user");
           }
           if (!record) throw new DataPlaneError("invalid-argument", "update op needs data");
-          if (op.ifUnchanged) {
-            for (const [field, wireExpected] of Object.entries(op.ifUnchanged)) {
-              const expected = decodeWire(wireExpected, false);
-              if (!wireEquals(deepGet(existing, field), expected)) {
-                throw new DataPlaneError(
-                  "aborted",
-                  `precondition failed on ${docPath}: field "${field}" changed`,
-                );
-              }
-            }
-          }
+          checkPrecondition(existing, op.ifUnchanged, docPath);
           prepared.push({ kind: "update", ref, data: record, id });
         } else if (op.type === "delete") {
           requireAccess(resolved.policy.delete, auth, `delete on ${docPath}`);
+          checkPrecondition(existing, op.ifUnchanged, docPath);
           if (!existing) {
             prepared.push({ kind: "skip", id }); // Firestore deletes are idempotent
             continue;

@@ -26,7 +26,16 @@ export function decodeWire(value: unknown, allowSentinels: boolean): unknown {
 
   if ("__ts" in value) {
     const ts = value.__ts;
-    if (!Array.isArray(ts) || ts.length !== 2 || typeof ts[0] !== "number" || typeof ts[1] !== "number") {
+    if (
+      !Array.isArray(ts) ||
+      ts.length !== 2 ||
+      !Number.isFinite(ts[0]) ||
+      !Number.isInteger(ts[1]) ||
+      ts[1] < 0 ||
+      ts[1] > 999_999_999
+    ) {
+      // Validate the nanoseconds range here rather than letting the
+      // Timestamp constructor throw a plain Error (500 in the funnel).
       throw new WireError(`malformed __ts value: ${JSON.stringify(ts)}`);
     }
     return new Timestamp(ts[0], ts[1]);

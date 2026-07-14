@@ -327,4 +327,71 @@ describe("data plane: write", () => {
     expect(r.status).toBe(400);
     expect(r.body.error.message).toContain("__blob");
   });
+
+  it("rejects dotted __proto__ field paths (no prototype pollution)", async () => {
+    await db.collection(`users/${USER}/settings`).doc("s-1").set({ theme: "dark" });
+    await drainTriggers();
+
+    const r = await call("write", {
+      ops: [{
+        type: "update",
+        path: `users/${USER}/settings/s-1`,
+        data: { "a.__proto__.polluted": "PWNED" },
+      }],
+    });
+    expect(r.status).toBe(400);
+    expect(r.body.error.message).toContain("unsafe field path");
+    // Global prototype must be untouched.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("honors ifUnchanged on set and delete, not just update", async () => {
+    await db.collection(`users/${USER}/workerRequests`).doc("wr-2").set({
+      status: "pending", task: "sync",
+    });
+    await drainTriggers();
+
+    const staleSet = await call("write", {
+      ops: [{
+        type: "set",
+        path: `users/${USER}/workerRequests/wr-2`,
+        data: { status: "claimed", task: "sync" },
+        merge: true,
+        ifUnchanged: { status: "done" },
+      }],
+    });
+    expect(staleSet.status).toBe(409);
+
+    const staleDelete = await call("write", {
+      ops: [{
+        type: "delete",
+        path: `users/${USER}/workerRequests/wr-2`,
+        ifUnchanged: { status: "done" },
+      }],
+    });
+    expect(staleDelete.status).toBe(409);
+    // Doc still there — neither stale op applied.
+    expect((await db.collection(`users/${USER}/workerRequests`).doc("wr-2").get()).exists).toBe(true);
+  });
+
+  it("rejects a malformed __ts value as 400, not 500", async () => {
+    const r = await call("write", {
+      ops: [{ type: "add", path: "partners", data: { userId: USER, at: { __ts: [1, 9_999_999_999] } } }],
+    });
+    expect(r.status).toBe(400);
+  });
+});
+
+describe("data plane: uidKeyed query with limit", () => {
+  it("returns the caller's own subscription even when foreign rows sort ahead", async () => {
+    // Seed a foreign row that sorts first, then the caller's — a query-level
+    // limit(1) would slice the caller's row off before the uid post-filter.
+    await db.collection("subscriptions").doc("aaa-other").set({ userId: OTHER, plan: "pro" });
+    await db.collection("subscriptions").doc(USER).set({ userId: USER, plan: "selfhost" });
+    await drainTriggers();
+
+    const r = await call("query", { path: "subscriptions", orderBys: [{ field: "plan", dir: "asc" }], limit: 1 });
+    expect(r.status).toBe(200);
+    expect(r.body.docs.map((d: any) => d.id)).toEqual([USER]);
+  });
 });
