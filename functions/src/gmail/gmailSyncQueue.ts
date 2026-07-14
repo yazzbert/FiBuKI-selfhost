@@ -1,4 +1,5 @@
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { buildDownloadUrl } from "../utils/buildDownloadUrl";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { defineSecret } from "firebase-functions/params";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
@@ -647,17 +648,7 @@ async function processQueueItem(
             }
 
             // Generate download URL with token (works for both emulator and production)
-            let downloadUrl: string;
-            const storageEmulatorHost = process.env.FIREBASE_STORAGE_EMULATOR_HOST;
-            const encodedPath = encodeURIComponent(storagePath);
-
-            if (storageEmulatorHost) {
-              // Emulator URL format with token for inline preview
-              downloadUrl = `http://${storageEmulatorHost}/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
-            } else {
-              // Production: use token-based URL
-              downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
-            }
+            const downloadUrl = buildDownloadUrl(bucket.name, storagePath, downloadToken);
 
             // Create file document
             const now = Timestamp.now();
