@@ -28,6 +28,10 @@ export default defineConfig({
       // String.replace, and a partial match would leave "../" prefixed to
       // the absolute replacement path.
       { find: /^.*\/utils\/mailer$/, replacement: shim("mailer-shim.ts") },
+      // Same whole-specifier swap for the download-URL helper: the self-host
+      // build emits host /__storage/download URLs instead of googleapis.com,
+      // so backend-written download links resolve. See buildDownloadUrl-shim.ts.
+      { find: /^.*\/utils\/buildDownloadUrl$/, replacement: shim("buildDownloadUrl-shim.ts") },
     ],
   },
   test: {
