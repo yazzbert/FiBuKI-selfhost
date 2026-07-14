@@ -7,28 +7,48 @@
  *
  *   npx vite-node --config vitest.selfhost.config.ts src/selfhost/server.ts
  *
- * Auth: production fronting is Authentik OIDC — the verifier for it lands
- * with the deployment work. Until then the only supported mode is the
- * explicit dev bypass FIBUKI_DEV_UID=<uid>, which accepts ANY bearer token
- * as that uid. Refuses to start without it rather than guessing.
+ * Auth (in precedence order):
+ *   1. FIBUKI_DEV_UID=<uid>  — dev bypass, accepts ANY bearer as that uid.
+ *   2. OIDC_ISSUER set       — Authentik OIDC: verify id_token via JWKS
+ *      (createOidcVerifier), map sub->uid, OIDC_ADMIN_GROUP -> token.admin.
+ *   3. neither               — refuse to start rather than guess.
+ * Never set FIBUKI_DEV_UID in production; it defeats OIDC.
  */
 
 import { createCronHost } from "./cron-host";
 import { createHost, type TokenVerifier } from "./host";
+import { createOidcVerifier } from "./oidc-verifier";
+
+function resolveVerifier(): TokenVerifier {
+  const devUid = process.env.FIBUKI_DEV_UID;
+  if (devUid) {
+    console.warn(`fibuki-api: DEV AUTH MODE — every bearer token authenticates as "${devUid}"`);
+    return async () => ({ uid: devUid, token: {} });
+  }
+
+  const issuer = process.env.OIDC_ISSUER;
+  if (issuer) {
+    console.log(`fibuki-api: Authentik OIDC verification against issuer ${issuer}`);
+    return createOidcVerifier({
+      issuer,
+      jwksUri: process.env.OIDC_JWKS_URI,
+      audience: process.env.OIDC_AUDIENCE,
+      adminGroup: process.env.OIDC_ADMIN_GROUP,
+      groupsClaim: process.env.OIDC_GROUPS_CLAIM,
+    });
+  }
+
+  console.error(
+    "fibuki-api: no token verifier configured. Set OIDC_ISSUER (+ optional OIDC_AUDIENCE/" +
+      "OIDC_ADMIN_GROUP) for production, or FIBUKI_DEV_UID=<uid> for dev mode. Refusing to start.",
+  );
+  process.exit(1);
+}
 
 async function main() {
   const barrel = await import("../index");
 
-  const devUid = process.env.FIBUKI_DEV_UID;
-  if (!devUid) {
-    console.error(
-      "fibuki-api: no token verifier configured. Set FIBUKI_DEV_UID=<uid> for dev mode " +
-        "(accepts any bearer token as that uid). Authentik OIDC verification lands with deployment.",
-    );
-    process.exit(1);
-  }
-  console.warn(`fibuki-api: DEV AUTH MODE — every bearer token authenticates as "${devUid}"`);
-  const verifyToken: TokenVerifier = async () => ({ uid: devUid, token: {} });
+  const verifyToken = resolveVerifier();
 
   const { app, inventory } = createHost(barrel as Record<string, unknown>, {
     verifyToken,

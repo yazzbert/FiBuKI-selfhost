@@ -23,13 +23,55 @@ export { FieldValue, Timestamp };
 // Storage
 // ---------------------------------------------------------------------------
 
-let pgPromise: Promise<PGlite> | null = null;
+/**
+ * Minimal SQL client surface the shim needs — satisfied by BOTH the embedded
+ * PGlite (tests / default) and node-postgres' Pool (production). Both return
+ * `{ rows }` from a parameterized `$1`-style query, and both auto-parse JSONB
+ * columns to JS values and accept a JSON *string* cast via `$n::jsonb`, so the
+ * shim's SQL is identical against either backend.
+ */
+interface SqlClient {
+  query<R = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: R[] }>;
+}
 
-async function getPg(): Promise<PGlite> {
+let pgPromise: Promise<SqlClient> | null = null;
+
+/**
+ * Pick the backend from the environment:
+ *   DATABASE_URL set → real Postgres via node-postgres (production LXC).
+ *   unset           → embedded in-memory PGlite (tests, local dev).
+ * Same DDL and same SQL run against whichever is chosen.
+ */
+async function makeClient(): Promise<SqlClient> {
+  const url = process.env.DATABASE_URL;
+  if (url) {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: url });
+    // Surface pool-level errors instead of crashing the process on an idle-client drop.
+    pool.on("error", (err) => {
+      console.error("fibuki firestore-shim: postgres pool error:", err.message);
+    });
+    return {
+      query: async <R>(sql: string, params?: unknown[]) => {
+        const res = await pool.query<Record<string, unknown>>(sql, params as unknown[]);
+        return { rows: res.rows as unknown as R[] };
+      },
+    };
+  }
+  const pg = new PGlite(); // in-memory; no DATABASE_URL configured
+  return {
+    query: async <R>(sql: string, params?: unknown[]) => {
+      const res = await pg.query<Record<string, unknown>>(sql, params as unknown[]);
+      return { rows: res.rows as unknown as R[] };
+    },
+  };
+}
+
+async function getPg(): Promise<SqlClient> {
   if (!pgPromise) {
     pgPromise = (async () => {
-      const pg = new PGlite(); // in-memory; production passes a data dir / real PG
-      await pg.query(`
+      const client = await makeClient();
+      await client.query(`
         CREATE TABLE IF NOT EXISTS docs (
           path TEXT PRIMARY KEY,
           collection_path TEXT NOT NULL,
@@ -37,8 +79,8 @@ async function getPg(): Promise<PGlite> {
           data JSONB NOT NULL
         );
       `);
-      await pg.query(`CREATE INDEX IF NOT EXISTS docs_collection_idx ON docs (collection_path);`);
-      return pg;
+      await client.query(`CREATE INDEX IF NOT EXISTS docs_collection_idx ON docs (collection_path);`);
+      return client;
     })();
   }
   return pgPromise;
