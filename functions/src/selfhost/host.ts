@@ -25,6 +25,7 @@ import type { AuthData, CallableFunction, FunctionsErrorCode, HttpsFunction } fr
 import { HttpsError } from "./https-shim";
 import { EXCLUDED_EXPORTS } from "./manifest";
 import { createDataPlane } from "./data-plane";
+import { createStorageRoutes } from "./storage-routes";
 
 export type TokenVerifier = (token: string) => Promise<AuthData | null>;
 
@@ -185,6 +186,11 @@ export function createHost(
   // identifiers don't start with "__d" in the barrel — and the loop above
   // mounted its routes first anyway).
   app.use("/__data", createDataPlane(options.verifyToken, { jsonLimit: options.jsonLimit }));
+
+  // Client blob plane (work item 6, slice C): upload/download/delete for the
+  // frontend storage shim. "__storage" can't collide with barrel exports for
+  // the same reason "__data" can't (see above).
+  app.use("/__storage", createStorageRoutes(options.verifyToken, { jsonLimit: options.jsonLimit }));
 
   app.get("/healthz", (_req, res) => {
     res.json({
