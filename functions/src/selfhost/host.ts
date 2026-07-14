@@ -35,6 +35,16 @@ export interface CreateHostOptions {
   exclude?: ReadonlySet<string>;
   /** JSON body limit for callable payloads (CSV imports are chunky). */
   jsonLimit?: string;
+  /**
+   * Browser origins allowed to call the host cross-origin (fibuki-web when it
+   * is served from a different origin than fibuki-api). Each entry is matched
+   * exactly against the request `Origin`, or pass `"*"` to reflect any origin.
+   * Defaults to FIBUKI_WEB_ORIGIN (comma-separated) or, if unset, `"*"` — safe
+   * because the host authenticates via a Bearer token, never cookies, so it
+   * never sets Access-Control-Allow-Credentials. Same-origin deployments (one
+   * reverse proxy) can leave this unset and no CORS headers are emitted.
+   */
+  corsOrigins?: string[] | "*";
   log?: (message: string) => void;
 }
 
@@ -95,6 +105,43 @@ export function createHost(
   const exclude = options.exclude ?? EXCLUDED_EXPORTS;
   const log = options.log ?? (() => undefined);
   const app = express();
+
+  // CORS: fibuki-web may be served from a different origin than fibuki-api.
+  // Auth is a Bearer token (never a cookie), so we never set
+  // Access-Control-Allow-Credentials and `*` is a safe default. Mounted before
+  // every route so preflights to callables and the data/blob planes all pass.
+  const corsCfg =
+    options.corsOrigins ??
+    (process.env.FIBUKI_WEB_ORIGIN
+      ? process.env.FIBUKI_WEB_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean)
+      : "*");
+  const allowAnyOrigin = corsCfg === "*";
+  const allowedOrigins = allowAnyOrigin ? null : new Set(corsCfg);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      // Reflected per-request → caches must key on Origin. Set even for a
+      // disallowed origin so a headerless response can't later be served from
+      // cache to an allowed one.
+      res.setHeader("Vary", "Origin");
+    }
+    if (origin && (allowAnyOrigin || allowedOrigins!.has(origin))) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+      // x-fibuki-custom carries base64-JSON custom metadata on storage uploads
+      // (storage-client.ts → storage-routes.ts); a split-origin upload preflight
+      // must allow it or the browser blocks the PUT.
+      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, x-fibuki-custom");
+      res.setHeader("Access-Control-Max-Age", "600");
+    }
+    if (req.method === "OPTIONS") {
+      // Preflight — answer here whether or not the origin was allowed (a
+      // disallowed origin just gets no ACAO header and the browser blocks it).
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   // Cloud Functions pre-parses JSON/urlencoded bodies and keeps the raw
   // bytes on req.rawBody; some onRequest handlers (webhooks) rely on that.
