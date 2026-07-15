@@ -250,14 +250,29 @@ interface PkceState {
 /* User                                                                */
 /* ------------------------------------------------------------------ */
 
+/** Firebase `UserInfo` shape — one entry per linked auth provider. */
+export interface UserInfo {
+  readonly providerId: string;
+  readonly uid: string;
+  readonly displayName: string | null;
+  readonly email: string | null;
+  readonly phoneNumber: string | null;
+  readonly photoURL: string | null;
+}
+
 export interface User {
   readonly uid: string;
   readonly email: string | null;
   readonly emailVerified: boolean;
   readonly displayName: string | null;
   readonly photoURL: string | null;
+  readonly phoneNumber: string | null;
   readonly isAnonymous: boolean;
   readonly providerId: string;
+  /** Firebase exposes one UserInfo per linked provider; self-host has exactly
+   *  one (the OIDC IdP). Present so app code doing `user.providerData.filter()`
+   *  doesn't crash. */
+  readonly providerData: UserInfo[];
   readonly metadata: { creationTime?: string; lastSignInTime?: string };
   getIdToken(forceRefresh?: boolean): Promise<string>;
   getIdTokenResult(forceRefresh?: boolean): Promise<IdTokenResult>;
@@ -299,8 +314,23 @@ class OidcUser implements User {
   get photoURL(): string | null {
     return this.claims.picture ?? null;
   }
+  get phoneNumber(): string | null {
+    return null;
+  }
   readonly isAnonymous = false;
   readonly providerId = "oidc.authentik";
+  get providerData(): UserInfo[] {
+    return [
+      {
+        providerId: this.providerId,
+        uid: this.uid,
+        displayName: this.displayName,
+        email: this.email,
+        phoneNumber: null,
+        photoURL: this.photoURL,
+      },
+    ];
+  }
   get metadata(): { creationTime?: string; lastSignInTime?: string } {
     const t = typeof this.claims.auth_time === "number" ? new Date(this.claims.auth_time * 1000).toUTCString() : undefined;
     return { creationTime: t, lastSignInTime: t };
@@ -342,8 +372,12 @@ class DevUser implements User {
   readonly emailVerified = true;
   readonly displayName = "Dev User";
   readonly photoURL = null;
+  readonly phoneNumber = null;
   readonly isAnonymous = false;
   readonly providerId = "dev";
+  readonly providerData: UserInfo[] = [
+    { providerId: "dev", uid: DEV_UID, displayName: "Dev User", email: DEV_EMAIL, phoneNumber: null, photoURL: null },
+  ];
   readonly metadata = { creationTime: undefined, lastSignInTime: undefined };
 
   async getIdToken(): Promise<string> {
