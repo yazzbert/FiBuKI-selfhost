@@ -69,7 +69,11 @@ services:
       FIBUKI_PUBLIC_URL: ${FIBUKI_PUBLIC_URL}
       FIBUKI_WEB_ORIGIN: ${FIBUKI_WEB_ORIGIN}
       # Authentik OIDC host verifier (oidc-verifier.ts). NO FIBUKI_DEV_UID in prod.
+      # OIDC_JWKS_URI lets the verifier fetch keys from a directly-reachable URL
+      # (e.g. the IdP on the same network) while OIDC_ISSUER stays the public,
+      # browser-facing issuer that tokens are minted with. Leave blank to discover.
       OIDC_ISSUER: ${OIDC_ISSUER}
+      OIDC_JWKS_URI: ${OIDC_JWKS_URI}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE}
       OIDC_ADMIN_GROUP: ${OIDC_ADMIN_GROUP}
       # mailer-shim (Migadu SMTP; From pinned to FIBUKI_SMTP_USER)
