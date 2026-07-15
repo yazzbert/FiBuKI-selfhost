@@ -16,13 +16,23 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 // ---------------------------------------------------------------------------
 const IS_SELFHOST = process.env.FIBUKI_BACKEND === "selfhost";
 const SELFHOST_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "lib/selfhost");
-const SELFHOST_ALIASES: Record<string, string> = {
-  "firebase/app": path.join(SELFHOST_DIR, "app-shim.ts"),
-  "firebase/firestore": path.join(SELFHOST_DIR, "firestore-client.ts"),
-  "firebase/storage": path.join(SELFHOST_DIR, "storage-client.ts"),
-  "firebase/functions": path.join(SELFHOST_DIR, "functions-client.ts"),
-  "firebase/auth": path.join(SELFHOST_DIR, "auth-client.ts"),
+const SELFHOST_SHIMS: Record<string, string> = {
+  "firebase/app": "app-shim.ts",
+  "firebase/firestore": "firestore-client.ts",
+  "firebase/storage": "storage-client.ts",
+  "firebase/functions": "functions-client.ts",
+  "firebase/auth": "auth-client.ts",
 };
+// Webpack resolves aliases to absolute filesystem paths.
+const SELFHOST_ALIASES: Record<string, string> = Object.fromEntries(
+  Object.entries(SELFHOST_SHIMS).map(([spec, file]) => [spec, path.join(SELFHOST_DIR, file)]),
+);
+// Turbopack's resolveAlias interprets values as project-root-relative (or bare
+// module) specifiers — an ABSOLUTE path gets mis-resolved (e.g. /app/lib/... →
+// ./app/lib/...), so it must get `./lib/selfhost/<file>` instead.
+const SELFHOST_ALIASES_TURBO: Record<string, string> = Object.fromEntries(
+  Object.entries(SELFHOST_SHIMS).map(([spec, file]) => [spec, `./lib/selfhost/${file}`]),
+);
 
 // The self-host client talks to fibuki-api and Authentik from the browser, so
 // the strict CSP must allow those origins. connect-src: XHR/fetch to the data
@@ -155,7 +165,7 @@ const SECURITY_HEADERS = [
 const nextConfig: NextConfig = {
   // Turbopack (Next 16 default for dev + build): exact-specifier aliases.
   ...(IS_SELFHOST
-    ? { turbopack: { resolveAlias: SELFHOST_ALIASES } }
+    ? { turbopack: { resolveAlias: SELFHOST_ALIASES_TURBO } }
     : {}),
   // Webpack fallback (e.g. `next build --webpack`): same map, exact match via
   // the `$` suffix so `firebase/firestore/lite`-style subpaths are untouched.
