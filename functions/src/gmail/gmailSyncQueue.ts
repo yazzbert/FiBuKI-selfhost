@@ -233,49 +233,78 @@ async function processQueueItem(
   const integrationEmail = integrationDoc.exists ? (integrationData?.email as string) : undefined;
   const integrationPaused = Boolean(integrationData?.isPaused);
 
-  // Get access token
+  const providerName = (integrationData?.provider as string) ?? "gmail";
+
+  // Get stored credentials (Gmail OAuth tokens, or an IMAP app-password)
   const tokenDoc = await db.collection("emailTokens").doc(queueItem.integrationId).get();
   if (!tokenDoc.exists) {
     throw new Error("Email token not found");
   }
 
-  let tokenData = tokenDoc.data() as EmailTokenDocument;
+  let provider: MailProvider;
 
-  // Check if token is expired or about to expire (within 5 minutes)
-  const tokenExpiresAt = tokenData.expiresAt.toDate();
-  const fiveMinutesFromNow = new Date(Date.now() + 5 * 60 * 1000);
-
-  if (tokenExpiresAt < fiveMinutesFromNow) {
-    console.log(`[GmailSync] Token expired or expiring soon, attempting refresh...`);
-
-    // Try to refresh the token using secrets
-    const refreshedToken = await refreshAccessToken(
-      queueItem.integrationId,
-      tokenData.refreshToken,
-      tokenData.refreshTokenIv,
-      options.clientId,
-      options.clientSecret,
-      options.encryptionKey
-    );
-
-    if (refreshedToken) {
-      console.log(`[GmailSync] Token refreshed successfully`);
-      tokenData = { ...tokenData, accessToken: refreshedToken.accessToken, expiresAt: refreshedToken.expiresAt };
-    } else {
-      // Refresh failed - mark integration as needing reauth
-      await db.collection("emailIntegrations").doc(queueItem.integrationId).update({
-        needsReauth: true,
-        lastError: "Access token expired and refresh failed",
-        updatedAt: Timestamp.now(),
-      });
-      throw new Error("Access token expired and refresh failed - needs re-authentication");
+  if (providerName === "imap") {
+    // IMAP has one long-lived app-password (no refresh). Decrypt and hand the
+    // connection config to the provider. Gmail's expiry/refresh dance below is
+    // skipped entirely — the token doc has no expiresAt for IMAP.
+    const t = tokenDoc.data() as { secret?: string; secretIv?: string };
+    if (!t.secret || !t.secretIv) {
+      throw new Error("IMAP integration is missing its stored app-password");
     }
-  }
+    const host = integrationData?.imapHost as string | undefined;
+    const user = integrationData?.email as string | undefined;
+    if (!host || !user) {
+      throw new Error("IMAP integration is missing host or username");
+    }
+    const password = decrypt(t.secret, t.secretIv, options.encryptionKey);
+    provider = makeProvider("imap", {
+      imap: {
+        host,
+        port: (integrationData?.imapPort as number) ?? 993,
+        secure: integrationData?.imapSecure !== false,
+        allowSelfSigned: Boolean(integrationData?.imapAllowSelfSigned),
+        mailbox: (integrationData?.imapMailbox as string) || "INBOX",
+        keywordPrefilter: integrationData?.imapKeywordPrefilter !== false,
+        user,
+        password,
+      },
+    });
+  } else {
+    let tokenData = tokenDoc.data() as EmailTokenDocument;
 
-  const provider: MailProvider = makeProvider(
-    integrationData?.provider ?? "gmail",
-    { accessToken: tokenData.accessToken }
-  );
+    // Check if token is expired or about to expire (within 5 minutes)
+    const tokenExpiresAt = tokenData.expiresAt.toDate();
+    const fiveMinutesFromNow = new Date(Date.now() + 5 * 60 * 1000);
+
+    if (tokenExpiresAt < fiveMinutesFromNow) {
+      console.log(`[GmailSync] Token expired or expiring soon, attempting refresh...`);
+
+      // Try to refresh the token using secrets
+      const refreshedToken = await refreshAccessToken(
+        queueItem.integrationId,
+        tokenData.refreshToken,
+        tokenData.refreshTokenIv,
+        options.clientId,
+        options.clientSecret,
+        options.encryptionKey
+      );
+
+      if (refreshedToken) {
+        console.log(`[GmailSync] Token refreshed successfully`);
+        tokenData = { ...tokenData, accessToken: refreshedToken.accessToken, expiresAt: refreshedToken.expiresAt };
+      } else {
+        // Refresh failed - mark integration as needing reauth
+        await db.collection("emailIntegrations").doc(queueItem.integrationId).update({
+          needsReauth: true,
+          lastError: "Access token expired and refresh failed",
+          updatedAt: Timestamp.now(),
+        });
+        throw new Error("Access token expired and refresh failed - needs re-authentication");
+      }
+    }
+
+    provider = makeProvider(providerName, { accessToken: tokenData.accessToken });
+  }
   const dateFrom = queueItem.dateFrom.toDate();
   const dateTo = queueItem.dateTo.toDate();
 

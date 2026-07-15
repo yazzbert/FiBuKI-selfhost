@@ -8,14 +8,19 @@
 
 import { MailProvider } from "./provider";
 import { GmailProvider } from "./GmailProvider";
+import { ImapProvider, ImapConfig } from "./imap/ImapProvider";
 
 export * from "./provider";
 export { GmailProvider } from "./GmailProvider";
+export { ImapProvider } from "./imap/ImapProvider";
+export type { ImapConfig } from "./imap/ImapProvider";
 
 /** Provider-specific, already-decrypted credentials. */
 export interface MailCredentials {
   /** Gmail: a valid (refreshed) OAuth access token. */
   accessToken?: string;
+  /** IMAP: connection config + decrypted app-password. */
+  imap?: ImapConfig;
 }
 
 export function makeProvider(
@@ -29,7 +34,12 @@ export function makeProvider(
       }
       return new GmailProvider(credentials.accessToken);
     }
-    // case "imap": added in the IMAP provider PR
+    case "imap": {
+      if (!credentials.imap) {
+        throw new Error("IMAP provider requires connection config");
+      }
+      return new ImapProvider(credentials.imap);
+    }
     default:
       throw new Error(`Unknown mail provider: ${provider}`);
   }

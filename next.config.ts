@@ -163,6 +163,9 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // imapflow is a Node-only IMAP client used by /api/mail/imap/connect; keep it
+  // out of the bundle so its dynamic requires resolve at runtime.
+  serverExternalPackages: ["imapflow"],
   // Turbopack (Next 16 default for dev + build): exact-specifier aliases.
   ...(IS_SELFHOST
     ? { turbopack: { resolveAlias: SELFHOST_ALIASES_TURBO } }

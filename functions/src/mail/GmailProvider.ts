@@ -15,39 +15,13 @@ import {
   MailSearchOptions,
   MailSearchPage,
 } from "./provider";
+import { INVOICE_KEYWORDS, INVOICE_MIME_TYPES, MAX_EMAILS_PER_BATCH } from "./constants";
 
 // ============================================================================
 // Constants (Gmail-specific)
 // ============================================================================
 
-const MAX_EMAILS_PER_BATCH = 50;
 const REQUEST_DELAY_MS = 200; // 1000 / GMAIL_REQUESTS_PER_SECOND
-
-// Invoice search keywords
-const INVOICE_KEYWORDS = [
-  // German
-  "Rechnung",
-  "Beleg",
-  "Quittung",
-  "Faktura",
-  "Zahlungsbeleg",
-  "Kaufbeleg",
-  "Zahlungsbestätigung",
-  // English
-  "Invoice",
-  "Receipt",
-  "Bill",
-  "Payment confirmation",
-  "Order confirmation",
-];
-
-// MIME types for invoices
-const INVOICE_MIME_TYPES = [
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
 
 // ============================================================================
 // Gmail wire types
