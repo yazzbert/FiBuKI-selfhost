@@ -117,11 +117,21 @@ describe("storage shim surface semantics (memory backend)", () => {
   });
 
   it("fails loudly when no backend is configured (boot still fine)", async () => {
+    // FIBUKI_S3_ENDPOINT alone also selects the S3 backend, and the compose
+    // CI profile exports it suite-wide — clear both, restore after.
+    const prev = { store: process.env.FIBUKI_STORAGE, s3: process.env.FIBUKI_S3_ENDPOINT };
     delete process.env.FIBUKI_STORAGE;
+    delete process.env.FIBUKI_S3_ENDPOINT;
     _resetStorageForTests();
 
-    const file = bucket().file("files/u1/x.pdf"); // boot-time surface works
-    await expect(file.save(Buffer.from("x"))).rejects.toThrow(/no blob store configured/);
+    try {
+      const file = bucket().file("files/u1/x.pdf"); // boot-time surface works
+      await expect(file.save(Buffer.from("x"))).rejects.toThrow(/no blob store configured/);
+    } finally {
+      if (prev.store !== undefined) process.env.FIBUKI_STORAGE = prev.store;
+      if (prev.s3 !== undefined) process.env.FIBUKI_S3_ENDPOINT = prev.s3;
+      _resetStorageForTests();
+    }
   });
 });
 

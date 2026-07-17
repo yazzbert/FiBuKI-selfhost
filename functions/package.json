@@ -13,6 +13,7 @@
     "logs": "firebase functions:log",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:selfhost": "vitest run --config vitest.selfhost.config.ts",
     "selfhost:api": "vite-node --config vitest.selfhost.config.ts src/selfhost/server.ts"
   },
   "engines": {
