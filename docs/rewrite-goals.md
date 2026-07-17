@@ -168,6 +168,19 @@ Known coverage gaps to close: all 61 `app/api/*` routes (zero tests, no runner a
 repo root), `gmailSyncQueue.ts:244-307` (the provider fork), and
 `lib/selfhost/auth-client.ts` (858 LOC, zero tests).
 
+**Live shim gap — cursors (found 2026-07-17, CT 999):** `firestore-shim.ts` implements
+no `startAfter` / `startAt` / `endBefore`, but two server paths call `.startAfter()`:
+`functions/src/tools/handlers.ts:228` (the MCP/API tool registry) and
+`functions/src/precision-search/precisionSearchQueue.ts:1953`. Under selfhost these
+**throw**, they don't degrade. Neither file has tests, which is why nothing caught it.
+
+This is not a Phase 1 nice-to-have — it's a defect in the deployment running on CT 999
+today, latent only because those paths are unexercised there. It is also the exact
+class of bug a Firestore-API-parity test exists to catch: the shim was asserted against
+its own intended behavior, and the real SDK's surface was never diffed against it.
+Treat it as Phase 0 evidence, and add cursor support in Phase 1's SQL pushdown work
+(a JSONB scan + JS filter can't express a cursor efficiently anyway).
+
 ### Phase 1 — schema
 
 Drizzle, `tenant_id`, flatten collections **behind the existing shim interface**.
