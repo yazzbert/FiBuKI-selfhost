@@ -1,8 +1,14 @@
 # FiBuKI
 
-**AI-powered bookkeeping for freelancers and small businesses.**
+**AI-powered pre-accounting for Austrian one-person businesses.**
 
-FiBuKI automates the tedious parts of accounting: importing bank transactions, scanning receipts, matching invoices to payments, and preparing tax reports — so you can focus on your business.
+Not bookkeeping — the part before that. FiBuKI takes the pile of receipts, invoices
+and bank lines and turns it into clean data your Steuerberater can actually use:
+importing transactions, reading documents, matching invoices to payments, and
+producing a correct BMD export.
+
+📄 **[Who FiBuKI is for](docs/who-is-this-for.md)** — the audience, the scope, and
+what FiBuKI deliberately isn't.
 
 ## Features
 
