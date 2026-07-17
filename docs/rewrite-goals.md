@@ -161,8 +161,42 @@ This phase is the whole argument. Everything after it is unsafe without it.
   zero tests. The suite is already backend-agnostic, so this is nearly free.
 - **Firestore-API parity test** — same assertions against real `firebase-admin` and
   against the shim. Today the shim is only asserted against its own intended
-  behavior.
+  behavior. **Scope it from the app's call sites, not from the shim** — see the
+  correction below; this is the single easiest thing to get subtly wrong.
 - **License + CLA.**
+
+#### Parity-test scope: derive it from the app, never from the shim
+
+A first pass at `functions/src/test/firestore-parity.test.ts` (branch
+`phase-0-tests`, 2026-07-17) got the hard parts right — same assertions against both
+backends, real `firebase-admin` against the Firestore emulator, wired into CI via
+`emulators:exec`, and a KNOWN DIVERGENCE mechanism pinning both behaviors where the
+two legitimately differ. Then its header said:
+
+> Scope: exactly the API surface the shim implements (which mirrors what the app
+> uses). Anything the shim does not implement (startAfter, onSnapshot, …) is
+> deliberately NOT asserted here.
+
+**That scope is circular and defeats the test.** A parity suite bounded by what the
+shim implements cannot discover what the shim is *missing* — it lands back at the
+shim asserted against itself, with more machinery. And the parenthetical was false:
+the app *does* use `startAfter` (`tools/handlers.ts:228`,
+`precision-search/precisionSearchQueue.ts:1953`), which is the live throwing defect
+recorded above. The gap was found, reported, and then carved out of the one test
+whose job was to catch it.
+
+**The rule:** the tested surface is derived from **what the app calls** — greppable,
+a fact about the codebase, not a judgment call. A method the app uses and the shim
+lacks must produce a **red test**. That red is the deliverable, not a problem to
+scope around.
+
+Every exclusion needs a real call-site check, not an assumption. `undefined-value
+rejection` and `query-limit enforcement` were excluded on the same reasoning and
+deserve the same audit — those two diverge *silently* and corrupt data rather than
+throwing, which is worse than the cursor bug.
+
+Generalizes past this test: the shim's value proposition **is** Firestore-API parity.
+Any check scoped by the shim's own surface is measuring the shim against itself.
 
 Known coverage gaps to close: all 61 `app/api/*` routes (zero tests, no runner at
 repo root), `gmailSyncQueue.ts:244-307` (the provider fork), and
