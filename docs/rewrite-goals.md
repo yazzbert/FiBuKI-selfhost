@@ -149,37 +149,37 @@ Each phase ships independently. No flag day.
 
 This phase is the whole argument. Everything after it is unsafe without it.
 
-- **Characterization tests on domain logic** — capture what it does *today*, bugs
-  included. Priority order: **BMD export first** (it's the trust gate with the
-  Steuerberater), then the matching engine, then extraction.
-- **Wire the selfhost suite into CI.** 135 tests exist and nothing runs them — no
-  npm script, the invocation lives only in a comment at
-  `functions/vitest.selfhost.config.ts:6`. Add `test:selfhost` + a CI job.
-- **Compose-backed CI job** running the same suite against **real Postgres and real
-  S3**. Today tests use PGlite and in-memory storage; the production branches
-  (`firestore-shim.ts:46-59` for `pg.Pool`, the MinIO client path) are executed by
-  zero tests. The suite is already backend-agnostic, so this is nearly free.
-- **Firestore-API parity test** — same assertions against real `firebase-admin` and
-  against the shim. Today the shim is only asserted against its own intended
-  behavior.
-- **License + CLA.**
+- ✅ **Characterization tests on domain logic** *(done 2026-07-17)* — BMD export,
+  matching engine, extraction; real bugs pinned on purpose (billing-cycle 12→14
+  relabel, stateful `/g`-regex IBAN classifier, unanchored suffix-strip in
+  transactionScoring).
+- ✅ **Selfhost suite wired into CI** *(done 2026-07-17)* — `test:selfhost` npm
+  script + `functions-selfhost` CI job (PGlite).
+- ✅ **Compose-backed CI job** *(done 2026-07-17)* — `functions-selfhost-compose`
+  runs the same suite against real Postgres + MinIO
+  (`deploy/selfhost/docker-compose.ci.yml`), sequential because the workers share
+  one `docs` table.
+- ✅ **Firestore-API parity test** *(done 2026-07-17, green 2026-07-19)* —
+  `functions/src/test/firestore-parity.test.ts`, same assertions against
+  `firebase-admin` (emulator, `firestore-parity` CI job) and the shim. Scope
+  derived from app call sites. It caught the cursor gap below plus two classes of
+  real production bug (undefined-value writes — fixed 2026-07-19 — and a missed
+  `__name__`/documentId filter call site).
+- **License + CLA.** *(open)*
 
-Known coverage gaps to close: all 61 `app/api/*` routes (zero tests, no runner at
-repo root), `gmailSyncQueue.ts:244-307` (the provider fork), and
+Known coverage gaps still to close: all 61 `app/api/*` routes (zero tests, no
+runner at repo root), `gmailSyncQueue.ts:244-307` (the provider fork), and
 `lib/selfhost/auth-client.ts` (858 LOC, zero tests).
 
-**Live shim gap — cursors (found 2026-07-17, CT 999):** `firestore-shim.ts` implements
-no `startAfter` / `startAt` / `endBefore`, but two server paths call `.startAfter()`:
-`functions/src/tools/handlers.ts:228` (the MCP/API tool registry) and
-`functions/src/precision-search/precisionSearchQueue.ts:1953`. Under selfhost these
-**throw**, they don't degrade. Neither file has tests, which is why nothing caught it.
-
-This is not a Phase 1 nice-to-have — it's a defect in the deployment running on CT 999
-today, latent only because those paths are unexercised there. It is also the exact
-class of bug a Firestore-API-parity test exists to catch: the shim was asserted against
-its own intended behavior, and the real SDK's surface was never diffed against it.
-Treat it as Phase 0 evidence, and add cursor support in Phase 1's SQL pushdown work
-(a JSONB scan + JS filter can't express a cursor efficiently anyway).
+**Shim cursor gap — CLOSED 2026-07-19.** Found 2026-07-17 on CT 999:
+`firestore-shim.ts` implemented no `startAfter`, but `tools/handlers.ts:228` and
+`precisionSearchQueue.ts:1953` call it — under selfhost these threw. The shim now
+implements `startAfter(docSnapshot | values)` with Firestore's implicit `__name__`
+tiebreak (plus `__name__` equality/`in` filters), pinned by the parity suite
+against the real SDK. The lesson stands: the shim had only been asserted against
+its own intended behavior, and the parity suite is exactly the instrument that
+catches this class. The current implementation filters in JS like the rest of the
+shim — efficient SQL cursor pushdown still belongs to Phase 1.
 
 ### Phase 1 — schema
 
