@@ -11,10 +11,35 @@
  *   npx firebase emulators:exec --only firestore --project demo-fibuki \
  *     "cd functions && npx vitest run src/test/firestore-parity.test.ts"
  *
- * Scope: exactly the API surface the shim implements (which mirrors what the
- * app uses). Anything the shim does not implement (startAfter, onSnapshot,
- * createTime/updateTime fidelity, undefined-value rejection, query-limit
- * enforcement) is deliberately NOT asserted here.
+ * Scope: derived from the app's ACTUAL Firestore call sites (grep of
+ * functions/src outside selfhost/ and tests), NOT from what the shim happens
+ * to implement. Inventory: doc/collection CRUD, set-merge, FieldValue
+ * sentinels, Timestamp, where (==, !=, ranges, "in" ≤30, array-contains),
+ * orderBy/limit, count() (sendWeeklyDigest, mfaFunctions, openSeats, …),
+ * select() (analyzeMatchAccuracy, learnScoringWeights,
+ * learnPartnerCategoryPatterns), collectionGroup (learningQueue.ts:107),
+ * getAll (admin/userManagement.ts), batches, transactions, startAfter
+ * cursors (tools/handlers.ts:228,
+ * precision-search/precisionSearchQueue.ts:1953), and admin's DEFAULT
+ * undefined-value rejection — no .settings()/ignoreUndefinedProperties call
+ * exists anywhere in the app, so any optional TS field reaching a write
+ * throws today.
+ *
+ * Audited out of scope against those call sites: ">30 values in an 'in'
+ * filter" error enforcement — every dynamic 'in' site chunks to exactly 30
+ * (searchGmailCallable, syncBankTransactions, matchFileTransactions,
+ * learnScoringWeights, learnBillingCycle, exportMatchIntelligence,
+ * finapi/syncCallable slice(0,30)), so the error path is unreachable from
+ * app code, while the 30-value boundary itself IS asserted below. onSnapshot
+ * and createTime/updateTime fidelity: no call sites in functions/src.
+ * Assertions kept beyond the inventory (offset, not-in, array-contains-any,
+ * recursiveDelete) are safety margin, not app surface.
+ *
+ * Former SHIM GAPS, closed 2026-07-17: startAfter(docSnapshot) cursors,
+ * admin-default undefined-value rejection, and __name__/documentId filters
+ * (learnBillingCycle.ts computeInvoiceDelays — missed by the original
+ * call-site inventory) are now implemented in the shim; both halves run the
+ * same assertions with no per-backend branches for them.
  *
  * Where shim and admin genuinely diverge on app-relevant surface, the test
  * pins BOTH behaviors via a per-backend branch marked KNOWN DIVERGENCE.
@@ -493,6 +518,14 @@ function runParitySuite(
       expect(idsOf(await col.where("n", "in", thirtyValues).get()).sort()).toEqual(["five", "thirty"]);
     });
 
+    it('where("__name__", "in", ids) selects documents by ID (learnBillingCycle.ts computeInvoiceDelays shape)', async () => {
+      const col = freshCol("nameid");
+      await seed(col, { a: { n: 1 }, b: { n: 2 }, c: { n: 3 } });
+      const snap = await col.where("__name__", "in", ["a", "c", "ghost"]).get();
+      expect(idsOf(snap).sort()).toEqual(["a", "c"]);
+      expect(snap.docs.map((doc: any) => doc.get("n")).sort()).toEqual([1, 3]);
+    });
+
     it("not-in excludes listed values and docs missing the field", async () => {
       const col = freshCol("notin");
       await seed(col, {
@@ -748,6 +781,46 @@ function runParitySuite(
         }),
       ).rejects.toThrow("abort!");
       expect((await col.doc("d").get()).get("n")).toBe(1);
+    });
+
+    // Mirrors both app call sites (tools/handlers.ts:228,
+    // precisionSearchQueue.ts:1953): equality filter + orderBy("date","desc")
+    // + limit, cursor doc re-fetched by id and passed as a snapshot.
+    it("startAfter(docSnapshot) resumes an orderBy-desc page (tools/handlers.ts:228, precisionSearchQueue.ts:1953 shape)", async () => {
+      const col = freshCol("cursor");
+      const t = (iso: string) => Timestamp.fromDate(new Date(iso));
+      await seed(col, {
+        a: { userId: "u1", date: t("2026-01-04T00:00:00Z") },
+        b: { userId: "u1", date: t("2026-01-03T00:00:00Z") },
+        c: { userId: "u1", date: t("2026-01-02T00:00:00Z") },
+        d: { userId: "u1", date: t("2026-01-01T00:00:00Z") },
+        x: { userId: "u2", date: t("2026-01-05T00:00:00Z") },
+      });
+      const base = col.where("userId", "==", "u1").orderBy("date", "desc");
+      const page1 = await base.limit(2).get();
+      expect(page1.docs.map((doc: any) => doc.id)).toEqual(["a", "b"]);
+
+      const cursorSnap = await col.doc(page1.docs[1].id).get();
+      const page2 = await base.limit(2).startAfter(cursorSnap).get();
+      expect(page2.docs.map((doc: any) => doc.id)).toEqual(["c", "d"]);
+    });
+
+    // The app never calls .settings(), so firebase-admin's default rejection
+    // of undefined values applies to every write path with an optional TS
+    // field — and the shim now mirrors it.
+    it("set() containing an undefined property value rejects and writes nothing", async () => {
+      const col = freshCol("undefset");
+      const attempt = async () => col.doc("d").set({ a: 1, b: undefined });
+      await expect(attempt()).rejects.toThrow(/undefined/i);
+      expect((await col.doc("d").get()).exists).toBe(false);
+    });
+
+    it("update() containing an undefined property value rejects and changes nothing", async () => {
+      const col = freshCol("undefupd");
+      await col.doc("d").set({ a: 1 });
+      const attempt = async () => col.doc("d").update({ b: undefined });
+      await expect(attempt()).rejects.toThrow(/undefined/i);
+      expect((await col.doc("d").get()).data()).toEqual({ a: 1 });
     });
 
     it("recursiveDelete(docRef) removes the doc and its subcollections, sparing siblings", async () => {

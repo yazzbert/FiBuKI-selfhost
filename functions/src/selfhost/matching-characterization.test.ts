@@ -78,6 +78,21 @@ async function seedConnection(
   });
 }
 
+/**
+ * Invoice file for the billing-cycle delay computation: computeInvoiceDelays
+ * only counts files that carry the partnerId AND an extractedDate, reached
+ * through a fileConnection on one of the partner's transactions.
+ */
+async function seedInvoiceFile(fileId: string, partnerId: string, extractedDate: string) {
+  await db.collection("files").doc(fileId).set({
+    userId: USER,
+    partnerId,
+    extractedDate: Timestamp.fromDate(new Date(extractedDate)),
+    fileName: `${fileId}.pdf`,
+    createdAt: Timestamp.now(),
+  });
+}
+
 beforeEach(async () => {
   // Let fire-and-forget writes (usage logging) from the previous test land
   // before the reset so they can't bleed into this one.
@@ -206,6 +221,15 @@ describe("characterization: learnBillingCycleCallable", () => {
     for (let i = 0; i < dates.length; i++) {
       await seedTx(`c1-t${i}`, "p-c1", `${dates[i]}T12:00:00Z`);
     }
+    // 3 invoices, each extracted 5 days before its transaction → delays
+    // [5,5,5]. At least 3 delays are REQUIRED for the callable to succeed at
+    // all: with fewer, invoiceToTransactionDelay stays undefined and the
+    // partner write throws (see the REAL BUG test below).
+    for (let i = 0; i < 3; i++) {
+      const invoiceDate = ["2026-01-10", "2026-02-10", "2026-03-10"][i];
+      await seedInvoiceFile(`c1-f${i}`, "p-c1", `${invoiceDate}T12:00:00Z`);
+      await seedConnection(`c1-conn${i}`, `c1-f${i}`, `c1-t${i}`, null);
+    }
     await drainTriggers();
 
     const res = await callCycle("p-c1");
@@ -217,9 +241,9 @@ describe("characterization: learnBillingCycleCallable", () => {
       typicalDayOfMonth: 15,
       dayVariance: 0,
       sampleSize: 6,
+      invoiceToTransactionDelay: 5,
+      delayVariance: 0,
     });
-    // No file connections → no invoice-to-transaction delay learned
-    expect(res.billingCycle!.invoiceToTransactionDelay).toBeUndefined();
 
     const partner = (await db.collection("partners").doc("p-c1").get()).data()!;
     expect(partner.billingCycle).toMatchObject({ frequencyDays: 30, frequencyConfidence: 98 });
@@ -234,6 +258,13 @@ describe("characterization: learnBillingCycleCallable", () => {
     for (let i = 0; i < dates.length; i++) {
       await seedTx(`c2-t${i}`, "p-c2", `${dates[i]}T12:00:00Z`);
     }
+    // 3 delays of 3 days each — required for the callable to reach its
+    // return at all (see the REAL BUG test below).
+    for (let i = 0; i < 3; i++) {
+      const invoiceDate = ["2025-12-29", "2026-01-10", "2026-01-22"][i];
+      await seedInvoiceFile(`c2-f${i}`, "p-c2", `${invoiceDate}T12:00:00Z`);
+      await seedConnection(`c2-conn${i}`, `c2-f${i}`, `c2-t${i}`, null);
+    }
     await drainTriggers();
 
     const res = await callCycle("p-c2");
@@ -244,7 +275,31 @@ describe("characterization: learnBillingCycleCallable", () => {
       typicalDayOfMonth: 1, // mode of [1,13,25,6] — all tied, first wins
       dayVariance: 9, // round(sqrt(324.75 / 4)) = round(9.01)
       sampleSize: 4,
+      invoiceToTransactionDelay: 3,
+      delayVariance: 0,
     });
+  });
+
+  // REAL BUG pinned on purpose: when computeInvoiceDelays yields fewer than
+  // 3 delays (no or few file connections — the common case), the callable
+  // still writes billingCycle with invoiceToTransactionDelay/delayVariance
+  // left `undefined`. The app never enables ignoreUndefinedProperties, so
+  // firebase-admin rejects the write and createCallable wraps the error —
+  // in production learnBillingCycle fails for every such partner. The shim
+  // mirrors admin's rejection, so this twin pins the failure. Do not "fix"
+  // by branching per backend; the fix (if any) is an app-code decision.
+  it("REAL BUG: fails with 'internal' when fewer than 3 invoice delays exist (undefined reaches the partner write)", async () => {
+    await seedPartner("p-c6");
+    const dates = ["2026-01-15", "2026-02-15", "2026-03-15", "2026-04-15"];
+    for (let i = 0; i < dates.length; i++) {
+      await seedTx(`c6-t${i}`, "p-c6", `${dates[i]}T12:00:00Z`);
+    }
+    await drainTriggers();
+
+    await expect(callCycle("p-c6")).rejects.toThrow("Operation failed");
+    // Nothing was stored on the partner.
+    const partner = (await db.collection("partners").doc("p-c6").get()).data()!;
+    expect(partner.billingCycle).toBeUndefined();
   });
 
   it("returns null with fewer than 3 transactions", async () => {

@@ -189,6 +189,31 @@ function deepDelete(obj: Record<string, unknown>, dotPath: string): void {
 }
 
 /**
+ * Reject `undefined` anywhere in a write payload, mirroring firebase-admin's
+ * DEFAULT behavior — the app never enables ignoreUndefinedProperties, so any
+ * optional TS field reaching a write throws against real Firestore and must
+ * throw here too. Sentinels, Timestamps and Dates are opaque leaves.
+ */
+function assertNoUndefined(value: unknown, fieldPath: string): void {
+  if (value === undefined) {
+    throw new Error(
+      `selfhost firestore shim: Cannot use "undefined" as a Firestore value` +
+        (fieldPath ? ` (found in field "${fieldPath}")` : "") +
+        `. If you want to ignore undefined values, enable ignoreUndefinedProperties.`,
+    );
+  }
+  if (value === null || typeof value !== "object") return;
+  if (sentinelKind(value) !== null || isTimestampLike(value) || value instanceof Date) return;
+  if (Array.isArray(value)) {
+    value.forEach((el, i) => assertNoUndefined(el, `${fieldPath}[${i}]`));
+    return;
+  }
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    assertNoUndefined(v, fieldPath ? `${fieldPath}.${k}` : k);
+  }
+}
+
+/**
  * Apply an update payload (supports dot-path keys + FieldValue sentinels)
  * onto an existing decoded document. Returns the new decoded document.
  */
@@ -224,7 +249,9 @@ function applyUpdate(
       const cur = deepGet(decoded, key);
       deepSet(decoded, key, (typeof cur === "number" ? cur : 0) + sentinelOperand(value));
     } else if (value === undefined) {
-      // Firestore rejects undefined; tolerate by skipping
+      // Unreachable from update()/set() — assertNoUndefined throws first.
+      // Kept as a safety net for internal callers (e.g. sentinel-stripped
+      // merge payloads).
     } else {
       deepSet(decoded, key, applySentinelsInPlace(value));
     }
@@ -330,6 +357,15 @@ interface Filter {
   value: unknown;
 }
 
+/**
+ * startAfter cursor. Snapshot form (both app call sites: tools/handlers.ts,
+ * precision-search/precisionSearchQueue.ts) resolves orderBy field values
+ * from the doc at query time and uses the doc ID as the implicit __name__
+ * tiebreak, like real Firestore. Values form positions by the given values
+ * only.
+ */
+type StartAfterCursor = { snap: DocSnapshot } | { values: unknown[] };
+
 function toComparable(v: unknown): number | string {
   if (isTimestampLike(v)) return v.toMillis();
   if (v instanceof Date) return v.getTime();
@@ -357,8 +393,25 @@ function valueEquals(a: unknown, b: unknown): boolean {
   return a === b;
 }
 
-function matchesFilter(data: Record<string, unknown>, f: Filter): boolean {
-  const v = deepGet(data, f.field);
+function matchesFilter(data: Record<string, unknown>, f: Filter, id?: string): boolean {
+  // FieldPath.documentId() / "__name__" filters compare against the doc ID.
+  // App call site: learnBillingCycle.ts computeInvoiceDelays passes bare IDs;
+  // path-shaped values resolve to their last segment like the real backend.
+  const v =
+    f.field === "__name__" && id !== undefined ? id : deepGet(data, f.field);
+  if (f.field === "__name__") {
+    const toId = (x: unknown) => String(x).split("/").pop();
+    switch (f.op) {
+      case "==":
+        return v === toId(f.value);
+      case "in":
+        return Array.isArray(f.value) && (f.value as unknown[]).some((fv) => v === toId(fv));
+      default:
+        throw new Error(
+          `selfhost firestore shim: unsupported operator '${f.op}' on __name__`,
+        );
+    }
+  }
   switch (f.op) {
     case "==":
       return valueEquals(v, f.value);
@@ -406,6 +459,7 @@ export class Query {
      * subcollection) — same semantics as Firestore collection group queries.
      */
     protected readonly isGroup: boolean = false,
+    protected readonly after: StartAfterCursor | null = null,
   ) {}
 
   where(field: string, op: string, value: unknown): Query {
@@ -416,6 +470,7 @@ export class Query {
       this.limitN,
       this.offsetN,
       this.isGroup,
+      this.after,
     );
   }
 
@@ -427,15 +482,48 @@ export class Query {
       this.limitN,
       this.offsetN,
       this.isGroup,
+      this.after,
     );
   }
 
   limit(n: number): Query {
-    return new Query(this.collectionPath, this.filters, this.orders, n, this.offsetN, this.isGroup);
+    return new Query(
+      this.collectionPath,
+      this.filters,
+      this.orders,
+      n,
+      this.offsetN,
+      this.isGroup,
+      this.after,
+    );
   }
 
   offset(n: number): Query {
-    return new Query(this.collectionPath, this.filters, this.orders, this.limitN, n, this.isGroup);
+    return new Query(
+      this.collectionPath,
+      this.filters,
+      this.orders,
+      this.limitN,
+      n,
+      this.isGroup,
+      this.after,
+    );
+  }
+
+  startAfter(...args: unknown[]): Query {
+    const cursor: StartAfterCursor =
+      args.length === 1 && args[0] instanceof DocSnapshot
+        ? { snap: args[0] }
+        : { values: args };
+    return new Query(
+      this.collectionPath,
+      this.filters,
+      this.orders,
+      this.limitN,
+      this.offsetN,
+      this.isGroup,
+      cursor,
+    );
   }
 
   select(..._fields: string[]): Query {
@@ -465,12 +553,40 @@ export class Query {
       collectionPath: r.collection_path,
       data: decodeValue(r.data) as Record<string, unknown>,
     }));
-    for (const f of this.filters) rows = rows.filter((r) => matchesFilter(r.data, f));
+    for (const f of this.filters) rows = rows.filter((r) => matchesFilter(r.data, f, r.id));
+    if (this.orders.length > 0) {
+      // Implicit __name__ tiebreak in the direction of the last orderBy,
+      // like real Firestore — needed for stable startAfter pages. Sorted
+      // first; the stable orderBy sorts below then take precedence.
+      const lastDir = this.orders[this.orders.length - 1].dir;
+      rows.sort((a, b) => (lastDir === "desc" ? -1 : 1) * cmp(a.id, b.id));
+    }
     for (const o of [...this.orders].reverse()) {
       rows.sort(
         (a, b) =>
           (o.dir === "desc" ? -1 : 1) * cmp(deepGet(a.data, o.field), deepGet(b.data, o.field)),
       );
+    }
+    if (this.after) {
+      const after = this.after;
+      const snap = "snap" in after ? after.snap : null;
+      const values = snap ? this.orders.map((o) => snap.get(o.field)) : (after as { values: unknown[] }).values;
+      // Keep only rows strictly past the cursor position in sort order.
+      const pastCursor = (row: { id: string; data: Record<string, unknown> }): boolean => {
+        for (let i = 0; i < Math.min(this.orders.length, values.length); i++) {
+          const o = this.orders[i];
+          const c = (o.dir === "desc" ? -1 : 1) * cmp(deepGet(row.data, o.field), values[i]);
+          if (c !== 0) return c > 0;
+        }
+        if (snap) {
+          const lastDir = this.orders.length
+            ? this.orders[this.orders.length - 1].dir
+            : "asc";
+          return (lastDir === "desc" ? -1 : 1) * cmp(row.id, snap.id) > 0;
+        }
+        return false; // values form: rows equal to the cursor are excluded
+      };
+      rows = rows.filter(pastCursor);
     }
     if (this.offsetN) rows = rows.slice(this.offsetN);
     if (this.limitN !== null) rows = rows.slice(0, this.limitN);
@@ -537,6 +653,7 @@ export class DocRef {
     data: Record<string, unknown>,
     opts?: { merge?: boolean },
   ): Promise<{ writeTime: Timestamp }> {
+    assertNoUndefined(data, "");
     const processed = applySentinelsInPlace(data) as Record<string, unknown>;
     let next = processed;
     if (opts?.merge) {
@@ -548,6 +665,7 @@ export class DocRef {
   }
 
   async update(data: Record<string, unknown>): Promise<{ writeTime: Timestamp }> {
+    for (const [key, value] of Object.entries(data)) assertNoUndefined(value, key);
     const existing = await rawGet(this.path);
     if (existing === undefined) {
       throw new Error(`selfhost firestore shim: update() on missing doc ${this.path}`);

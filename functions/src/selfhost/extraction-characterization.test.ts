@@ -74,6 +74,12 @@ async function seedFile(fileId: string, extra: Record<string, unknown> = {}) {
     extractionComplete: false,
     ...extra,
   };
+  // An `undefined` override means "field absent": real Firestore docs can
+  // never hold undefined (the shim now rejects it like firebase-admin), so
+  // drop the key instead of writing it.
+  for (const key of Object.keys(data)) {
+    if (data[key] === undefined) delete data[key];
+  }
   await db.collection("files").doc(fileId).set(data);
   return data;
 }
