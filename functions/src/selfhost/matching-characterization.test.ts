@@ -222,9 +222,7 @@ describe("characterization: learnBillingCycleCallable", () => {
       await seedTx(`c1-t${i}`, "p-c1", `${dates[i]}T12:00:00Z`);
     }
     // 3 invoices, each extracted 5 days before its transaction → delays
-    // [5,5,5]. At least 3 delays are REQUIRED for the callable to succeed at
-    // all: with fewer, invoiceToTransactionDelay stays undefined and the
-    // partner write throws (see the REAL BUG test below).
+    // [5,5,5], the minimum sample for the delay fields to be learned.
     for (let i = 0; i < 3; i++) {
       const invoiceDate = ["2026-01-10", "2026-02-10", "2026-03-10"][i];
       await seedInvoiceFile(`c1-f${i}`, "p-c1", `${invoiceDate}T12:00:00Z`);
@@ -258,8 +256,7 @@ describe("characterization: learnBillingCycleCallable", () => {
     for (let i = 0; i < dates.length; i++) {
       await seedTx(`c2-t${i}`, "p-c2", `${dates[i]}T12:00:00Z`);
     }
-    // 3 delays of 3 days each — required for the callable to reach its
-    // return at all (see the REAL BUG test below).
+    // 3 delays of 3 days each — the minimum sample for delay learning.
     for (let i = 0; i < 3; i++) {
       const invoiceDate = ["2025-12-29", "2026-01-10", "2026-01-22"][i];
       await seedInvoiceFile(`c2-f${i}`, "p-c2", `${invoiceDate}T12:00:00Z`);
@@ -280,15 +277,13 @@ describe("characterization: learnBillingCycleCallable", () => {
     });
   });
 
-  // REAL BUG pinned on purpose: when computeInvoiceDelays yields fewer than
-  // 3 delays (no or few file connections — the common case), the callable
-  // still writes billingCycle with invoiceToTransactionDelay/delayVariance
-  // left `undefined`. The app never enables ignoreUndefinedProperties, so
-  // firebase-admin rejects the write and createCallable wraps the error —
-  // in production learnBillingCycle fails for every such partner. The shim
-  // mirrors admin's rejection, so this twin pins the failure. Do not "fix"
-  // by branching per backend; the fix (if any) is an app-code decision.
-  it("REAL BUG: fails with 'internal' when fewer than 3 invoice delays exist (undefined reaches the partner write)", async () => {
+  // Regression guard for a former REAL BUG (fixed 2026-07-19): with fewer
+  // than 3 computable invoice delays (no file connections — the common
+  // case), invoiceToTransactionDelay/delayVariance used to reach the
+  // partner write as `undefined`, which firebase-admin rejects — the
+  // callable 500'd for every such partner. The fields are now omitted
+  // entirely and the cycle is still learned.
+  it("learns the cycle without delay fields when fewer than 3 invoice delays exist", async () => {
     await seedPartner("p-c6");
     const dates = ["2026-01-15", "2026-02-15", "2026-03-15", "2026-04-15"];
     for (let i = 0; i < dates.length; i++) {
@@ -296,10 +291,22 @@ describe("characterization: learnBillingCycleCallable", () => {
     }
     await drainTriggers();
 
-    await expect(callCycle("p-c6")).rejects.toThrow("Operation failed");
-    // Nothing was stored on the partner.
+    const res = await callCycle("p-c6");
+    // intervals [31,28,31] → common period 30; avg deviation 4/3 → 80 + (20 - 8/3) → 97
+    expect(res.success).toBe(true);
+    expect(res.billingCycle).toMatchObject({
+      frequencyDays: 30,
+      frequencyConfidence: 97,
+      typicalDayOfMonth: 15,
+      dayVariance: 0,
+      sampleSize: 4,
+    });
     const partner = (await db.collection("partners").doc("p-c6").get()).data()!;
-    expect(partner.billingCycle).toBeUndefined();
+    const stored = partner.billingCycle as Record<string, unknown>;
+    expect(stored.frequencyDays).toBe(30);
+    // The unlearned delay fields are ABSENT, not null/undefined-written.
+    expect("invoiceToTransactionDelay" in stored).toBe(false);
+    expect("delayVariance" in stored).toBe(false);
   });
 
   it("returns null with fewer than 3 transactions", async () => {

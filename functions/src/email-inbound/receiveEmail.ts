@@ -196,6 +196,18 @@ async function isDuplicate(
 }
 
 /**
+ * Drop optional fields that are absent: Firestore rejects undefined values
+ * (ignoreUndefinedProperties is never enabled), so fromName /
+ * bodyConvertedToFile / inboundFromName must be omitted, not written as
+ * undefined. Shallow on purpose — these writers take flat payloads.
+ */
+function omitUndefined<T extends Record<string, unknown>>(data: T): T {
+  return Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined)
+  ) as T;
+}
+
+/**
  * Create log entry
  */
 async function createLogEntry(
@@ -218,10 +230,12 @@ async function createLogEntry(
     "createdAt"
   >
 ): Promise<string> {
-  const docRef = await db.collection(INBOUND_LOGS_COLLECTION).add({
-    ...data,
-    createdAt: Timestamp.now(),
-  });
+  const docRef = await db.collection(INBOUND_LOGS_COLLECTION).add(
+    omitUndefined({
+      ...data,
+      createdAt: Timestamp.now(),
+    })
+  );
   return docRef.id;
 }
 
@@ -313,14 +327,16 @@ async function createFileDocument(data: {
 }): Promise<string> {
   const now = Timestamp.now();
 
-  const docRef = await db.collection(FILES_COLLECTION).add({
-    ...data,
-    extractionComplete: false,
-    transactionIds: [],
-    uploadedAt: now,
-    createdAt: now,
-    updatedAt: now,
-  });
+  const docRef = await db.collection(FILES_COLLECTION).add(
+    omitUndefined({
+      ...data,
+      extractionComplete: false,
+      transactionIds: [],
+      uploadedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
 
   return docRef.id;
 }

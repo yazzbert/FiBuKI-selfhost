@@ -216,32 +216,28 @@ describe("selfhost: testInboundEmail end to end (attachment → storage → file
     return res;
   }
 
-  // REAL BUG pinned on purpose: the completion log passes
-  // `bodyConvertedToFile: bodyFileId` unconditionally (receiveEmail.ts:905;
-  // same shape in the real Mailgun handler at :1121). For an email whose body
-  // does not convert to a PDF (none here — and no Chrome in this env, so
-  // conversion can never succeed), bodyFileId stays undefined and
-  // firebase-admin's default undefined rejection kills the log write AFTER
-  // the attachment was stored: the request 500s, no inbound log, no stats.
-  // The shim now mirrors admin, so this pins production behavior. The
-  // storage half (blob + files doc) is still fully verified.
-  it("stores the attachment + files doc, then 500s on the completion log (bodyConvertedToFile undefined — REAL BUG)", async () => {
+  // Regression guard for a former REAL BUG (fixed 2026-07-19): the log and
+  // files-doc writers used to pass `fromName` / `bodyConvertedToFile` /
+  // `inboundFromName` through as `undefined` when absent (no display name,
+  // no convertible body), and firebase-admin's default undefined rejection
+  // 500'd the request AFTER the attachment was stored. The writers now omit
+  // absent optional fields, so this deliberately body-less, display-name-less
+  // email must complete.
+  it("stores the attachment, creates files doc + inbound log, updates stats", async () => {
     const res = await post({
       to: "invoices-abc123@fibuki.com",
       from: "billing@hetzner.com",
-      // fromName is likewise REQUIRED in practice: without it,
-      // `fromName: undefined` reaches the files-doc write and 500s even
-      // earlier (same undefined-rejection bug class).
-      fromName: "Hetzner Billing",
       subject: "Invoice R0011223344",
       attachments: [
         { filename: "hetzner.pdf", contentType: "application/pdf", content: PDF_B64 },
       ],
     });
 
-    expect(res.statusCode).toBe(500);
+    expect(res.statusCode).toBe(200);
+    const body = res.body as { success: boolean; filesCreated: number };
+    expect(body.success).toBe(true);
 
-    // files doc — created before the failing log write
+    // files doc
     const filesSnap = await db.collection("files").where("userId", "==", USER).get();
     expect(filesSnap.docs.length).toBe(1);
     const fileDoc = filesSnap.docs[0].data();
@@ -249,6 +245,8 @@ describe("selfhost: testInboundEmail end to end (attachment → storage → file
     expect(fileDoc.fileName).toBe("hetzner.pdf");
     expect(fileDoc.fileType).toBe("application/pdf");
     expect(fileDoc.storagePath).toMatch(new RegExp(`^files/${USER}/\\d+_hetzner\\.pdf$`));
+    // absent optional field is OMITTED, not written as undefined/null
+    expect("inboundFromName" in fileDoc).toBe(false);
 
     // the blob actually landed, with the contentType uploadToStorage set
     const file = bucket().file(fileDoc.storagePath as string);
@@ -258,15 +256,23 @@ describe("selfhost: testInboundEmail end to end (attachment → storage → file
     expect(meta.contentType).toBe("application/pdf");
     expect(meta.cacheControl).toBe("public, max-age=31536000");
 
-    // inbound log + stats never happen — the log write is what threw
+    // inbound log — no bodyConvertedToFile / fromName keys for this email
     const logSnap = await db
       .collection("inboundEmailLogs")
       .where("inboundAddressId", "==", "addr-1")
       .get();
-    expect(logSnap.docs.length).toBe(0);
+    expect(logSnap.docs.length).toBe(1);
+    const logDoc = logSnap.docs[0].data();
+    expect(logDoc.status).toBe("completed");
+    expect(logDoc.attachmentsProcessed).toBe(1);
+    expect("bodyConvertedToFile" in logDoc).toBe(false);
+    expect("fromName" in logDoc).toBe(false);
+
+    // address stats
     const addr = (await db.collection("inboundEmailAddresses").doc("addr-1").get()).data()!;
-    expect(addr.emailsReceived).toBeUndefined();
-    expect(addr.todayCount).toBe(0);
+    expect(addr.emailsReceived).toBe(1);
+    expect(addr.filesCreated).toBe(1);
+    expect(addr.todayCount).toBe(1);
   });
 
   it("rejects senders outside allowedDomains without touching storage", async () => {
@@ -277,7 +283,6 @@ describe("selfhost: testInboundEmail end to end (attachment → storage → file
     const res = await post({
       to: "invoices-abc123@fibuki.com",
       from: "spam@evil.example",
-      fromName: "Evil Spammer", // required — see note in the test above
       subject: "totally an invoice",
       attachments: [
         { filename: "x.pdf", contentType: "application/pdf", content: PDF_B64 },
