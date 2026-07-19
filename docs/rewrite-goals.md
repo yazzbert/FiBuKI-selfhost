@@ -192,6 +192,32 @@ The current shim stores docs as JSONB in one `docs` table and filters **in JS**
 (`firestore-shim.ts:447`). Fine for one user. **Fatal for multi-tenant** — no
 indexes, no pushdown. It is a bridge, not a destination.
 
+Progress *(2026-07-19)*:
+
+- ✅ **Drizzle + migration infra** — schema in
+  `functions/src/selfhost/db/schema.ts`, readable SQL migrations under
+  `functions/drizzle/` (authored by `npm run db:generate`), applied at boot by
+  `db/migrate.ts` through ONE code path for embedded PGlite and node-postgres.
+  Phase-0 spike databases (docs table without tenant_id) are adopted and
+  backfilled automatically and idempotently.
+- ✅ **tenant_id everywhere + RLS backstop** — `tenants` table, `tenant_id` on
+  every data table, every document read/write inside a transaction that does
+  `SET LOCAL ROLE fibuki_app` + `set_config('app.tenant_id', …, true)`.
+  Policies use FORCE RLS **and** a dedicated non-superuser app role — PGlite
+  and the docker-image postgres user are superusers, whom RLS never binds, so
+  role-switching is what makes the seatbelt real (pinned by `db/rls.test.ts`).
+- ✅ **SQL pushdown** — filters/orderBy/startAfter-keysets/limit compile to SQL
+  against flattened tables (`db/pushdown.ts`). Contract: compiled WHERE is a
+  superset, the JS pipeline (parity-pinned) re-verifies returned rows; LIMIT
+  is pushed only when everything compiled exactly. A differential suite
+  (`db/pushdown.test.ts`) pins table path ≡ JSONB path per query shape.
+- ✅ **First collection flattened: `sources`** — real table, STORED GENERATED
+  columns over the canonical JSONB payload (indexable/joinable, and
+  absent-vs-null document semantics survive the bridge era; Phase 2 turns
+  them into plain columns and drops the payload). App code unchanged.
+- Open: flatten `transactions`, `files`, `partners`, … (by call-site weight),
+  then delete the matching-engine code Postgres joins make redundant.
+
 ### Phase 2 — rip the shim
 
 Remove the Firestore API surface entirely. Better Auth + migration of existing

@@ -16,6 +16,10 @@
 import { PGlite } from "@electric-sql/pglite";
 import { FieldValue, Timestamp } from "@google-cloud/firestore";
 import { emitChange } from "./bus";
+import { FLATTENED, FlatSpec } from "./db/collections";
+import { runMigrations } from "./db/migrate";
+import { compileFlatQuery, CursorSpec } from "./db/pushdown";
+import { getTenantId } from "./db/tenant";
 
 export { FieldValue, Timestamp };
 
@@ -23,15 +27,26 @@ export { FieldValue, Timestamp };
 // Storage
 // ---------------------------------------------------------------------------
 
+type QueryFn = <R = Record<string, unknown>>(
+  sql: string,
+  params?: unknown[],
+) => Promise<{ rows: R[] }>;
+
 /**
  * Minimal SQL client surface the shim needs — satisfied by BOTH the embedded
  * PGlite (tests / default) and node-postgres' Pool (production). Both return
  * `{ rows }` from a parameterized `$1`-style query, and both auto-parse JSONB
  * columns to JS values and accept a JSON *string* cast via `$n::jsonb`, so the
  * shim's SQL is identical against either backend.
+ *
+ * `query` is autocommit with NO tenant context — DDL and the migration
+ * ledger only. All document IO goes through `tx`, one transaction with
+ * set_config('app.tenant_id', <tenant>, true) applied first, which is what
+ * arms the RLS policies (see drizzle/0000_init.sql).
  */
 interface SqlClient {
-  query<R = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: R[] }>;
+  query: QueryFn;
+  tx<T>(tenantId: string | null, fn: (q: QueryFn) => Promise<T>): Promise<T>;
 }
 
 let pgPromise: Promise<SqlClient> | null = null;
@@ -56,14 +71,72 @@ async function makeClient(): Promise<SqlClient> {
         const res = await pool.query<Record<string, unknown>>(sql, params as unknown[]);
         return { rows: res.rows as unknown as R[] };
       },
+      tx: async <T>(tenantId: string | null, fn: (q: QueryFn) => Promise<T>): Promise<T> => {
+        const conn = await pool.connect();
+        const q: QueryFn = async <R>(sql: string, params?: unknown[]) => {
+          const res = await conn.query<Record<string, unknown>>(sql, params as unknown[]);
+          return { rows: res.rows as unknown as R[] };
+        };
+        try {
+          await q(`BEGIN`);
+          // The connecting user is typically the owner or a superuser, whom
+          // RLS does not bind — document IO runs as the plain app role.
+          await q(`SET LOCAL ROLE fibuki_app`);
+          if (tenantId !== null) {
+            await q(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
+          }
+          const result = await fn(q);
+          await q(`COMMIT`);
+          return result;
+        } catch (err) {
+          try {
+            await q(`ROLLBACK`);
+          } catch {
+            // connection may already be gone; the pool will recycle it
+          }
+          throw err;
+        } finally {
+          conn.release();
+        }
+      },
     };
   }
   const pg = new PGlite(); // in-memory; no DATABASE_URL configured
+  const q: QueryFn = async <R>(sql: string, params?: unknown[]) => {
+    const res = await pg.query<Record<string, unknown>>(sql, params as unknown[]);
+    return { rows: res.rows as unknown as R[] };
+  };
+  // PGlite is a single connection: serialize ALL statements so a transaction
+  // is never interleaved with another caller's statements.
+  let chain: Promise<unknown> = Promise.resolve();
+  const enqueue = <T>(job: () => Promise<T>): Promise<T> => {
+    const run = chain.then(job);
+    chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
   return {
-    query: async <R>(sql: string, params?: unknown[]) => {
-      const res = await pg.query<Record<string, unknown>>(sql, params as unknown[]);
-      return { rows: res.rows as unknown as R[] };
-    },
+    query: (sql, params) => enqueue(() => q(sql, params)),
+    tx: <T>(tenantId: string | null, fn: (qq: QueryFn) => Promise<T>): Promise<T> =>
+      enqueue(async () => {
+        await q(`BEGIN`);
+        try {
+          // PGlite connects as a superuser, whom RLS never binds — document
+          // IO runs as the plain app role.
+          await q(`SET LOCAL ROLE fibuki_app`);
+          if (tenantId !== null) {
+            await q(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
+          }
+          const result = await fn(q);
+          await q(`COMMIT`);
+          return result;
+        } catch (err) {
+          await q(`ROLLBACK`);
+          throw err;
+        }
+      }),
   };
 }
 
@@ -71,25 +144,48 @@ async function getPg(): Promise<SqlClient> {
   if (!pgPromise) {
     pgPromise = (async () => {
       const client = await makeClient();
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS docs (
-          path TEXT PRIMARY KEY,
-          collection_path TEXT NOT NULL,
-          id TEXT NOT NULL,
-          data JSONB NOT NULL
-        );
-      `);
-      await client.query(`CREATE INDEX IF NOT EXISTS docs_collection_idx ON docs (collection_path);`);
+      await runMigrations(client);
       return client;
     })();
   }
   return pgPromise;
 }
 
-/** Test helper: wipe all documents. */
-export async function __resetFirestoreShim(): Promise<void> {
+/** Every document read/write runs tenant-scoped: one transaction, SET LOCAL app.tenant_id. */
+async function withTenant<T>(fn: (q: QueryFn) => Promise<T>): Promise<T> {
   const pg = await getPg();
-  await pg.query(`DELETE FROM docs;`);
+  return pg.tx(getTenantId(), fn);
+}
+
+/** Flattened-table spec for a TOP-LEVEL collection path, if that collection has one. */
+function flatSpecFor(collectionPath: string): FlatSpec | undefined {
+  return collectionPath.includes("/") ? undefined : FLATTENED[collectionPath];
+}
+
+/**
+ * Test helper: run raw SQL.
+ *   tenantId string    → the normal tenant-scoped app-role transaction.
+ *   tenantId null      → app role armed but NO tenant configured; this is
+ *                        how the RLS tests prove the policies hold.
+ *   tenantId undefined → owner/superuser autocommit (RLS-exempt) for
+ *                        asserting raw table contents.
+ */
+export async function __rawSqlForTest(
+  sql: string,
+  params?: unknown[],
+  tenantId?: string | null,
+): Promise<{ rows: Record<string, unknown>[] }> {
+  const pg = await getPg();
+  if (tenantId === undefined) return pg.query(sql, params);
+  return pg.tx(tenantId, (q) => q(sql, params));
+}
+
+/** Test helper: wipe all documents (current tenant). */
+export async function __resetFirestoreShim(): Promise<void> {
+  await withTenant(async (q) => {
+    await q(`DELETE FROM docs`);
+    for (const spec of Object.values(FLATTENED)) await q(`DELETE FROM ${spec.table}`);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -284,8 +380,19 @@ function applySentinelsInPlace(value: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 async function rawGet(path: string): Promise<Record<string, unknown> | undefined> {
-  const pg = await getPg();
-  const res = await pg.query<{ data: unknown }>(`SELECT data FROM docs WHERE path = $1`, [path]);
+  const segs = path.split("/");
+  const spec = segs.length === 2 ? flatSpecFor(segs[0]) : undefined;
+  const res = await withTenant((q) =>
+    spec
+      ? q<{ data: unknown }>(`SELECT data FROM ${spec.table} WHERE tenant_id = $1 AND id = $2`, [
+          getTenantId(),
+          segs[1],
+        ])
+      : q<{ data: unknown }>(`SELECT data FROM docs WHERE tenant_id = $1 AND path = $2`, [
+          getTenantId(),
+          path,
+        ]),
+  );
   if (res.rows.length === 0) return undefined;
   return decodeValue(res.rows[0].data) as Record<string, unknown>;
 }
@@ -295,18 +402,32 @@ async function rawPut(
   id: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const pg = await getPg();
+  const spec = flatSpecFor(collectionPath);
   const path = `${collectionPath}/${id}`;
-  await pg.query(
-    `INSERT INTO docs (path, collection_path, id, data) VALUES ($1, $2, $3, $4::jsonb)
-     ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data`,
-    [path, collectionPath, id, JSON.stringify(encodeValue(data))],
+  const json = JSON.stringify(encodeValue(data));
+  await withTenant((q) =>
+    spec
+      ? q(
+          `INSERT INTO ${spec.table} (tenant_id, id, data) VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (tenant_id, id) DO UPDATE SET data = EXCLUDED.data`,
+          [getTenantId(), id, json],
+        )
+      : q(
+          `INSERT INTO docs (tenant_id, path, collection_path, id, data) VALUES ($1, $2, $3, $4, $5::jsonb)
+           ON CONFLICT (tenant_id, path) DO UPDATE SET data = EXCLUDED.data`,
+          [getTenantId(), path, collectionPath, id, json],
+        ),
   );
 }
 
 async function rawDelete(path: string): Promise<void> {
-  const pg = await getPg();
-  await pg.query(`DELETE FROM docs WHERE path = $1`, [path]);
+  const segs = path.split("/");
+  const spec = segs.length === 2 ? flatSpecFor(segs[0]) : undefined;
+  await withTenant((q) =>
+    spec
+      ? q(`DELETE FROM ${spec.table} WHERE tenant_id = $1 AND id = $2`, [getTenantId(), segs[1]])
+      : q(`DELETE FROM docs WHERE tenant_id = $1 AND path = $2`, [getTenantId(), path]),
+  );
 }
 
 async function writeDoc(
@@ -531,26 +652,75 @@ export class Query {
   }
 
   async get(): Promise<QuerySnapshot> {
-    const pg = await getPg();
-    // Spike: fetch the collection, filter in JS. Production: push filters to SQL.
-    const res = this.isGroup
-      ? await pg.query<{ id: string; collection_path: string; data: unknown }>(
+    // Flattened collections compile filters/order/cursor/limit to SQL against
+    // their real table (db/pushdown.ts); everything else fetches its docs
+    // rows. Either way the FULL JS pipeline below re-runs on the fetched
+    // rows — pushdown narrows the fetch (and, when it compiled exactly,
+    // already ordered and limited it), while the JS pipeline stays the
+    // parity-pinned semantics referee. Re-filtering returned rows is a
+    // no-op-safe superset check; re-sorting is idempotent; re-limiting a
+    // pre-limited page is a no-op. OFFSET is never pushed (SQL LIMIT covers
+    // offset+limit), so the JS offset slice applies exactly once.
+    const tenantId = getTenantId();
+    const spec = this.isGroup ? undefined : flatSpecFor(this.collectionPath);
+    const fetched = await withTenant(async (q) => {
+      if (this.isGroup) {
+        const res = await q<{ id: string; collection_path: string; data: unknown }>(
           // Escape LIKE wildcards in the collection ID — the segment match
           // must be literal.
           `SELECT id, collection_path, data FROM docs
-           WHERE collection_path = $1 OR collection_path LIKE $2 ESCAPE '\\'`,
+           WHERE tenant_id = $1 AND (collection_path = $2 OR collection_path LIKE $3 ESCAPE '\\')`,
           [
+            tenantId,
             this.collectionPath,
             `%/${this.collectionPath.replace(/([\\%_])/g, "\\$1")}`,
           ],
-        )
-      : await pg.query<{ id: string; collection_path: string; data: unknown }>(
-          `SELECT id, collection_path, data FROM docs WHERE collection_path = $1`,
-          [this.collectionPath],
         );
-    let rows = res.rows.map((r) => ({
+        const rows = res.rows.map((r) => ({ id: r.id, collectionPath: r.collection_path, data: r.data }));
+        // A flattened TOP-LEVEL collection with this bare name is part of
+        // the group too; its rows live in the real table, not in docs.
+        const groupSpec = FLATTENED[this.collectionPath];
+        if (groupSpec) {
+          const extra = await q<{ id: string; data: unknown }>(
+            `SELECT id, data FROM ${groupSpec.table} WHERE tenant_id = $1`,
+            [tenantId],
+          );
+          rows.push(
+            ...extra.rows.map((r) => ({ id: r.id, collectionPath: this.collectionPath, data: r.data })),
+          );
+        }
+        return rows;
+      }
+      if (spec) {
+        const after = this.after;
+        let cursor: CursorSpec | null = null;
+        if (after) {
+          cursor =
+            "snap" in after
+              ? { values: this.orders.map((o) => after.snap.get(o.field)), snapId: after.snap.id }
+              : { values: after.values, snapId: null };
+        }
+        const compiled = compileFlatQuery(
+          spec,
+          tenantId,
+          this.filters,
+          this.orders,
+          this.limitN,
+          this.offsetN,
+          cursor,
+        );
+        const res = await q<{ id: string; data: unknown }>(compiled.sql, compiled.params);
+        return res.rows.map((r) => ({ id: r.id, collectionPath: this.collectionPath, data: r.data }));
+      }
+      const res = await q<{ id: string; collection_path: string; data: unknown }>(
+        `SELECT id, collection_path, data FROM docs WHERE tenant_id = $1 AND collection_path = $2`,
+        [tenantId, this.collectionPath],
+      );
+      return res.rows.map((r) => ({ id: r.id, collectionPath: r.collection_path, data: r.data }));
+    });
+    let rows = fetched.map((r) => ({
       id: r.id,
-      collectionPath: r.collection_path,
+      collectionPath: r.collectionPath,
       data: decodeValue(r.data) as Record<string, unknown>,
     }));
     for (const f of this.filters) rows = rows.filter((r) => matchesFilter(r.data, f, r.id));
@@ -833,13 +1003,23 @@ class FirestoreShim {
   }
 
   async recursiveDelete(ref: DocRef | CollectionRef): Promise<void> {
-    const pg = await getPg();
     const prefix = ref.path;
-    await pg.query(`DELETE FROM docs WHERE path = $1 OR path LIKE $2 OR collection_path LIKE $3`, [
-      prefix,
-      `${prefix}/%`,
-      `${prefix}%`,
-    ]);
+    const segs = prefix.split("/");
+    const spec = flatSpecFor(segs[0]);
+    await withTenant(async (q) => {
+      const tenantId = getTenantId();
+      // Flattened rows live in their real table; their subcollection docs
+      // (if any) still live in `docs` and are caught by the LIKE below.
+      if (spec && segs.length === 1) {
+        await q(`DELETE FROM ${spec.table} WHERE tenant_id = $1`, [tenantId]);
+      } else if (spec && segs.length === 2) {
+        await q(`DELETE FROM ${spec.table} WHERE tenant_id = $1 AND id = $2`, [tenantId, segs[1]]);
+      }
+      await q(
+        `DELETE FROM docs WHERE tenant_id = $1 AND (path = $2 OR path LIKE $3 OR collection_path LIKE $4)`,
+        [tenantId, prefix, `${prefix}/%`, `${prefix}%`],
+      );
+    });
   }
 
   settings(_opts: unknown): void {}

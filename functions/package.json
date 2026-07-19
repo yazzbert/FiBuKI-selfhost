@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:selfhost": "vitest run --config vitest.selfhost.config.ts",
+    "db:generate": "drizzle-kit generate",
     "selfhost:api": "vite-node --config vitest.selfhost.config.ts src/selfhost/server.ts"
   },
   "engines": {
@@ -31,6 +32,7 @@
     "archiver": "^7.0.1",
     "busboy": "^1.6.0",
     "cologne-phonetic": "^1.1.1",
+    "drizzle-orm": "^0.45.2",
     "express": "^4.22.2",
     "firebase-admin": "^13.10.0",
     "firebase-functions": "^7.2.5",
@@ -65,6 +67,7 @@
     "@types/react": "^19.2.17",
     "@types/soap": "^0.21.0",
     "@types/unzipper": "^0.10.11",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^6.0.3",
     "vite-node": "^6.0.0",
     "vitest": "^4.1.9"
