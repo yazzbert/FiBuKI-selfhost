@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
 
     // Fetch the message
     const messageResponse = await fetch(
-      `${GMAIL_API_BASE}/users/me/messages/${messageId}?format=full`,
+      `${GMAIL_API_BASE}/users/me/messages/${encodeURIComponent(messageId)}?format=full`,
       {
         headers: {
           Authorization: `Bearer ${ctx.accessToken}`,
