@@ -1,5 +1,33 @@
 # CodeQL backlog triage — 265 pre-existing alerts on main
 
+## Session 2026-07-20 (evening) — progress
+
+Four fix branches committed locally (Claude cannot push/dismiss — commands
+for both are in `2026-07-20-codeql-dismissals.md`, Stefan runs them):
+
+- `codeql/cli-auth` — #34 command-line-injection (exec → spawn, URL
+  validated) + config.json mode 0600.
+- `codeql/extension-sandbox` — #37/#113/#114/#123 postMessage source
+  checks + guarded callback dispatch; manifest bumped to 0.0.2.
+- `codeql/request-forgery` — #25–#30 encodeURIComponent on IDs in
+  Gmail/finAPI/TrueLayer request paths.
+- `codeql/format-strings` — #66/#67/#68 tainted values moved to %s/%d args.
+
+Dismissals prepared (by-design/FP): #32, #33, #81, #82, #87.
+
+**Deferred with analysis:** js/system-prompt-injection ×2
+(app/api/agent/route.ts:72, app/api/chat/route.ts:260) — client-sent
+`role:"system"` messages replace the server's SYSTEM_PROMPT (chat route
+only unshifts its own when none present; agent route round-trips system
+messages to the client). Dropping them is a real behavior change to
+chat/agent flows — needs its own session or Stefan's call.
+**Still pending:** priority 3 rest (regex-anchor ×8 in extension,
+user-controlled-bypass ×2 in content.js — login-page heuristics, likely
+by-design), priority 4 bulk mediums, priority 5 quality noise (+ the
+security-extended vs security-and-quality suite question for Stefan).
+
+---
+
 **Status:** Queued by Stefan 2026-07-20, to run BEFORE the transactions
 flatten (`2026-07-20-phase-1-flatten-transactions.md` stays pending).
 Context: the first-ever CodeQL scan of `main` (post PR #1/#2 merge,
