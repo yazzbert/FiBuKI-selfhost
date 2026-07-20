@@ -327,7 +327,9 @@ export async function DELETE(request: NextRequest) {
     const body = await request.json();
     const { bankConnectionId } = body;
 
-    if (!bankConnectionId) {
+    // finAPI connection ids are numeric — reject anything else so the value
+    // can't smuggle path segments into the finAPI request URL
+    if (typeof bankConnectionId !== "number" || !Number.isInteger(bankConnectionId)) {
       return NextResponse.json(
         { error: "bankConnectionId is required" },
         { status: 400 }
