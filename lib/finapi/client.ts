@@ -541,7 +541,7 @@ export class FinapiClient {
    * Uses Web Form 2.0 service
    */
   async getWebForm(webFormId: string, userToken: string): Promise<FinapiWebForm> {
-    const url = `${this.webformUrl}/api/webForms/${webFormId}`;
+    const url = `${this.webformUrl}/api/webForms/${encodeURIComponent(webFormId)}`;
     console.log(`[finAPI] GET ${url}`);
 
     const response = await fetch(url, {
