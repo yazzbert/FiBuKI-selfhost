@@ -11,6 +11,7 @@
  */
 
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { buildDownloadUrl } from "../utils/buildDownloadUrl";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { getFirestore, Timestamp, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
@@ -673,15 +674,7 @@ async function createFileFromAttachment(
   });
 
   // Generate download URL
-  let downloadUrl: string;
-  const storageEmulatorHost = process.env.FIREBASE_STORAGE_EMULATOR_HOST;
-  const encodedPath = encodeURIComponent(storagePath);
-
-  if (storageEmulatorHost) {
-    downloadUrl = `http://${storageEmulatorHost}/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
-  } else {
-    downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
-  }
+  const downloadUrl = buildDownloadUrl(bucket.name, storagePath, downloadToken);
 
   // Create file document
   const now = Timestamp.now();
@@ -806,15 +799,7 @@ async function createFileFromHtmlPdf(
   });
 
   // Generate download URL
-  let downloadUrl: string;
-  const storageEmulatorHost = process.env.FIREBASE_STORAGE_EMULATOR_HOST;
-  const encodedPath = encodeURIComponent(storagePath);
-
-  if (storageEmulatorHost) {
-    downloadUrl = `http://${storageEmulatorHost}/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
-  } else {
-    downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
-  }
+  const downloadUrl = buildDownloadUrl(bucket.name, storagePath, downloadToken);
 
   // Create file document
   const now = Timestamp.now();

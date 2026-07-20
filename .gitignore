@@ -49,7 +49,12 @@ storage-debug.log
 emulator-data/
 
 # Claude Code
-.claude/
+# Personal config stays local; shared team config + safety hooks are committed,
+# so they actually reach contributors (a gitignored guard guards nobody).
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/settings.local.json
 
 # MCP config
 .mcp.json
