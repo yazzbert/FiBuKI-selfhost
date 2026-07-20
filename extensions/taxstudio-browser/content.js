@@ -661,12 +661,12 @@
     /\/authenticate/i,
     /\/oauth\//i,
     /\/sso\//i,
-    /accounts\.google\.com\/.*ServiceLogin/i,
-    /accounts\.google\.com\/.*signin/i,
-    /accounts\.google\.com\/.*identifier/i,
-    /accounts\.google\.com\/.*challenge/i,
-    /login\.microsoftonline\.com/i,
-    /auth0\.com\/.*login/i,
+    /^https?:\/\/accounts\.google\.com\/.*ServiceLogin/i,
+    /^https?:\/\/accounts\.google\.com\/.*signin/i,
+    /^https?:\/\/accounts\.google\.com\/.*identifier/i,
+    /^https?:\/\/accounts\.google\.com\/.*challenge/i,
+    /^https?:\/\/login\.microsoftonline\.com\//i,
+    /^https?:\/\/([^/?#]+\.)?auth0\.com\/.*login/i,
     /\/saml\//i,
   ];
 
@@ -1134,9 +1134,10 @@
       target.getAttribute("data-link") ||
       "";
     if (!raw) return "";
-    if (raw.indexOf("javascript:") === 0 || raw.indexOf("mailto:") === 0) return "";
     try {
-      return new URL(raw, window.location.href).toString();
+      var parsed = new URL(raw, window.location.href);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+      return parsed.toString();
     } catch (err) {
       return "";
     }
@@ -1872,15 +1873,15 @@
     links.forEach(function (link) {
       var href = link.getAttribute("href") || "";
       var text = link.textContent || "";
-      var absolute = "";
+      var parsedLink;
       try {
-        absolute = new URL(href, window.location.href).toString();
+        parsedLink = new URL(href, window.location.href);
       } catch (err) {
         return;
       }
-      if (absolute.indexOf("javascript:") === 0) return;
-      if (absolute.indexOf("mailto:") === 0) return;
-      if (new URL(absolute).origin !== baseOrigin) return;
+      if (parsedLink.protocol !== "http:" && parsedLink.protocol !== "https:") return;
+      if (parsedLink.origin !== baseOrigin) return;
+      var absolute = parsedLink.toString();
 
       var isPdfLink = absolute.toLowerCase().indexOf(".pdf") !== -1;
       if (isPdfLink || (keywordRe.test(absolute) && absolute.toLowerCase().indexOf("pdf") !== -1)) {

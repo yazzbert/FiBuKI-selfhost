@@ -629,7 +629,7 @@ async function createFileFromAttachment(
   const emailMatch = from.match(/<([^>]+)>/) || [null, from];
   const senderEmail = emailMatch[1] || from;
   const senderDomain = extractEmailDomain(senderEmail);
-  const senderName = from.replace(/<[^>]+>/, "").trim().replace(/"/g, "");
+  const senderName = from.split("<")[0].trim().replace(/"/g, "");
 
   // Upload to Storage (matching UI's gmail/attachment route.ts pattern)
   const timestamp = Date.now();
@@ -771,7 +771,7 @@ async function createFileFromHtmlPdf(
   const emailMatch = from.match(/<([^>]+)>/) || [null, from];
   const senderEmail = emailMatch[1] || from;
   const senderDomain = extractEmailDomain(senderEmail);
-  const senderName = from.replace(/<[^>]+>/, "").trim().replace(/"/g, "");
+  const senderName = from.split("<")[0].trim().replace(/"/g, "");
 
   // Upload to Storage (matching UI's gmail/attachment route.ts pattern)
   const timestamp = Date.now();
