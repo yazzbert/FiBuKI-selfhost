@@ -1,0 +1,267 @@
+/**
+ * Differential suite for SQL pushdown: the SAME fixture docs are written to
+ * the flattened `sources` collection (real table + compiled SQL) and to an
+ * unflattened twin collection (JSONB docs bridge + pure JS pipeline, which
+ * the parity suite pins against firebase-admin). Every query shape must
+ * return identical results from both paths — that makes the JSONB path the
+ * referee for the table path, transitively anchoring it to real Firestore.
+ *
+ * Known, accepted divergence NOT asserted here: a field holding MIXED types
+ * across docs (e.g. a boolean field that is a string in one doc) can sort/
+ * range differently once SQL LIMIT is pushed, because the generated column
+ * is NULL for the wrong-typed doc while the JS comparator string-coerces.
+ * Real Firestore brackets by type, agreeing with neither. TS-typed app data
+ * does not mix types per field; do not "fix" this by disabling pushdown.
+ *
+ * Plus compile-shape unit tests pinning WHAT gets pushed (the perf contract
+ * the differential assertions cannot see).
+ */
+
+import { describe, it, expect, beforeAll } from "vitest";
+import {
+  getFirestore,
+  Timestamp,
+  __resetFirestoreShim,
+} from "../firestore-shim";
+import { FLATTENED } from "./collections";
+import { compileFlatQuery } from "./pushdown";
+import { getTenantId } from "./tenant";
+
+const db = getFirestore();
+const FLAT = "sources"; // has a real table
+const REF = "srcdiff"; // JSONB twin — no spec, pure JS pipeline
+
+const T = (ms: number) => Timestamp.fromMillis(ms);
+
+const FIXTURES: Record<string, Record<string, unknown>> = {
+  s01: { userId: "u1", isActive: true, name: "Alpha", createdAt: T(1000), apiConfig: { accountId: "acc1" }, balance: 100, tags: ["a", "b"] },
+  s02: { userId: "u1", isActive: false, name: "alpha", createdAt: T(2000), balance: 250 },
+  s03: { userId: "u1", isActive: true, name: "Beta", createdAt: T(2000), linkedSourceId: "s01", tags: ["b"] },
+  s04: { userId: "u2", isActive: true, name: "dup", createdAt: T(3000), apiConfig: { accountId: "acc2" } },
+  s05: { userId: "u2", name: "dup", createdAt: T(4000) }, // isActive missing
+  s06: { userId: "u2", isActive: null, name: null, createdAt: T(5000) },
+  s07: { userId: "u1", isActive: true, createdAt: T(6000), balance: 100 }, // name missing
+  s08: { userId: "u3", isActive: "yes", name: "Ätsch", apiConfig: { accountId: 7 } }, // wrong types, createdAt missing
+  s09: { userId: "u1", isActive: true, name: "zeta", createdAt: T(7000), tags: [] },
+  s10: { userId: "u2", isActive: false, name: "42", createdAt: T(1000) }, // createdAt tie with s01
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** Build the same query against a collection, return ordered doc ids. */
+type Build = (col: any) => Promise<any> | any;
+
+async function idsFrom(collection: string, build: Build): Promise<string[]> {
+  const q = await build(db.collection(collection));
+  const snap = await q.get();
+  return snap.docs.map((d: any) => d.id);
+}
+
+/** For queries WITH an orderBy: result order is defined and must match. */
+async function expectSame(build: Build): Promise<string[]> {
+  const a = await idsFrom(FLAT, build);
+  const b = await idsFrom(REF, build);
+  expect(a).toEqual(b);
+  return a;
+}
+
+/**
+ * For queries WITHOUT an orderBy: neither backend defines an order (the
+ * JSONB path returns heap order, the table path whatever plan Postgres
+ * picks, e.g. an index scan) — compare as sets.
+ */
+async function expectSameSet(build: Build): Promise<string[]> {
+  const a = await idsFrom(FLAT, build);
+  const b = await idsFrom(REF, build);
+  expect([...a].sort()).toEqual([...b].sort());
+  return a;
+}
+
+describe("pushdown differential: flattened table vs JSONB reference", () => {
+  beforeAll(async () => {
+    await __resetFirestoreShim();
+    for (const [id, data] of Object.entries(FIXTURES)) {
+      await db.collection(FLAT).doc(id).set(data);
+      await db.collection(REF).doc(id).set(data);
+    }
+  });
+
+  it("equality on mapped fields", async () => {
+    expect(await expectSameSet((c) => c.where("userId", "==", "u1"))).toHaveLength(5);
+    await expectSameSet((c) => c.where("userId", "==", "u1").where("isActive", "==", true));
+    await expectSameSet((c) => c.where("apiConfig.accountId", "==", "acc1"));
+    await expectSameSet((c) => c.where("isActive", "==", true)); // s08 "yes" matches neither path
+    await expectSameSet((c) => c.where("createdAt", "==", T(2000)));
+    await expectSameSet((c) => c.where("userId", "==", "nobody"));
+  });
+
+  it("null equality stays JS-side and matches explicit null only", async () => {
+    expect(await expectSameSet((c) => c.where("name", "==", null))).toEqual(["s06"]);
+  });
+
+  it("ranges on text, incl. null-as-minus-infinity", async () => {
+    await expectSameSet((c) => c.where("name", ">", "Beta"));
+    expect(await expectSameSet((c) => c.where("name", "<=", "alpha"))).toContain("s06");
+    await expectSameSet((c) => c.where("name", "<", "B"));
+    await expectSameSet((c) => c.where("name", ">=", "A").where("name", "<", "z"));
+  });
+
+  it("ranges on timestamps", async () => {
+    await expectSameSet((c) => c.where("createdAt", ">", T(2000)));
+    await expectSameSet((c) => c.where("createdAt", ">=", T(2000)));
+    expect(await expectSameSet((c) => c.where("createdAt", "<=", T(2000)))).not.toContain("s08");
+  });
+
+  it("in / not-in / != / __name__", async () => {
+    await expectSameSet((c) => c.where("userId", "in", ["u1", "u3"]));
+    await expectSameSet((c) => c.where("userId", "in", []));
+    await expectSameSet((c) => c.where("isActive", "!=", true));
+    await expectSameSet((c) => c.where("userId", "not-in", ["u1"]));
+    expect(await expectSameSet((c) => c.where("__name__", "==", "s04"))).toEqual(["s04"]);
+    await expectSameSet((c) => c.where("__name__", "in", ["s01", "s09", "sources/s10"]));
+  });
+
+  it("array-contains stays JS-side, same results", async () => {
+    await expectSameSet((c) => c.where("tags", "array-contains", "b"));
+    await expectSameSet((c) => c.where("tags", "array-contains-any", ["a", "c"]));
+  });
+
+  it("orderBy with nulls/missing first-or-last and id tiebreak", async () => {
+    await expectSame((c) => c.orderBy("name", "asc"));
+    await expectSame((c) => c.orderBy("name", "desc"));
+    await expectSame((c) => c.orderBy("createdAt", "asc"));
+    await expectSame((c) => c.orderBy("createdAt", "desc"));
+    await expectSame((c) => c.orderBy("createdAt", "asc").orderBy("name", "desc"));
+  });
+
+  it("limit/offset pushdown", async () => {
+    await expectSame((c) => c.orderBy("createdAt", "asc").limit(3));
+    await expectSame((c) => c.orderBy("createdAt", "desc").limit(2).offset(2));
+    await expectSame((c) => c.where("userId", "==", "u1").orderBy("name", "asc").limit(2));
+    await expectSame((c) => c.orderBy("createdAt", "asc").orderBy("name", "asc").limit(4));
+  });
+
+  it("startAfter(snapshot) cursor with id tiebreak, paged to exhaustion", async () => {
+    const page = async (col: any, after?: any) => {
+      let q = col.orderBy("name", "asc").limit(3);
+      if (after) q = q.startAfter(after);
+      return q.get();
+    };
+    for (const collection of [FLAT, REF]) {
+      const col = db.collection(collection);
+      const all: string[] = [];
+      let snap = await page(col);
+      while (snap.docs.length > 0) {
+        all.push(...snap.docs.map((d: any) => d.id));
+        snap = await page(col, snap.docs[snap.docs.length - 1]);
+      }
+      expect(all).toHaveLength(Object.keys(FIXTURES).length);
+      if (collection === REF) {
+        const flatAll = await idsFrom(FLAT, (c) => c.orderBy("name", "asc"));
+        expect(all).toEqual(flatAll);
+      }
+    }
+  });
+
+  it("startAfter(values) cursor", async () => {
+    await expectSame((c) => c.orderBy("createdAt", "asc").startAfter(T(2000)));
+    await expectSame((c) => c.orderBy("name", "asc").startAfter("dup").limit(2));
+  });
+
+  it("count() and full-data round-trip equality", async () => {
+    const [ca, cb] = await Promise.all(
+      [FLAT, REF].map((n) =>
+        db.collection(n).where("userId", "==", "u1").count().get().then((s) => s.data().count),
+      ),
+    );
+    expect(ca).toBe(cb);
+
+    const [da, dbb] = await Promise.all(
+      [FLAT, REF].map((n) => db.collection(n).orderBy("createdAt", "asc").get()),
+    );
+    expect(da.docs.map((d: any) => d.data())).toEqual(dbb.docs.map((d: any) => d.data()));
+  });
+
+  it("limit without orderBy returns the right count (order is backend-arbitrary)", async () => {
+    const [a, b] = await Promise.all(
+      [FLAT, REF].map((n) => db.collection(n).where("userId", "==", "u2").limit(2).get()),
+    );
+    expect(a.size).toBe(2);
+    expect(b.size).toBe(2);
+  });
+});
+
+describe("compile shapes (the perf contract)", () => {
+  const spec = FLATTENED.sources;
+  const tid = getTenantId();
+
+  it("pushes equality + order + limit fully", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [{ field: "userId", op: "==", value: "u1" }],
+      [{ field: "name", dir: "asc" }],
+      3,
+      0,
+      null,
+    );
+    expect(c.sql).toContain(`"user_id" = $2`);
+    expect(c.sql).toContain(`ORDER BY "name" COLLATE "C" ASC NULLS FIRST, id COLLATE "C" ASC`);
+    expect(c.sql).toContain(`LIMIT 3`);
+    expect(c.params).toEqual([tid, "u1"]);
+  });
+
+  it("folds offset into the pushed LIMIT", () => {
+    const c = compileFlatQuery(spec, tid, [], [{ field: "createdAt", dir: "desc" }], 2, 2, null);
+    expect(c.sql).toContain(`LIMIT 4`);
+  });
+
+  it("does NOT push LIMIT when a filter stays JS-side", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [{ field: "tags", op: "array-contains", value: "b" }],
+      [{ field: "name", dir: "asc" }],
+      3,
+      0,
+      null,
+    );
+    expect(c.sql).not.toContain("LIMIT");
+    expect(c.sql).toContain("ORDER BY");
+  });
+
+  it("does NOT push LIMIT or ORDER BY for unmapped order fields", () => {
+    const c = compileFlatQuery(spec, tid, [], [{ field: "balance", dir: "asc" }], 3, 0, null);
+    expect(c.sql).not.toContain("ORDER BY");
+    expect(c.sql).not.toContain("LIMIT");
+  });
+
+  it("compiles a snapshot cursor to a keyset with id tiebreak", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [],
+      [{ field: "name", dir: "asc" }],
+      2,
+      0,
+      { values: ["dup"], snapId: "s04" },
+    );
+    expect(c.sql).toContain(`"name" COLLATE "C" > $2`);
+    expect(c.sql).toContain(`"name" = $2 AND id COLLATE "C" > $3`);
+    expect(c.sql).toContain("LIMIT 2");
+    expect(c.params).toEqual([tid, "dup", "s04"]);
+  });
+
+  it("null cursor values disable LIMIT pushdown but keep the fetch valid", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [],
+      [{ field: "name", dir: "asc" }],
+      2,
+      0,
+      { values: [null], snapId: "s06" },
+    );
+    expect(c.sql).not.toContain("LIMIT");
+  });
+});
