@@ -1,19 +1,25 @@
 # CodeQL backlog triage — 265 pre-existing alerts on main
 
-## Session 2026-07-20 (evening) — progress
+## Session 2026-07-20/21 — outcome
 
-Four fix branches committed locally (Claude cannot push/dismiss — commands
-for both are in `2026-07-20-codeql-dismissals.md`, Stefan runs them):
+PRs #3–#6 merged; main scans closed **16 alerts as fixed** (265 → 250
+open, security-severity 99 → ~84): #25–#30 request-forgery, #32, #34,
+#37, #66–#68, #87, #113/#114, #123. Adversarial review added two extra
+fixes (chmod-600-on-existing-config; runtime bankConnectionId validation
+that CodeQL's type-based taint missed).
 
-- `codeql/cli-auth` — #34 command-line-injection (exec → spawn, URL
-  validated) + config.json mode 0600.
-- `codeql/extension-sandbox` — #37/#113/#114/#123 postMessage source
-  checks + guarded callback dispatch; manifest bumped to 0.0.2.
-- `codeql/request-forgery` — #25–#30 encodeURIComponent on IDs in
-  Gmail/finAPI/TrueLayer request paths.
-- `codeql/format-strings` — #66/#67/#68 tainted values moved to %s/%d args.
-
-Dismissals prepared (by-design/FP): #32, #33, #81, #82, #87.
+Still to run/decide from this round:
+- Dismissals #33, #81, #82 (commands in `2026-07-20-codeql-dismissals.md`;
+  #32/#87 self-resolved via the hardening, entries removed).
+- PR #7 (`fix/publish-packages-secret-gate`): merge — the cli/ merge
+  tripped the fork-inherited npm auto-publish (ENEEDAUTH, repo has no
+  secrets); PR gates publish steps on token presence. Checks green.
+- npm `@fibukiapp/cli@0.1.1` (ships the #34 fix): **blocked on Felix** —
+  the @fibukiapp npm scope is his. Options: he publishes, adds Stefan as
+  package maintainer, or provides a granular token for the NPM_TOKEN
+  secret; then `gh workflow run publish-packages.yml -f publish_cli=true`.
+- Extension 0.0.2 (sandbox hardening) isn't on the Chrome Web Store until
+  a GitHub Release is published (RELEASING.md procedure).
 
 **Deferred with analysis:** js/system-prompt-injection ×2
 (app/api/agent/route.ts:72, app/api/chat/route.ts:260) — client-sent
