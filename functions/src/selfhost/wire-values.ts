@@ -14,7 +14,6 @@
  */
 
 import { FieldValue, Timestamp } from "./firestore-shim";
-import { isUnsafePropertyKey } from "./unsafe-keys";
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -69,8 +68,11 @@ export function decodeWire(value: unknown, allowSentinels: boolean): unknown {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) {
     // "__proto__" is already dead (the "__" tag check above); refuse the
-    // rest of the prototype-polluting trio just as loudly.
-    if (isUnsafePropertyKey(k)) throw new WireError(`unsafe field name "${k}"`);
+    // rest of the prototype-polluting trio just as loudly. Literal
+    // comparisons on purpose — the guard shape CodeQL recognizes.
+    if (k === "__proto__" || k === "constructor" || k === "prototype") {
+      throw new WireError(`unsafe field name "${k}"`);
+    }
     out[k] = decodeWire(v, allowSentinels);
   }
   return out;
@@ -84,7 +86,8 @@ export function encodeWire(value: unknown): unknown {
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      if (isUnsafePropertyKey(k)) continue; // sink guard; decode refuses these
+      // Sink guard (decode refuses these; literal comparisons on purpose)
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
       if (v !== undefined) out[k] = encodeWire(v);
     }
     return out;

@@ -23,7 +23,6 @@ import express from "express";
 import type { NextFunction, Request, Response, Router } from "express";
 import { getStorage } from "./storage-shim";
 import { makeRateLimiter } from "./rate-limit";
-import { isUnsafePropertyKey } from "./unsafe-keys";
 import type { AuthData } from "./https-shim";
 import type { TokenVerifier } from "./host";
 
@@ -137,7 +136,8 @@ export function createStorageRoutes(verifyToken: TokenVerifier, options?: { json
           }
           customMetadata = {};
           for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-            if (isUnsafePropertyKey(k)) {
+            // Literal comparisons on purpose — the guard shape CodeQL recognizes.
+            if (k === "__proto__" || k === "constructor" || k === "prototype") {
               throw new StorageRouteError("invalid-argument", `unsafe custom metadata key "${k}"`);
             }
             if (v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {

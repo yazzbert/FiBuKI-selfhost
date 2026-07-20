@@ -22,8 +22,6 @@
  * try/catch on that).
  */
 
-import { isUnsafePropertyKey } from "./unsafe-keys";
-
 export interface BlobMetadata {
   name: string;
   bucket: string;
@@ -160,10 +158,16 @@ function customMeta(
   if (!raw) return undefined;
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (isUnsafePropertyKey(k)) continue; // sink guard; routes reject these upfront
+    // Sink guard (routes reject these upfront; literal comparisons on purpose)
+    if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
     if (v !== undefined && v !== null) out[k] = String(v);
   }
   return out;
+}
+
+/** Coerce a metadata field to a string or drop it — HTTP-sourced values can be string[]-shaped. */
+function asOptionalString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
 }
 
 /* ------------------------------------------------------------------ */
@@ -186,9 +190,9 @@ export class StorageFile {
       name: this.name,
       bucket: this.bucketRef.name,
       size: String(buf.length),
-      contentType: options?.contentType ?? m?.contentType,
-      cacheControl: m?.cacheControl,
-      contentDisposition: m?.contentDisposition,
+      contentType: asOptionalString(options?.contentType ?? m?.contentType),
+      cacheControl: asOptionalString(m?.cacheControl),
+      contentDisposition: asOptionalString(m?.contentDisposition),
       metadata: customMeta(m?.metadata),
       timeCreated: prev?.timeCreated ?? now,
       updated: now,

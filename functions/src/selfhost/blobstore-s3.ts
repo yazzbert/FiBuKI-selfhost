@@ -66,10 +66,15 @@ export class S3BlobStore implements BlobStore {
   }
 
   private systemHeaders(meta: BlobMetadata): Record<string, string> {
+    // typeof guards: these fields can originate from HTTP input, where a
+    // repeated query/header parameter arrives as string[] — never forward
+    // a non-string as a header value.
     const h: Record<string, string> = {};
-    if (meta.contentType) h["Content-Type"] = meta.contentType;
-    if (meta.cacheControl) h["Cache-Control"] = meta.cacheControl;
-    if (meta.contentDisposition) h["Content-Disposition"] = meta.contentDisposition;
+    if (typeof meta.contentType === "string" && meta.contentType) h["Content-Type"] = meta.contentType;
+    if (typeof meta.cacheControl === "string" && meta.cacheControl) h["Cache-Control"] = meta.cacheControl;
+    if (typeof meta.contentDisposition === "string" && meta.contentDisposition) {
+      h["Content-Disposition"] = meta.contentDisposition;
+    }
     return h;
   }
 
