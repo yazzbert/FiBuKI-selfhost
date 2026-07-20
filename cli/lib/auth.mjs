@@ -9,7 +9,7 @@
  * Zero dependencies — uses only Node 18+ built-ins.
  */
 
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
@@ -165,6 +165,8 @@ function outputResult({ format, apiKey, keyName, baseUrl }) {
     encoding: "utf-8",
     mode: 0o600,
   });
+  // mode above only applies on creation — tighten pre-existing files too
+  chmodSync(configPath, 0o600);
 
   console.log(`  Saved to ${configPath}\n`);
 }
