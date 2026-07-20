@@ -22,6 +22,8 @@
 import express from "express";
 import type { NextFunction, Request, Response, Router } from "express";
 import { getStorage } from "./storage-shim";
+import { makeRateLimiter } from "./rate-limit";
+import { isUnsafePropertyKey } from "./unsafe-keys";
 import type { AuthData } from "./https-shim";
 import type { TokenVerifier } from "./host";
 
@@ -72,6 +74,9 @@ function wildcardPath(req: Request): string {
 export function createStorageRoutes(verifyToken: TokenVerifier, options?: { jsonLimit?: string }): Router {
   const router = express.Router();
 
+  // DoS/bruteforce backstop for the blob plane.
+  router.use(makeRateLimiter(600));
+
   const bearerToken = (req: Request): string | undefined => {
     const header = req.headers.authorization;
     if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length);
@@ -116,13 +121,32 @@ export function createStorageRoutes(verifyToken: TokenVerifier, options?: { json
         assertSafePath(path);
         const contentType = typeof req.query.contentType === "string" ? req.query.contentType : undefined;
 
-        let customMetadata: Record<string, unknown> | undefined;
+        let customMetadata: Record<string, string> | undefined;
         const customHeader = req.headers["x-fibuki-custom"];
         if (typeof customHeader === "string") {
+          let parsed: unknown;
           try {
-            customMetadata = JSON.parse(Buffer.from(customHeader, "base64").toString("utf-8"));
+            parsed = JSON.parse(Buffer.from(customHeader, "base64").toString("utf-8"));
           } catch {
             throw new StorageRouteError("invalid-argument", "malformed x-fibuki-custom header");
+          }
+          // Custom metadata becomes storage headers: accept only a flat map
+          // of primitive values with safe key names, coerced to strings.
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new StorageRouteError("invalid-argument", "x-fibuki-custom must be a JSON object");
+          }
+          customMetadata = {};
+          for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+            if (isUnsafePropertyKey(k)) {
+              throw new StorageRouteError("invalid-argument", `unsafe custom metadata key "${k}"`);
+            }
+            if (v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {
+              throw new StorageRouteError(
+                "invalid-argument",
+                `custom metadata value for "${k}" must be a primitive`,
+              );
+            }
+            customMetadata[k] = String(v);
           }
         }
 

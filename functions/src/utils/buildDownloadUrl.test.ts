@@ -41,7 +41,9 @@ describe("buildStorageObjectUrl (plain GCS)", () => {
   it("appends a cache-busting ?v= when requested", () => {
     const url = buildStorageObjectUrl(BUCKET, "invoices/inv-1.pdf", { cacheBust: true });
     expect(url).toMatch(
-      new RegExp(`^https://storage\\.googleapis\\.com/${BUCKET.replace(/\./g, "\\.")}/invoices/inv-1\\.pdf\\?v=\\d+$`),
+      new RegExp(
+        `^https://storage\\.googleapis\\.com/${BUCKET.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/invoices/inv-1\\.pdf\\?v=\\d+$`,
+      ),
     );
   });
 });

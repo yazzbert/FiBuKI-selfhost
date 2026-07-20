@@ -22,6 +22,8 @@
  * try/catch on that).
  */
 
+import { isUnsafePropertyKey } from "./unsafe-keys";
+
 export interface BlobMetadata {
   name: string;
   bucket: string;
@@ -158,6 +160,7 @@ function customMeta(
   if (!raw) return undefined;
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) {
+    if (isUnsafePropertyKey(k)) continue; // sink guard; routes reject these upfront
     if (v !== undefined && v !== null) out[k] = String(v);
   }
   return out;

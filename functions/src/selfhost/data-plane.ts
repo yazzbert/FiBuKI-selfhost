@@ -22,6 +22,7 @@ import express from "express";
 import type { NextFunction, Request, Response, Router } from "express";
 import { getFirestore, DocRef, Query, Timestamp } from "./firestore-shim";
 import { decodeWire, encodeWire, WireError } from "./wire-values";
+import { makeRateLimiter } from "./rate-limit";
 import type { AuthData } from "./https-shim";
 import type { TokenVerifier } from "./host";
 import {
@@ -255,6 +256,9 @@ export function createDataPlane(
 ): Router {
   const router = express.Router();
   router.use(express.json({ limit: options?.jsonLimit ?? "32mb" }));
+
+  // DoS/bruteforce backstop; the client shim is chatty, so the cap is high.
+  router.use(makeRateLimiter(1000));
 
   // Data plane always requires a verified identity.
   router.use(async (req: Request & { fibukiAuth?: AuthData }, res: Response, next: NextFunction) => {
