@@ -16,7 +16,6 @@
 import { PGlite } from "@electric-sql/pglite";
 import { FieldValue, Timestamp } from "@google-cloud/firestore";
 import { emitChange } from "./bus";
-import { UNSAFE_PROPERTY_KEYS } from "./unsafe-keys";
 
 export { FieldValue, Timestamp };
 
@@ -28,14 +27,18 @@ export { FieldValue, Timestamp };
  * Firestore reserves field names matching __.*__ (firebase-admin rejects
  * them on write); the shim does the same. That parity rule conveniently
  * covers "__proto__", killing prototype-pollution through document field
- * names. The other two members of UNSAFE_PROPERTY_KEYS are rejected as
- * well — stricter than real Firestore for "constructor"/"prototype", which
- * no app data uses (documented divergence).
+ * names. "constructor"/"prototype" are rejected as well — stricter than
+ * real Firestore, which no app data uses (documented divergence).
+ *
+ * NOTE: every dynamic-key sink below guards with LITERAL comparisons
+ * (k === "__proto__" || ...) rather than a shared Set/helper on purpose —
+ * that's the guard shape static analysis (CodeQL) recognizes as a
+ * sanitizer, and these sinks are the ones it watches.
  */
 const RESERVED_FIELD_NAME = /^__.*__$/;
 
 function assertValidFieldName(name: string, context: string): void {
-  if (RESERVED_FIELD_NAME.test(name) || UNSAFE_PROPERTY_KEYS.has(name)) {
+  if (RESERVED_FIELD_NAME.test(name) || name === "constructor" || name === "prototype") {
     throw new Error(
       `selfhost firestore shim: invalid field name "${name}"` +
         (context ? ` (in "${context}")` : "") +
@@ -139,7 +142,8 @@ function encodeValue(v: unknown): unknown {
   if (typeof v === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      if (UNSAFE_PROPERTY_KEYS.has(k)) continue; // sink guard; writes reject these upfront
+      // Sink guard (writes reject these upfront; literal comparisons on purpose)
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
       const enc = encodeValue(val);
       if (enc !== undefined) out[k] = enc;
     }
@@ -159,7 +163,8 @@ function decodeValue(v: unknown): unknown {
     }
     const out: Record<string, unknown> = {};
     for (const [k, val] of Object.entries(obj)) {
-      if (UNSAFE_PROPERTY_KEYS.has(k)) continue; // sink guard; cannot exist post-validation
+      // Sink guard (cannot exist post-validation; literal comparisons on purpose)
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
       out[k] = decodeValue(val);
     }
     return out;
@@ -198,41 +203,50 @@ function deepGet(obj: Record<string, unknown>, dotPath: string): unknown {
 }
 
 /**
- * Refuse to WALK or WRITE a prototype-polluting segment: `cur["__proto__"]`
+ * Refusing to WALK or WRITE a prototype-polluting segment: `cur["__proto__"]`
  * resolves to Object.prototype, so one crafted dot-path would otherwise
  * pollute every object in the process. Field-name validation rejects these
- * upfront; this is the guard at the sink.
+ * upfront; the inline literal checks below are the guards at the sink.
  */
-function assertSafeSegments(segs: string[], dotPath: string): void {
-  for (const seg of segs) {
-    if (UNSAFE_PROPERTY_KEYS.has(seg)) {
-      throw new Error(
-        `selfhost firestore shim: refusing prototype-polluting path segment "${seg}" in "${dotPath}"`,
-      );
-    }
-  }
+function throwUnsafeSegment(seg: string, dotPath: string): never {
+  throw new Error(
+    `selfhost firestore shim: refusing prototype-polluting path segment "${seg}" in "${dotPath}"`,
+  );
 }
 
 function deepSet(obj: Record<string, unknown>, dotPath: string, value: unknown): void {
   const segs = dotPath.split(".");
-  assertSafeSegments(segs, dotPath);
   let cur = obj;
   for (let i = 0; i < segs.length - 1; i++) {
     const seg = segs[i];
+    if (seg === "__proto__" || seg === "constructor" || seg === "prototype") {
+      throwUnsafeSegment(seg, dotPath);
+    }
     if (!cur[seg] || typeof cur[seg] !== "object" || Array.isArray(cur[seg])) cur[seg] = {};
     cur = cur[seg] as Record<string, unknown>;
   }
-  cur[segs[segs.length - 1]] = value;
+  const last = segs[segs.length - 1];
+  if (last === "__proto__" || last === "constructor" || last === "prototype") {
+    throwUnsafeSegment(last, dotPath);
+  }
+  cur[last] = value;
 }
 
 function deepDelete(obj: Record<string, unknown>, dotPath: string): void {
   const segs = dotPath.split(".");
-  assertSafeSegments(segs, dotPath);
   let cur: Record<string, unknown> | undefined = obj;
   for (let i = 0; i < segs.length - 1 && cur; i++) {
-    cur = cur[segs[i]] as Record<string, unknown> | undefined;
+    const seg = segs[i];
+    if (seg === "__proto__" || seg === "constructor" || seg === "prototype") {
+      throwUnsafeSegment(seg, dotPath);
+    }
+    cur = cur[seg] as Record<string, unknown> | undefined;
   }
-  if (cur && typeof cur === "object") delete cur[segs[segs.length - 1]];
+  const last = segs[segs.length - 1];
+  if (last === "__proto__" || last === "constructor" || last === "prototype") {
+    throwUnsafeSegment(last, dotPath);
+  }
+  if (cur && typeof cur === "object") delete cur[last];
 }
 
 /**
@@ -321,7 +335,8 @@ function applySentinelsInPlace(value: unknown): unknown {
   if (value && typeof value === "object" && !isTimestampLike(value) && !(value instanceof Date)) {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (UNSAFE_PROPERTY_KEYS.has(k)) continue; // sink guard; writes reject these upfront
+      // Sink guard (writes reject these upfront; literal comparisons on purpose)
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
       const applied = applySentinelsInPlace(v);
       if (applied !== undefined) out[k] = applied;
     }
