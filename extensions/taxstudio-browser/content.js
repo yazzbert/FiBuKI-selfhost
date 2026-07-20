@@ -1324,6 +1324,10 @@
   window.addEventListener("message", function (event) {
     if (!event.data) return;
 
+    // Only accept messages from our own sandbox iframe — the page and other
+    // frames can post to this window too.
+    if (!sandboxFrame || event.source !== sandboxFrame.contentWindow) return;
+
     // Sandbox ready signal
     if (event.data.type === "TS_SANDBOX_READY") {
       sandboxReady = true;
@@ -1334,9 +1338,14 @@
 
     // Sandbox execution result
     if (event.data.type === "TS_SANDBOX_RESULT") {
-      var cb = sandboxCallbacks[event.data.requestId];
-      if (cb) {
-        delete sandboxCallbacks[event.data.requestId];
+      var requestId = event.data.requestId;
+      // requestIds are numbers we assigned — anything else can't be a key we own
+      if (typeof requestId !== "number") return;
+      var cb = Object.prototype.hasOwnProperty.call(sandboxCallbacks, requestId)
+        ? sandboxCallbacks[requestId]
+        : null;
+      if (typeof cb === "function") {
+        delete sandboxCallbacks[requestId];
         cb(event.data);
       }
     }
