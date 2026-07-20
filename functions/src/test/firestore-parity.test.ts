@@ -109,6 +109,33 @@ function runParitySuite(
       expect(snap.data()).toEqual(data);
     });
 
+    it("field names matching __...__ in writes; __proto__ never pollutes", async () => {
+      const col = freshCol("reserved");
+      // Computed keys on purpose: a literal "__proto__" key in an object
+      // literal would set the prototype instead of defining the property.
+      if (name === "shim") {
+        await expect(col.doc("a").set({ ["__proto__"]: { polluted: true } })).rejects.toThrow();
+        await expect(col.doc("a").set({ nested: { ["__evil__"]: 1 } })).rejects.toThrow();
+        await col.doc("b").set({ ok: 1 });
+        await expect(col.doc("b").update({ ["__proto__.polluted"]: true })).rejects.toThrow();
+        expect((await col.doc("b").get()).data()).toEqual({ ok: 1 });
+      } else {
+        // KNOWN DIVERGENCE: production Firestore documents __.*__ field
+        // names as reserved; the emulator + admin SDK ACCEPT the write but
+        // the field never round-trips — data() comes back empty (the SDK's
+        // own decode can't represent a "__proto__" field either). The shim
+        // rejects the write loudly instead: matches the documented contract
+        // and closes the prototype-pollution class (user-supplied field
+        // names must never walk "__proto__"). No app code writes such names.
+        await col.doc("a").set({ ["__proto__"]: { marker: 1 } });
+        const snap = await col.doc("a").get();
+        expect(snap.exists).toBe(true);
+        expect(snap.data()).toEqual({});
+      }
+      // Whichever backend, this process must stay unpolluted.
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
     it("get() on a missing doc: exists=false, data()=undefined, id preserved", async () => {
       const col = freshCol("missing");
       const snap = await col.doc("nope").get();

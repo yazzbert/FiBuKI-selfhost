@@ -26,6 +26,7 @@ import { HttpsError } from "./https-shim";
 import { EXCLUDED_EXPORTS } from "./manifest";
 import { createDataPlane } from "./data-plane";
 import { createStorageRoutes } from "./storage-routes";
+import { makeRateLimiter } from "./rate-limit";
 
 export type TokenVerifier = (token: string) => Promise<AuthData | null>;
 
@@ -153,6 +154,9 @@ export function createHost(
 
   const inventory: HostInventory = { callables: [], requests: [], scheduled: [], excluded: [] };
 
+  // One shared bucket across all callable/request routes (per source IP).
+  const limiter = makeRateLimiter(600);
+
   const bearerToken = (req: Request): string | undefined => {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) return undefined;
@@ -169,18 +173,22 @@ export function createHost(
 
     if (isCallable(value)) {
       inventory.callables.push(name);
-      app.post(`/${name}`, jsonParser, async (req: Request, res: Response) => {
+      app.post(`/${name}`, limiter, jsonParser, async (req: Request, res: Response) => {
         try {
-          let auth: AuthData | undefined;
+          // Auth here mirrors Firebase onCall: any PRESENTED token is always
+          // verified and a bad one is always rejected; a request may omit the
+          // token entirely, in which case auth stays undefined and the
+          // per-function policy decides (createCallable throws unauthenticated
+          // unless the callable opted into allowUnauthenticated, e.g. public
+          // bank listing). The transport cannot require a token without
+          // breaking those public callables.
           const token = bearerToken(req);
-          if (token !== undefined) {
-            const verified = await options.verifyToken(token);
-            if (verified === null) {
-              sendError(res, "unauthenticated", "Invalid authentication token.");
-              return;
-            }
-            auth = verified;
+          const verified = token === undefined ? undefined : await options.verifyToken(token);
+          if (verified === null) {
+            sendError(res, "unauthenticated", "Invalid authentication token.");
+            return;
           }
+          const auth: AuthData | undefined = verified;
 
           const body: unknown = req.body;
           if (typeof body !== "object" || body === null || !("data" in body)) {
@@ -212,6 +220,7 @@ export function createHost(
       // relative to the function root — same as Cloud Functions.
       app.use(
         `/${name}`,
+        limiter,
         jsonParser,
         urlencodedParser,
         (req: Request, res: Response, next: NextFunction) => {
