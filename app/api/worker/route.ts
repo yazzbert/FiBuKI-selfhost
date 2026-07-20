@@ -1399,7 +1399,7 @@ export async function POST(req: Request) {
           }
         }
 
-        console.error(`[Worker API] ${workerType} worker failed:`, error);
+        console.error("[Worker API] %s worker failed:", workerType, error);
 
         if (isReauthError) {
           return {

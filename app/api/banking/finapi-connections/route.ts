@@ -432,7 +432,7 @@ export async function DELETE(request: NextRequest) {
       await client.deleteBankConnection(bankConnectionId, userToken);
       console.log(`[finAPI Connections] Deleted bank connection ${bankConnectionId}`);
     } catch (err) {
-      console.error(`[finAPI Connections] Failed to delete connection ${bankConnectionId}:`, err);
+      console.error("[finAPI Connections] Failed to delete connection %s:", bankConnectionId, err);
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "Failed to delete connection from finAPI" },
         { status: 500 }

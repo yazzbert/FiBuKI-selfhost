@@ -281,7 +281,9 @@ function getWorkerTools(workerType: WorkerType): StructuredToolInterface[] {
   const filteredTools = ALL_TOOLS.filter((tool) => allowedTools.has(tool.name));
 
   console.log(
-    `[WorkerGraph] Filtered to ${filteredTools.length} tools for ${workerType}:`,
+    "[WorkerGraph] Filtered to %d tools for %s:",
+    filteredTools.length,
+    workerType,
     filteredTools.map((t) => t.name).join(", ")
   );
 
