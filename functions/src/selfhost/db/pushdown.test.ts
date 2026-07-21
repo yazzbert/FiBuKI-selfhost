@@ -370,6 +370,137 @@ describe("pushdown differential: transactions shapes", () => {
   });
 });
 
+/**
+ * Files pins only what sources + transactions don't already: the
+ * processOrphanedFiles stale-scan (a `<`-only timestamp range ordered ASC on
+ * the same field — json-null rows are in play UNDER a pushed LIMIT, since
+ * they match `<` as JS -Infinity and sort first as SQL NULLS FIRST), the
+ * onPartnerUpdate re-match combo (a JS-side `partnerId == null` alongside
+ * pushed filters must withhold LIMIT), and bulkRetryExtraction's
+ * `extractionError != null` (never pushed; explicit-null and missing both
+ * excluded by the JS referee).
+ *
+ * Fixture rule (header): updatedAt drives ordered-limit assertions, so the
+ * wrong-typed value sits on extractionComplete instead.
+ */
+describe("pushdown differential: files shapes", () => {
+  const FFLAT = "files";
+  const FREF = "filediff"; // JSONB twin — no spec, pure JS pipeline
+
+  const FFIXTURES: Record<string, Record<string, unknown>> = {
+    f01: { userId: "u1", extractionComplete: true, partnerMatchComplete: true, partnerId: "p1", partnerMatchedBy: "auto", updatedAt: T(1000), uploadedAt: T(1000), contentHash: "h1" },
+    f02: { userId: "u1", extractionComplete: true, partnerMatchComplete: true, partnerId: null, updatedAt: T(2000), extractionError: "extract boom" },
+    f03: { userId: "u1", extractionComplete: true, partnerMatchComplete: true, updatedAt: T(2000) }, // partnerId missing — not an == null match; updatedAt tie with f02
+    f04: { userId: "u1", extractionComplete: false, updatedAt: T(3000), extractionError: null }, // explicit null — excluded by != null
+    f05: { userId: "u1", extractionComplete: true, updatedAt: null }, // json-null: matches `<`, sorts first
+    f06: { userId: "u1", extractionComplete: true }, // updatedAt missing: excluded from `<` by both paths
+    f07: { userId: "u2", extractionComplete: true, partnerMatchComplete: true, partnerId: null }, // other user
+    f08: { userId: "u1", extractionComplete: "yes", updatedAt: T(1500), extractionError: "parse failed" }, // wrong-typed boolean
+    f09: { userId: "u1", extractionComplete: true, gmailMessageId: "m1", gmailAttachmentId: "a1", sourceType: "gmail_html_invoice", uploadedAt: T(4000), extractedDate: T(2000), transactionMatchComplete: true },
+    f10: { userId: "u1", extractionComplete: true, partnerMatchComplete: true, updatedAt: T(5000) }, // past the stale cutoff
+  };
+
+  beforeAll(async () => {
+    await __resetFirestoreShim();
+    for (const [id, data] of Object.entries(FFIXTURES)) {
+      await db.collection(FFLAT).doc(id).set(data);
+      await db.collection(FREF).doc(id).set(data);
+    }
+  });
+
+  async function sameF(build: Build): Promise<string[]> {
+    const a = await idsFrom(FFLAT, build);
+    const b = await idsFrom(FREF, build);
+    expect(a).toEqual(b);
+    return a;
+  }
+
+  async function sameFSet(build: Build): Promise<string[]> {
+    const a = await idsFrom(FFLAT, build);
+    const b = await idsFrom(FREF, build);
+    expect([...a].sort()).toEqual([...b].sort());
+    return a;
+  }
+
+  it("stale-scan shape: `<` range + orderBy same field asc + limit, json-null under the pushed LIMIT", async () => {
+    expect(
+      await sameF((c) =>
+        c
+          .where("extractionComplete", "==", true)
+          .where("updatedAt", "<", T(4000))
+          .orderBy("updatedAt", "asc")
+          .limit(3),
+      ),
+    ).toEqual(["f05", "f01", "f02"]); // json-null first, then values; f02/f03 tie broken by id
+    await sameF((c) =>
+      c.where("extractionComplete", "==", true).where("updatedAt", "<", T(4000)).orderBy("updatedAt", "asc"),
+    );
+  });
+
+  it("re-match shape: JS-side partnerId == null alongside pushed filters + limit", async () => {
+    expect(
+      await sameFSet((c) =>
+        c
+          .where("userId", "==", "u1")
+          .where("partnerId", "==", null)
+          .where("extractionComplete", "==", true)
+          .where("partnerMatchComplete", "==", true)
+          .limit(5),
+      ),
+    ).toEqual(["f02"]); // explicit null only — f03 (missing) and f07 (u2) excluded
+  });
+
+  it("retry shape: extractionError != null excludes explicit-null and missing", async () => {
+    expect(
+      (await sameFSet((c) => c.where("userId", "==", "u1").where("extractionError", "!=", null))).sort(),
+    ).toEqual(["f02", "f08"]);
+  });
+});
+
+describe("compile shapes: files (the perf contract)", () => {
+  const spec = FLATTENED.files;
+  const tid = getTenantId();
+
+  it("pushes the stale-scan incl. LIMIT: ASC NULLS FIRST and `<` ORs in json-null", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [
+        { field: "extractionComplete", op: "==", value: true },
+        { field: "updatedAt", op: "<", value: T(4000) },
+      ],
+      [{ field: "updatedAt", dir: "asc" }],
+      64,
+      0,
+      null,
+    );
+    expect(c.sql).toContain("LIMIT 64"); // timestamp < stays exact
+    expect(c.sql).toContain(`"updated_at" < $3 OR jsonb_typeof("data"->'updatedAt') = 'null'`);
+    expect(c.sql).toContain(`ORDER BY "updated_at" ASC NULLS FIRST, id COLLATE "C" ASC`);
+  });
+
+  it("withholds LIMIT when null-equality or != stays JS-side", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [
+        { field: "userId", op: "==", value: "u1" },
+        { field: "partnerId", op: "==", value: null },
+        { field: "extractionError", op: "!=", value: null },
+      ],
+      [{ field: "updatedAt", dir: "asc" }],
+      5,
+      0,
+      null,
+    );
+    expect(c.sql).not.toContain("LIMIT");
+    expect(c.sql).not.toContain("partner_id");
+    expect(c.sql).not.toContain("extraction_error");
+    expect(c.sql).toContain(`"user_id" = $2`);
+    expect(c.sql).toContain("ORDER BY"); // order still pushes; JS re-sorts anyway
+  });
+});
+
 describe("compile shapes: transactions (the perf contract)", () => {
   const spec = FLATTENED.transactions;
   const tid = getTenantId();

@@ -15,6 +15,13 @@
       "when": 1784626742182,
       "tag": "0001_flatten_transactions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784630360210,
+      "tag": "0002_flatten_files",
+      "breakpoints": true
     }
   ]
 }
