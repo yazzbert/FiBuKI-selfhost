@@ -20,6 +20,17 @@ scope, process, product rules, external commitments.
 
 ---
 
+## 2026-07-21 — fileConnections flatten merged; matching-engine workstream closed for Phase 1
+
+**Decided by:** Stefan (merge OK on PR #18)
+
+Fifth and final Phase-1 flatten. CI 8/8 green (incl. compose job against
+real Postgres + S3) and post-CI adversarial re-review found nothing. With
+this, the accepted DO-NOW list from
+[`matching-engine-postgres-deletions.md`](matching-engine-postgres-deletions.md)
+is complete; everything else in that doc waits for Phase 2, with the doc as
+the deletion registry. The workstream handoff is deleted as fulfilled.
+
 ## 2026-07-21 — Matching-engine deletions: proposal accepted as written
 
 **Decided by:** Stefan (all three checkboxes in
