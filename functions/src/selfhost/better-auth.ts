@@ -333,12 +333,44 @@ function superAdminEmail(): string | undefined {
   return process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase() || undefined;
 }
 
+/**
+ * Against an ephemeral test database (embedded PGlite) Better Auth's dev
+ * default secret is acceptable; against a REAL Postgres it is not — the
+ * JWKS private keys are encrypted at rest with this secret, and a known
+ * constant would let anyone with a database dump forge tokens. DATABASE_URL
+ * is exactly the ephemeral/persistent seam (see firestore-shim makeClient).
+ */
+function resolveSecret(): string | undefined {
+  const secret = process.env.FIBUKI_AUTH_SECRET || process.env.BETTER_AUTH_SECRET;
+  if (!secret && process.env.DATABASE_URL) {
+    throw new Error(
+      "selfhost auth: FIBUKI_AUTH_SECRET (or BETTER_AUTH_SECRET) is required when " +
+        "DATABASE_URL is set — JWKS private keys are encrypted with it, and a real " +
+        "database must never hold keys encrypted with the library's default dev secret",
+    );
+  }
+  return secret || undefined;
+}
+
+/**
+ * Registered/derived JWT claim names customClaims may never override.
+ * firebase-admin's setCustomUserClaims rejects these too (OIDC-reserved),
+ * so stripping is parity, not divergence; without it an admin-set claim
+ * like {"exp": ...} would mint effectively non-expiring tokens.
+ */
+const RESERVED_CLAIMS = new Set(["iss", "sub", "aud", "exp", "nbf", "iat", "jti", "sid"]);
+
 function parseClaims(user: Record<string, unknown>): Record<string, unknown> {
   const raw = user.customClaims;
   if (typeof raw !== "string" || raw === "") return {};
   try {
     const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!RESERVED_CLAIMS.has(k)) out[k] = v;
+    }
+    return out;
   } catch {
     return {};
   }
@@ -349,7 +381,7 @@ function buildAuth() {
   return betterAuth({
     baseURL: issuer,
     basePath: "/__auth",
-    secret: process.env.FIBUKI_AUTH_SECRET || process.env.BETTER_AUTH_SECRET || undefined,
+    secret: resolveSecret(),
     database: selfhostAdapter,
     telemetry: { enabled: false },
     emailAndPassword: {

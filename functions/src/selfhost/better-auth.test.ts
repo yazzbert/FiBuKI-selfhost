@@ -42,7 +42,8 @@ import { describe, it, expect } from "vitest";
 import express from "express";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { getFirestore } from "./firestore-shim";
+import { getFirestore, __rawSqlForTest } from "./firestore-shim";
+import { getTenantId } from "./db/tenant";
 import { getAuth as getAdminAuth } from "./auth-shim";
 import { createDataPlane } from "./data-plane";
 import type { TokenVerifier } from "./host";
@@ -104,6 +105,30 @@ describe("Better Auth server acceptance — remaining xfails are the chunk-2 aut
     const auth = await loadAuth();
     expect(await auth.verifier("not-a-session-token")).toBeNull();
     expect(await auth.verifier("")).toBeNull();
+  });
+
+  it("verifier refuses a token whose session was revoked (signature still valid)", async () => {
+    // The revocation backstop behind the JWT decision (a): tokens carry the
+    // session id as `sid`, and the verifier requires that session to still
+    // exist — killing the session kills every token minted from it, even
+    // though the JWKS signature stays valid. Chunk 2's deleteUser leans on
+    // exactly this.
+    const auth = await loadAuth();
+    const email = uniqueEmail("revoked");
+    await allowEmail(email);
+    await auth.provisionUser({ email, password: "revoked session pw" });
+    const { token } = await auth.signInEmail(email, "revoked session pw");
+    expect(await auth.verifier(token)).not.toBeNull();
+
+    // The token is locally decodable (pinned by the client suite) — read the
+    // sid claim and revoke that session directly in the store.
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
+    ) as { sid?: string };
+    expect(typeof payload.sid).toBe("string");
+    await __rawSqlForTest(`DELETE FROM auth_sessions WHERE id = $1`, [payload.sid], getTenantId());
+
+    expect(await auth.verifier(token)).toBeNull();
   });
 
   it("sign-in with a wrong password yields no session", async () => {
