@@ -90,6 +90,24 @@ jobs:
         if: failure()
         run: docker compose -f deploy/selfhost/docker-compose.ci.yml logs
 
+  api-auth-smoke:
+    name: App API routes (auth smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      # The suite imports the real Next route handlers from the repo root,
+      # so it needs BOTH dependency trees (root: next/firebase-admin; the
+      # runner itself lives in functions/). See vitest.api-smoke.config.ts.
+      - run: npm ci
+      - run: npm ci
+        working-directory: functions
+      - run: npx vitest run --config vitest.api-smoke.config.ts
+        working-directory: functions
+
   extension:
     name: Extension (jest)
     runs-on: ubuntu-latest
