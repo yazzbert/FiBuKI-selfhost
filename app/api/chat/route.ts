@@ -28,7 +28,7 @@ export const maxDuration = 60;
 // Strip CR/LF so request-derived values cannot forge log lines
 function sanitizeForLog(value: unknown): string {
   const raw = value instanceof Error ? value.stack || value.message : String(value);
-  return raw.replace(/[\r\n]/g, " ");
+  return raw.replace(/\n|\r/g, "");
 }
 
 // ============================================================================

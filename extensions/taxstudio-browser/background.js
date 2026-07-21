@@ -22,11 +22,14 @@
   }
 
   // Strict host check: parses the URL and compares the hostname, so
-  // "evil.com/payments.google.com" never matches.
+  // "evil.com/payments.google.com" never matches. blob: URLs are checked
+  // against their inner origin (new URL gives them an empty hostname).
   function hostMatches(url, host) {
     if (!url) return false;
+    var u = String(url);
+    if (u.indexOf("blob:") === 0) u = u.slice(5);
     try {
-      var h = new URL(String(url)).hostname.toLowerCase();
+      var h = new URL(u).hostname.toLowerCase();
       return h === host || h.endsWith("." + host);
     } catch (e) {
       return false;

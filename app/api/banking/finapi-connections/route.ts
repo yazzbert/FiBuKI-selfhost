@@ -27,7 +27,7 @@ import {
 // Strip CR/LF so request-derived values cannot forge log lines
 function sanitizeForLog(value: unknown): string {
   const raw = value instanceof Error ? value.stack || value.message : String(value);
-  return raw.replace(/[\r\n]/g, " ");
+  return raw.replace(/\n|\r/g, "");
 }
 
 interface FinapiAccountInfo {
@@ -498,14 +498,14 @@ export async function PATCH(request: NextRequest) {
     // The finAPI user ID is based on our Firebase user ID
     const finapiUserId = `fb_${userId}`;
 
-    console.log(`[finAPI Connections] Deleting finAPI user: ${finapiUserId}`);
+    console.log(`[finAPI Connections] Deleting finAPI user: ${sanitizeForLog(finapiUserId)}`);
 
     try {
       await client.deleteUser(finapiUserId);
-      console.log(`[finAPI Connections] Successfully deleted finAPI user: ${finapiUserId}`);
+      console.log(`[finAPI Connections] Successfully deleted finAPI user: ${sanitizeForLog(finapiUserId)}`);
     } catch (err) {
       // User might not exist, that's OK
-      console.warn(`[finAPI Connections] Failed to delete finAPI user (might not exist):`, err);
+      console.warn(`[finAPI Connections] Failed to delete finAPI user (might not exist):`, sanitizeForLog(err));
     }
 
     // Clean up any bankingConnections for this user via callable
