@@ -1,9 +1,9 @@
 # Matching-engine deletions: inventory and proposal
 
-> **Status:** proposal for Stefan, from the 2026-07-21 investigation session
-> (workstream: `handoffs/2026-07-21-matching-engine-deletions.md`). No code
-> was changed. Each case below ends in a recommendation; nothing is deleted
-> without an explicit per-case OK, logged in [`decisions.md`](decisions.md).
+> **Status:** ACCEPTED as written by Stefan 2026-07-21 (all three checkboxes
+> below; logged in [`decisions.md`](decisions.md)). This doc now serves as
+> the Phase-2 deletion registry. Workstream:
+> `handoffs/2026-07-21-matching-engine-deletions.md`.
 
 ## The constraint that shapes every case
 
@@ -254,7 +254,7 @@ Phase-1-sized work that's real today:
 
 Decisions requested from Stefan:
 
-- [ ] OK / not-OK: flatten `fileConnections` now (case 8).
-- [ ] Confirm: everything else waits for Phase 2, with this doc as registry.
-- [ ] Confirm: suggestion pre-computation (case 2) and the orphan cron
+- [x] OK / not-OK: flatten `fileConnections` now (case 8).
+- [x] Confirm: everything else waits for Phase 2, with this doc as registry.
+- [x] Confirm: suggestion pre-computation (case 2) and the orphan cron
       (case 9) are keeps.

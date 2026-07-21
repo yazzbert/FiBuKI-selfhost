@@ -20,6 +20,20 @@ scope, process, product rules, external commitments.
 
 ---
 
+## 2026-07-21 — Matching-engine deletions: proposal accepted as written
+
+**Decided by:** Stefan (all three checkboxes in
+[`matching-engine-postgres-deletions.md`](matching-engine-postgres-deletions.md))
+
+The per-case inventory is accepted: (1) flatten `fileConnections` out of the
+JSONB bridge now — the one code PR from this workstream; (2) all other
+Postgres-enabled deletions (chunk loops, anti-join filters, coverage-check
+join, searchQuery ILIKE) wait for Phase 2, with the proposal doc as the
+deletion registry; (3) `transactionSuggestions` pre-computation and the
+orphan cron are keeps. Context: one codebase serves both real Firestore
+(prod) and the shim until Phase 2, so SQL joins can't land earlier without a
+dual-retrieval seam that isn't worth its testing cost.
+
 ## 2026-07-21 — Partners flatten merged; Phase 1 flattening complete
 
 **Decided by:** Stefan (merge OK on PR #17)
