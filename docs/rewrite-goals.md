@@ -220,8 +220,16 @@ Progress *(2026-07-21)*:
   timestamp keyset-cursor path (the `tools/handlers.ts` listTransactions
   shape pushes LIMIT with a desc timestamp keyset). `searches`/`history`
   subcollections stay in `docs` via existing generic routing.
-- Open: flatten `files`, then `partners` (by call-site weight), then delete
-  the matching-engine code Postgres joins make redundant (separate handoff).
+- ✅ **`files` flattened** *(2026-07-21, PR #16)* — 15 generated columns from
+  an inventory of all ~125 call sites (incl. the `FILES_COLLECTION` alias in
+  `email-inbound/receiveEmail.ts` a literal grep misses). New pinned pushdown
+  shapes: the stale-scan's `<`-only range ordered ASC on the same field
+  (json-null rows under a pushed LIMIT via NULLS FIRST), JS-side null
+  equality withholding LIMIT, and `!= null` staying JS-side entirely.
+  `transactionSuggestions` stays payload data, not a column.
+- Open: flatten `partners` (last one), then delete the matching-engine code
+  Postgres joins make redundant now that transactions + files are the join
+  pair (separate handoff).
 
 ### Phase 2 — rip the shim
 
