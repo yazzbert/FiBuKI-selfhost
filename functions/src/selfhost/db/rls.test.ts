@@ -25,6 +25,9 @@ describe("tenant context + RLS backstop", () => {
     await __resetFirestoreShim();
     await getFirestore().collection("sources").doc("rls1").set({ userId: "u1", name: "RLS Source" });
     await getFirestore().collection("partners").doc("rlsp1").set({ userId: "u1", name: "P" });
+    // categories is unflattened — keeps a real row in the docs bridge so the
+    // blocked-read assertions on `docs` below stay non-vacuous.
+    await getFirestore().collection("categories").doc("rlsc1").set({ userId: "u1", name: "C" });
   });
 
   it("bootstraps the single tenant", async () => {
@@ -33,14 +36,14 @@ describe("tenant context + RLS backstop", () => {
   });
 
   it("blocks ALL access when the app role runs with no tenant configured", async () => {
-    for (const table of ["tenants", "docs", "sources"]) {
+    for (const table of ["tenants", "docs", "sources", "partners"]) {
       const res = await __rawSqlForTest(`SELECT * FROM ${table}`, [], null);
       expect(res.rows).toEqual([]);
     }
   });
 
   it("blocks cross-tenant reads", async () => {
-    for (const table of ["docs", "sources"]) {
+    for (const table of ["docs", "sources", "partners"]) {
       const res = await __rawSqlForTest(`SELECT * FROM ${table}`, [], OTHER_TENANT);
       expect(res.rows).toEqual([]);
     }
@@ -166,6 +169,7 @@ describe("migration runner on a fresh client", () => {
       `INSERT INTO docs VALUES
        ('sources/a', 'sources', 'a', '{"userId": "u1", "name": "Old bank"}'),
        ('partners/p', 'partners', 'p', '{"userId": "u1"}'),
+       ('categories/c', 'categories', 'c', '{"userId": "u1"}'),
        ('transactions/t/history/h', 'transactions/t/history', 'h', '{"n": 1}')`,
     );
 
@@ -174,8 +178,10 @@ describe("migration runner on a fresh client", () => {
     const tid = getTenantId();
     const sources = await client.tx(tid, (q) => q(`SELECT id, name, user_id FROM sources`));
     expect(sources.rows).toEqual([{ id: "a", name: "Old bank", user_id: "u1" }]);
+    const partners = await client.tx(tid, (q) => q(`SELECT id, user_id FROM partners`));
+    expect(partners.rows).toEqual([{ id: "p", user_id: "u1" }]);
     const docs = await client.tx(tid, (q) => q(`SELECT path FROM docs ORDER BY path`));
-    expect(docs.rows.map((r) => r.path)).toEqual(["partners/p", "transactions/t/history/h"]);
+    expect(docs.rows.map((r) => r.path)).toEqual(["categories/c", "transactions/t/history/h"]);
     const spike = await client.query(
       `SELECT 1 FROM information_schema.tables WHERE table_name = 'docs_spike_v0'`,
     );

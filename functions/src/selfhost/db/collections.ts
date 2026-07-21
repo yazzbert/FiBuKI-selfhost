@@ -185,4 +185,30 @@ export const FLATTENED: Readonly<Record<string, FlatSpec>> = {
       ["tenant_id", "partner_id"],
     ],
   },
+  partners: {
+    table: "partners",
+    fields: {
+      // Query call sites (~93): tools/handlers.ts, partners/*, matching/*,
+      // admin/aggregateGlobalInsights.ts, admin/generatePromotionCandidates.ts,
+      // browser/migrateInvoiceSources.ts, analytics/exportMatchIntelligence.ts,
+      // user-export/*, user/*, user-import/*, auth/migrateUserData.ts. The
+      // precision-search/invoicing partnerType ternaries and the
+      // globalPartners queries beside these sites (partnerMatchingShared.ts,
+      // aggregateGlobalInsights.ts, utils/globalPartnerUpsert.ts) are doc-by-id
+      // or a DIFFERENT collection — not part of this surface. No
+      // array-contains: aliases/ibans/emailDomains are only read from fetched
+      // docs, never filtered on. `__name__` ==/in batches need no column.
+      userId: { col: "user_id", kind: "text" },
+      isActive: { col: "is_active", kind: "boolean" },
+      // Admin aggregation (globalPartnerId == across users) and the
+      // createLocalPartnerFromGlobal dedupe lookup.
+      globalPartnerId: { col: "global_partner_id", kind: "text" },
+      // listPartners workhorse orderBy asc (tools/handlers.ts:722).
+      name: { col: "name", kind: "text" },
+    },
+    indexes: [
+      ["tenant_id", "user_id"],
+      ["tenant_id", "global_partner_id"],
+    ],
+  },
 };
