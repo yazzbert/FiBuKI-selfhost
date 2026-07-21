@@ -81,25 +81,25 @@ entry point with a caller-provided uid.
 
 ## Decisions for Stefan (check in place, then log to docs/decisions.md)
 
-- [ ] **Session-token shape:** (a) Better Auth JWT plugin — `getIdToken()`
+- [a] **Session-token shape:** (a) Better Auth JWT plugin — `getIdToken()`
       stays a locally-decodable JWT, host verifies via JWKS with the same
       machinery `oidc-verifier.ts` already has (recommended; the client
       suite pins JWT-decodable tokens) — or (b) opaque session token +
       server-side `getSession` lookup per request (client suite's token
       tests would need reworking). **(a) recommended.**
-- [ ] **Google sign-in on selfhost:** Better Auth's Google social provider,
+- [Social Provider] **Google sign-in on selfhost:** Better Auth's Google social provider,
       BYO OAuth client via env (matches "same features, bring your own
       OAuth" from who-is-this-for) — or defer Google entirely to an
       external OIDC front. **Social provider recommended** (W1 goal names
       email/password + Google).
-- [ ] **401-shaping chunk (5):** approve changing unauthenticated route
+- [x] **401-shaping chunk (5):** approve changing unauthenticated route
       responses 500 → 401 on the Firebase build (also stops the error-text
       leak in two routes).
-- [ ] **Ported registration callables:** keep `validateRegistration` /
+- [keep] **Ported registration callables:** keep `validateRegistration` /
       `setAdminClaim` / `listAdmins` / `sendPasswordReset` etc. in
       `EXCLUDED_EXPORTS` with Better Auth-native equivalents
       (recommended), or un-exclude and port them.
-- [ ] **Next API routes under selfhost:** the auth-verify decision handoff
+- [Revisit] **Next API routes under selfhost:** the auth-verify decision handoff
       says they're not part of the selfhost data plane (no branch point),
       but the selfhost UI does call some of them (`chat`, `gmail/*`).
       Confirm: out of W1, revisit at W3/W4? The spec suite deliberately

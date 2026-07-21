@@ -20,6 +20,33 @@ scope, process, product rules, external commitments.
 
 ---
 
+## 2026-07-21 — W1 Better Auth: implementation decisions (spec accepted)
+
+**Decided by:** Stefan (checkboxes in
+[`handoffs/2026-07-21-w1-better-auth-impl.md`](../handoffs/2026-07-21-w1-better-auth-impl.md);
+spec suites merged as PR #19)
+
+- **Session-token shape: (a) Better Auth JWT plugin.** `getIdToken()` stays a
+  locally-decodable JWT; the host verifies via JWKS with the same machinery
+  `oidc-verifier.ts` already has. Keeps the client thin and the external-OIDC
+  path structurally identical to the built-in one.
+- **Google sign-in on selfhost: Better Auth's Google social provider**, BYO
+  OAuth client via env — consistent with "same features, bring your own
+  OAuth" (`who-is-this-for.md`). No external-IdP requirement for Google.
+- **401 shaping approved:** unauthenticated `app/api/*` requests move
+  500 → `401 {"error":"Unauthorized"}` on the Firebase build too (the spec
+  found the routes' 401 branches are dead code and two routes leak internal
+  error text). Chunk 5 of the implementation.
+- **Ported registration callables: keep excluded.** `validateRegistration`,
+  `setAdminClaim`, `listAdmins`, `sendPasswordReset` etc. stay in
+  `EXCLUDED_EXPORTS`; invite-only/admin semantics land as Better Auth-native
+  equivalents instead of un-excluding the Firebase-era callables.
+- **Next API routes under selfhost: revisit later** (W3/W4). Out of W1 scope;
+  the auth-verify decision ("no selfhost branch point in
+  `get-server-user.ts`") stands for now even though the selfhost UI calls
+  some of these routes (`chat`, `gmail/*`). The spec suite deliberately
+  encodes nothing here.
+
 ## 2026-07-21 — Phase 2 kickoff: proposal accepted, cutover-first order
 
 **Decided by:** Stefan (in-session; Felix on-board with all decisions so far)

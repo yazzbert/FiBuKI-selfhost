@@ -167,9 +167,15 @@ This phase is the whole argument. Everything after it is unsafe without it.
   `__name__`/documentId filter call site).
 - **License + CLA.** *(open)*
 
-Known coverage gaps still to close: all 61 `app/api/*` routes (zero tests, no
-runner at repo root), `gmailSyncQueue.ts:244-307` (the provider fork), and
-`lib/selfhost/auth-client.ts` (858 LOC, zero tests).
+Known coverage gaps still to close: `gmailSyncQueue.ts:244-307` (the provider
+fork), and the long tail of the 61 `app/api/*` routes — a first auth-smoke
+slice (6 routes + the `get-server-user` helpers, own CI job) landed with the
+W1 spec (PR #19, 2026-07-21), but there is still no test runner at the repo
+root (the smoke profile borrows the functions runner via
+`functions/vitest.api-smoke.config.ts`). **Closed 2026-07-21:**
+`lib/selfhost/auth-client.ts` (was 858 LOC, zero tests) — surface
+characterization + W1 xfail acceptance in
+`functions/src/selfhost/auth-client.test.ts`.
 
 **Shim cursor gap — CLOSED 2026-07-19.** Found 2026-07-17 on CT 999:
 `firestore-shim.ts` implemented no `startAfter`, but `tools/handlers.ts:228` and
