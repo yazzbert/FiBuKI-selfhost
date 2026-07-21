@@ -192,7 +192,7 @@ The current shim stores docs as JSONB in one `docs` table and filters **in JS**
 (`firestore-shim.ts:447`). Fine for one user. **Fatal for multi-tenant** — no
 indexes, no pushdown. It is a bridge, not a destination.
 
-Progress *(2026-07-19)*:
+Progress *(2026-07-21)*:
 
 - ✅ **Drizzle + migration infra** — schema in
   `functions/src/selfhost/db/schema.ts`, readable SQL migrations under
@@ -215,8 +215,13 @@ Progress *(2026-07-19)*:
   columns over the canonical JSONB payload (indexable/joinable, and
   absent-vs-null document semantics survive the bridge era; Phase 2 turns
   them into plain columns and drops the payload). App code unchanged.
-- Open: flatten `transactions`, `files`, `partners`, … (by call-site weight),
-  then delete the matching-engine code Postgres joins make redundant.
+- ✅ **`transactions` flattened** *(2026-07-21, PR #15)* — 12 generated
+  columns from an inventory of all 175 call sites; first heavy user of the
+  timestamp keyset-cursor path (the `tools/handlers.ts` listTransactions
+  shape pushes LIMIT with a desc timestamp keyset). `searches`/`history`
+  subcollections stay in `docs` via existing generic routing.
+- Open: flatten `files`, then `partners` (by call-site weight), then delete
+  the matching-engine code Postgres joins make redundant (separate handoff).
 
 ### Phase 2 — rip the shim
 
