@@ -726,10 +726,11 @@ async function maybeCompleteSocialCallback(): Promise<void> {
     const base = authApiBase();
     const res = await fetch(`${base}/get-session`, { credentials: "include" });
     if (!res.ok) return;
-    // The bearer plugin surfaces the raw session token in the set-auth-token
-    // header; the session body carries it too — take either.
+    // The session body carries the raw session token (get-session responses
+    // never emit the bearer plugin's set-auth-token header — that only rides
+    // along when a set-cookie is issued, e.g. on sign-in).
     const body = (await res.json()) as { session?: { token?: string } } | null;
-    const sessionToken = res.headers.get("set-auth-token") || body?.session?.token;
+    const sessionToken = body?.session?.token;
     if (!sessionToken) return;
     adoptSession(sessionToken, await mintJwt(base, sessionToken));
   } catch {
@@ -925,6 +926,9 @@ export async function signInWithEmailAndPassword(
   }
   if (res.status === 400 || res.status === 401 || res.status === 403) {
     throw new AuthError("auth/invalid-credential", "Invalid email or password.");
+  }
+  if (res.status === 429) {
+    throw new AuthError("auth/too-many-requests", "Too many sign-in attempts — try again later.");
   }
   if (!res.ok) {
     throw new AuthError("auth/internal-error", `Sign-in failed (${res.status}).`);
