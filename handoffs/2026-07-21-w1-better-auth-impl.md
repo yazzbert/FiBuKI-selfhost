@@ -46,18 +46,37 @@ entry point with a caller-provided uid.
 
 ## Implementation chunks (small PRs, in order)
 
-1. **Server core** — add the `better-auth` dependency (functions/), schema
+1. **Server core** — ✅ DONE 2026-07-21 (**PR #20**, `w1-better-auth-core`,
+   CI green incl. compose; awaiting Stefan's merge OK). Delivered more than
+   the "~5 marks" scope: **8 of 12 server marks flipped** (incl. the
+   SUPER_ADMIN claim test, the data-plane owner-scoping test, and a NEW
+   session-revocation test added after adversarial review). Facts the next
+   session needs:
+   - Store: `auth_*` tables (drizzle `0005_better_auth.sql`), camelCase
+     columns = Better Auth default field names (documented deviation),
+     tenant_id + RLS everywhere. `auth_users.customClaims` (JSON text)
+     already exists for chunk 2 — no new migration needed.
+   - Adapter: custom `createAdapterFactory` adapter in
+     `src/selfhost/better-auth.ts` over the firestore-shim's shared
+     SqlClient (new `getSqlClient()` export); one tenant-scoped app-role tx
+     per op; `transaction: false`.
+   - Tokens: jwt + bearer plugins; `signInEmail` returns a JWT whose `sid`
+     claim gets a session-liveness check in the verifier — deleteUser
+     revocation (chunk 2) works by deleting sessions, nothing else.
+     `parseClaims` strips reserved JWT claims from customClaims.
+   - Secret: `FIBUKI_AUTH_SECRET` is REQUIRED whenever DATABASE_URL is set
+     (JWKS private keys are encrypted with it); compose CI sets one.
+   Original scope for reference: add the `better-auth` dependency, schema
    via the existing `functions/drizzle/` + `db/migrate.ts` path (ONE code
-   path for PGlite and node-postgres; no auth container). Implement
-   `createSelfhostAuth()`: email/password, org plugin, caller-provided user
-   ids (Firebase-shaped fixture uid must round-trip), `verifier`. Flip the
-   first ~5 marks in `better-auth.test.ts`.
-2. **Invite-only + admin claims port** — `allowedEmails` gate (same data
-   the Firebase build maintains), `SUPER_ADMIN_EMAIL` auto-admin,
-   `setCustomUserClaims` persistence; rewrite `auth-shim.ts` over the real
-   store (real records, working `verifyIdToken`, session-killing
-   `deleteUser`). Flip the remaining server marks incl. the data-plane
-   owner-scoping test.
+   path for PGlite and node-postgres; no auth container), implement
+   `createSelfhostAuth()`.
+2. **Invite-only + admin claims port** — partially absorbed by chunk 1
+   (`allowedEmails` gate, `SUPER_ADMIN_EMAIL` auto-admin at token mint, and
+   the data-plane owner-scoping test are done). REMAINING: rewrite
+   `auth-shim.ts` over the real store — real records for
+   `getUser`/`getUserByEmail`/`listUsers`, working `verifyIdToken`,
+   session-killing `deleteUser`, and `setCustomUserClaims` persisting to
+   `auth_users.customClaims`. Flip the 4 remaining server marks.
 3. **Host wiring** — mount `handler` on the host (e.g. `/__auth`, same
    collision-free namespace trick as `/__data`); extend
    `server.ts#resolveVerifier` precedence to `FIBUKI_DEV_UID` → external
@@ -125,9 +144,9 @@ Scoped runs only (`node node_modules/.bin/<runner> run <file> --pool=forks
 --maxWorkers=1` — the guard hook text-matches the runner's name anywhere in
 a command, including filenames: stage by directory, use `-F`/`--body-file`).
 npm/npx are installed since 2026-07-21 (official Node 24 tarball under
-`~/.local/node`), and **`better-auth@1.6.23` is already installed in
-functions/** — the resulting `package.json` + `package-lock.json` changes
-are sitting UNCOMMITTED in the working tree, waiting to be the first commit
-of the chunk-1 branch. Root `node_modules` is still empty (api-smoke
-profile runs in CI). Full suites on CT 999/CI. Code → PR + CI +
-adversarial review + explicit merge OK; handoffs/docs → straight to main.
+`~/.local/node`), and `better-auth@1.6.23` is installed in functions/ (the
+dependency commit landed as the first commit of PR #20). Root
+`node_modules` is still empty (api-smoke profile runs in CI). Full suites
+on CT 999/CI — but note the full selfhost profile ran fine on this box
+with `--pool=forks --maxWorkers=1` (~41 s). Code → PR + CI + adversarial
+review + explicit merge OK; handoffs/docs → straight to main.
