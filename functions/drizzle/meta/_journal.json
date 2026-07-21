@@ -36,6 +36,13 @@
       "when": 1784639499541,
       "tag": "0004_flatten_file_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784647283215,
+      "tag": "0005_better_auth",
+      "breakpoints": true
     }
   ]
 }

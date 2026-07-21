@@ -79,6 +79,10 @@ jobs:
         working-directory: functions
         env:
           DATABASE_URL: postgres://fibuki:fibuki-ci@localhost:5433/fibuki_ci
+          # Real Postgres → better-auth.ts requires a real secret (JWKS
+          # private keys are encrypted with it; the library's dev default is
+          # refused whenever DATABASE_URL is set).
+          FIBUKI_AUTH_SECRET: fibuki-ci-auth-secret-not-for-production
           FIBUKI_STORAGE: s3
           FIBUKI_S3_ENDPOINT: localhost
           FIBUKI_S3_PORT: "9000"
