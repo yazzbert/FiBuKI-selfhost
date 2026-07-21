@@ -20,6 +20,12 @@ import {
   SyncBankTransactionsRequest,
 } from "@/types/banking-sync";
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/\n|\r/g, "");
+}
+
 /**
  * POST /api/banking/finapi-accounts
  * Create a source from an existing finAPI bank connection
@@ -183,7 +189,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    console.log(`[finAPI Accounts] Created source ${sourceResult.sourceId} for account ${accountId}`);
+    console.log(`[finAPI Accounts] Created source ${sanitizeForLog(sourceResult.sourceId)} for account ${sanitizeForLog(accountId)}`);
 
     // Trigger initial sync via Cloud Function in background
     if (syncFromYear) {

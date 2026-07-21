@@ -21,6 +21,12 @@ import { getWorkerPrompt } from "@/lib/chat/worker-prompts";
 import { createChatModel, ModelProvider } from "./model";
 import { WorkerType, WorkerAction } from "@/types/worker";
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/\n|\r/g, "");
+}
+
 // ============================================================================
 // State Definition
 // ============================================================================
@@ -283,7 +289,7 @@ function getWorkerTools(workerType: WorkerType): StructuredToolInterface[] {
   console.log(
     "[WorkerGraph] Filtered to %d tools for %s:",
     filteredTools.length,
-    workerType,
+    sanitizeForLog(workerType),
     filteredTools.map((t) => t.name).join(", ")
   );
 
@@ -301,7 +307,7 @@ async function getWorkerModel(workerType: WorkerType, provider: ModelProvider) {
   const cacheKey = `${workerType}:${provider}`;
 
   if (!modelCache.has(cacheKey)) {
-    console.log(`[WorkerGraph] Creating ${provider} model for ${workerType}`);
+    console.log(`[WorkerGraph] Creating ${sanitizeForLog(provider)} model for ${sanitizeForLog(workerType)}`);
     const tools = getWorkerTools(workerType);
     const model = await createChatModel({ provider }, tools);
     modelCache.set(cacheKey, model);
@@ -331,7 +337,7 @@ async function agentNode(state: WorkerState): Promise<Partial<WorkerState>> {
     ? messages
     : [new SystemMessage(systemPrompt), ...messages];
 
-  console.log(`[Worker:${workerType}] Agent node, ${messagesWithSystem.length} messages`);
+  console.log(`[Worker:${sanitizeForLog(workerType)}] Agent node, ${messagesWithSystem.length} messages`);
 
   // Call the model
   let response;
@@ -344,10 +350,10 @@ async function agentNode(state: WorkerState): Promise<Partial<WorkerState>> {
       },
     });
   } catch (error) {
-    console.error(`[Worker:${workerType}] Model invoke failed:`, error);
+    console.error(`[Worker:${sanitizeForLog(workerType)}] Model invoke failed:`, error);
     // Log the last few messages for debugging
     const lastMessages = messagesWithSystem.slice(-3);
-    console.error(`[Worker:${workerType}] Last messages:`, JSON.stringify(lastMessages.map(m => ({
+    console.error(`[Worker:${sanitizeForLog(workerType)}] Last messages:`, JSON.stringify(lastMessages.map(m => ({
       type: m.constructor.name,
       content: typeof m.content === 'string' ? m.content.slice(0, 200) : m.content,
     })), null, 2));
@@ -392,7 +398,7 @@ function createToolsNode(workerType: WorkerType) {
       // Count individual tool calls (each tool result is a message)
       const newToolCalls = result.messages?.length || 0;
       const newToolCallCount = toolCallCount + newToolCalls;
-      console.log(`[Worker:${workerType}] Tools executed: ${newToolCalls} calls (total: ${newToolCallCount})`);
+      console.log(`[Worker:${sanitizeForLog(workerType)}] Tools executed: ${newToolCalls} calls (total: ${newToolCallCount})`);
 
       let receiptSearchProgress = state.receiptSearchProgress || createInitialReceiptSearchProgress();
       if (workerType === "receipt_search") {
@@ -544,7 +550,7 @@ function createToolsNode(workerType: WorkerType) {
         receiptSearchProgress,
       };
     } catch (error) {
-      console.error(`[Worker:${workerType}] Tool execution error:`, error);
+      console.error(`[Worker:${sanitizeForLog(workerType)}] Tool execution error:`, error);
       throw error;
     }
   };
@@ -594,13 +600,13 @@ function routeAfterAgent(state: WorkerState): "tools" | "respond" | "enforce" {
 
   // Check for runaway prevention - max messages
   if (messageCount >= config.maxMessages) {
-    console.log(`[Worker:${workerType}] Max messages (${config.maxMessages}) reached, stopping`);
+    console.log(`[Worker:${sanitizeForLog(workerType)}] Max messages (${config.maxMessages}) reached, stopping`);
     return "respond";
   }
 
   // Check for runaway prevention - max tool calls
   if (toolCallCount >= config.maxToolCalls) {
-    console.log(`[Worker:${workerType}] Max tool calls (${config.maxToolCalls}) reached, stopping`);
+    console.log(`[Worker:${sanitizeForLog(workerType)}] Max tool calls (${config.maxToolCalls}) reached, stopping`);
     return "respond";
   }
 
@@ -614,7 +620,7 @@ function routeAfterAgent(state: WorkerState): "tools" | "respond" | "enforce" {
       const gate = evaluateReceiptGate(state);
       if (!gate.canFinalize && (state.receiptSearchEnforcementCount || 0) < 4) {
         console.log(
-          `[Worker:${workerType}] Finalization blocked by receipt gates: ${gate.unmet.join(" | ")}`
+          `[Worker:${sanitizeForLog(workerType)}] Finalization blocked by receipt gates: ${gate.unmet.join(" | ")}`
         );
         return "enforce";
       }
@@ -622,7 +628,7 @@ function routeAfterAgent(state: WorkerState): "tools" | "respond" | "enforce" {
     return "respond";
   }
 
-  console.log(`[Worker:${workerType}] Routing to tools: ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`);
+  console.log(`[Worker:${sanitizeForLog(workerType)}] Routing to tools: ${toolCalls.map((tc: { name: string }) => tc.name).join(", ")}`);
   return "tools";
 }
 
@@ -636,13 +642,13 @@ function routeAfterTools(state: WorkerState): "agent" | "respond" {
 
   // Check for runaway prevention - max messages
   if (messageCount >= config.maxMessages) {
-    console.log(`[Worker:${workerType}] Max messages reached after tools, stopping`);
+    console.log(`[Worker:${sanitizeForLog(workerType)}] Max messages reached after tools, stopping`);
     return "respond";
   }
 
   // Check for runaway prevention - max tool calls
   if (toolCallCount >= config.maxToolCalls) {
-    console.log(`[Worker:${workerType}] Max tool calls (${config.maxToolCalls}) reached after tools, stopping`);
+    console.log(`[Worker:${sanitizeForLog(workerType)}] Max tool calls (${config.maxToolCalls}) reached after tools, stopping`);
     return "respond";
   }
 
@@ -662,7 +668,7 @@ function routeAfterTools(state: WorkerState): "agent" | "respond" {
  * Build a worker graph for a specific worker type
  */
 export function buildWorkerGraph(workerType: WorkerType) {
-  console.log(`[WorkerGraph] Building graph for ${workerType}`);
+  console.log(`[WorkerGraph] Building graph for ${sanitizeForLog(workerType)}`);
 
   const toolsNode = createToolsNode(workerType);
 

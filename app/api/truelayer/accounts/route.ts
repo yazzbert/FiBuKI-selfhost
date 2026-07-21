@@ -26,6 +26,12 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:534848611676:web:8a3d1ede57c65b7e884d99",
 };
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/\n|\r/g, "");
+}
+
 const appName = "truelayer-accounts";
 const app = getApps().find(a => a.name === appName) || initializeApp(firebaseConfig, appName);
 const db = getFirestore(app);
@@ -271,7 +277,7 @@ async function triggerInitialSync(
     );
 
     if (transactions.length === 0) {
-      console.log(`No transactions to import for source ${sourceId}`);
+      console.log(`No transactions to import for source ${sanitizeForLog(sourceId)}`);
       return;
     }
 
@@ -319,7 +325,7 @@ async function triggerInitialSync(
       updatedAt: nowTs,
     });
 
-    console.log(`Imported ${transactions.length} transactions for source ${sourceId}`);
+    console.log(`Imported ${transactions.length} transactions for source ${sanitizeForLog(sourceId)}`);
   } catch (error) {
     console.error("Initial sync error:", error);
   }

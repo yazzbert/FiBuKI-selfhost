@@ -6,6 +6,12 @@ import { Timestamp } from "firebase-admin/firestore";
 
 const db = getAdminDb();
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/\n|\r/g, "");
+}
+
 const DEFAULT_STRATEGIES = [
   "partner_files",
   "amount_files",
@@ -90,8 +96,8 @@ export async function POST(request: NextRequest) {
     const docRef = await db.collection("precisionSearchQueue").add(queueItem);
 
     console.log(
-      `[PrecisionSearch API] Queued ${scope} search: ${docRef.id}`,
-      transactionId ? `for tx ${transactionId}` : ""
+      `[PrecisionSearch API] Queued ${sanitizeForLog(scope)} search: ${docRef.id}`,
+      transactionId ? `for tx ${sanitizeForLog(transactionId)}` : ""
     );
 
     return NextResponse.json({
