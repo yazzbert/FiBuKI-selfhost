@@ -211,4 +211,37 @@ export const FLATTENED: Readonly<Record<string, FlatSpec>> = {
       ["tenant_id", "global_partner_id"],
     ],
   },
+  fileConnections: {
+    table: "file_connections",
+    fields: {
+      // The file↔transaction relation (one row per connection), flattened as
+      // the enabler for the Phase-2 join deletions — see
+      // docs/matching-engine-postgres-deletions.md case 8 (accepted
+      // 2026-07-21). Query call sites (functions + frontend Admin-SDK
+      // routes + agent tools): matching/matchFileTransactions.ts
+      // (transactionId ==; fileId == + connectionType == + limit 1),
+      // matching/learnBillingCycle.ts + learnScoringWeights.ts
+      // (transactionId `in` chunks + userId ==),
+      // analytics/exportMatchIntelligence.ts (userId == + orderBy createdAt
+      // desc + limit), analytics/analyzeMatchAccuracy.ts (userId ==),
+      // files/connect+disconnect+deleteFile.ts, sources/deleteSource.ts,
+      // transactions/deleteTransactionsBySource.ts, tools/handlers.ts
+      // (fileId == + transactionId ==), user/deleteUserAccountCallable.ts,
+      // user-export/*, invoicing/onFileConnectionWrite.ts (trigger),
+      // lib/agent/tools/batch-tools.ts + search-tools.ts,
+      // lib/operations/file-ops.ts + file-transaction-matching-ops.ts,
+      // components/partners/partner-detail-panel.tsx. No array fields, no
+      // subcollections; every filtered/ordered field is below.
+      fileId: { col: "file_id", kind: "text" },
+      transactionId: { col: "transaction_id", kind: "text" },
+      userId: { col: "user_id", kind: "text" },
+      connectionType: { col: "connection_type", kind: "text" },
+      createdAt: { col: "created_at", kind: "timestamp" },
+    },
+    indexes: [
+      ["tenant_id", "transaction_id"],
+      ["tenant_id", "file_id"],
+      ["tenant_id", "user_id", "created_at"],
+    ],
+  },
 };

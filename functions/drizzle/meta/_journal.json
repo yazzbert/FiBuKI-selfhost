@@ -29,6 +29,13 @@
       "when": 1784632416604,
       "tag": "0003_flatten_partners",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784639499541,
+      "tag": "0004_flatten_file_connections",
+      "breakpoints": true
     }
   ]
 }

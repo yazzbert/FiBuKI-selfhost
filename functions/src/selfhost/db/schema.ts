@@ -109,3 +109,4 @@ export const sources = flatTable("sources");
 export const transactions = flatTable("transactions");
 export const files = flatTable("files");
 export const partners = flatTable("partners");
+export const fileConnections = flatTable("fileConnections");
