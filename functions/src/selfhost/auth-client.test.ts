@@ -369,6 +369,17 @@ describe("selfhost auth-client — firebase/auth surface (W1 spec)", () => {
     // createSelfhostAuth().handler over a listening socket (like
     // firestore-client.test.ts boots the data plane) and point the client
     // at it with __configureAuthClient.
+    //
+    // The provisioned user is unique PER RUN (uid still Firebase-shaped):
+    // the compose CI job runs every suite against ONE shared Postgres, so a
+    // fixed uid here would collide with better-auth.test.ts's fixture on
+    // the (tenant_id, id) primary key.
+    const UID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const REAL_UID = Array.from(
+      { length: 28 },
+      () => UID_ALPHABET[Math.floor(Math.random() * UID_ALPHABET.length)],
+    ).join("");
+    const REAL_EMAIL = `w1-client-${Date.now()}@example.test`;
     let server: http.Server;
     let base: string;
 
@@ -384,10 +395,10 @@ describe("selfhost auth-client — firebase/auth surface (W1 spec)", () => {
         auth = await createSelfhostAuth();
         await getFirestore()
           .collection("allowedEmails")
-          .add({ email: "stefan@example.test", createdAt: new Date() });
+          .add({ email: REAL_EMAIL, createdAt: new Date() });
         await auth.provisionUser({
-          uid: UID,
-          email: "stefan@example.test",
+          uid: REAL_UID,
+          email: REAL_EMAIL,
           password: "correct horse",
           displayName: "Stefan Test",
         });
@@ -422,10 +433,10 @@ describe("selfhost auth-client — firebase/auth surface (W1 spec)", () => {
       // password hashing on a slow box, not the contract.
       client.__configureAuthClient({ apiUrl: base });
       const cred = await Promise.race([
-        client.signInWithEmailAndPassword(client.getAuth(), "stefan@example.test", "correct horse"),
+        client.signInWithEmailAndPassword(client.getAuth(), REAL_EMAIL, "correct horse"),
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error("sign-in did not resolve")), 10_000)),
       ]);
-      expect(cred.user.uid).toBe(UID);
+      expect(cred.user.uid).toBe(REAL_UID);
       expect(cred.operationType).toBe("signIn");
     });
 
@@ -433,7 +444,7 @@ describe("selfhost auth-client — firebase/auth surface (W1 spec)", () => {
       client.__configureAuthClient({ apiUrl: base });
       await expect(
         Promise.race([
-          client.signInWithEmailAndPassword(client.getAuth(), "stefan@example.test", "wrong"),
+          client.signInWithEmailAndPassword(client.getAuth(), REAL_EMAIL, "wrong"),
           new Promise<never>((_, rej) => setTimeout(() => rej(new Error("sign-in did not settle")), 10_000)),
         ]),
       ).rejects.toMatchObject({ name: "FirebaseError", code: "auth/invalid-credential" });
@@ -441,7 +452,7 @@ describe("selfhost auth-client — firebase/auth surface (W1 spec)", () => {
 
     it("signOut() after a real sign-in revokes the server-side session too", async () => {
       client.__configureAuthClient({ apiUrl: base });
-      await client.signInWithEmailAndPassword(client.getAuth(), "stefan@example.test", "correct horse");
+      await client.signInWithEmailAndPassword(client.getAuth(), REAL_EMAIL, "correct horse");
       await tick();
       const token = await client.getAuth().currentUser!.getIdToken();
       const sid = (JSON.parse(
