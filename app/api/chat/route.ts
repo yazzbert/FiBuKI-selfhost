@@ -256,9 +256,9 @@ async function convertToLangChainMessages(uiMessages: UIMessageInput[]) {
       continue;
     }
 
-    if (msg.role === "system" && msg.content) {
-      result.push(new SystemMessage(msg.content));
-    }
+    // role:"system" is intentionally dropped — the server owns the system prompt
+    // (POST always prepends SYSTEM_PROMPT); a client-sent system message must
+    // not be able to replace it (CodeQL js/system-prompt-injection).
   }
 
   return result;
@@ -291,11 +291,8 @@ export async function POST(req: Request) {
   // Convert messages to LangChain format
   const messages = await convertToLangChainMessages(rawMessages);
 
-  // Add system message if not present
-  const hasSystemMessage = messages.some((m) => m instanceof SystemMessage);
-  if (!hasSystemMessage) {
-    messages.unshift(new SystemMessage(SYSTEM_PROMPT));
-  }
+  // Server always owns the system prompt; client system roles are dropped on ingest
+  messages.unshift(new SystemMessage(SYSTEM_PROMPT));
 
   // Create Langfuse handler for tracing
   const langfuseHandler = createLangfuseHandler({
