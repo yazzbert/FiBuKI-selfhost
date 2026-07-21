@@ -1,8 +1,11 @@
 # Phase 2 — rip the shim: kickoff proposal
 
-> **Status:** PROPOSED 2026-07-21. Decisions checklist at the bottom; Stefan
-> checks in-place, then the accepted items go to [`decisions.md`](decisions.md)
-> and the first workstream gets its handoff.
+> **Status:** ACCEPTED 2026-07-21 by Stefan (in-session, Felix on-board;
+> logged in [`decisions.md`](decisions.md)). Case-3 OK stays deferred to W5.
+> Load-bearing fact learned at acceptance: **the user base is exactly two**
+> (Stefan and Felix), which shrinks W2 to a step inside W3. Felix is
+> unavailable until Sunday 2026-07-26 — W4's hosting decision waits for him;
+> W1/W3 and the Phase-0 gap tests don't.
 
 Scope per [`rewrite-goals.md`](rewrite-goals.md): remove the Firestore API
 surface entirely; Better Auth + migration of existing fibuki.com users off
@@ -159,18 +162,17 @@ land in a workstream instead of a footnote:
 
 ## Decisions requested from Stefan
 
-- [ ] **Sequencing:** cutover-first strangler order as laid out (W1–W3 →
+- [x] **Sequencing:** cutover-first strangler order as laid out (W1–W3 →
       cutover → teardown). The alternative (rewrite-then-cutover) is a
       flag day; recommended: as laid out.
-- [ ] **Auth migration for password users:** (b) forced reset
-      (recommended at this user-base size) — or (a) scrypt-hash import.
-- [ ] **Cutover pattern:** (a) short write-freeze + one-shot migration +
-      DNS flip, no dual-write (recommended) — or (b) staged per-user
-      cohorts.
-- [ ] **Confirm accepted regressions until Phase 3:** polling realtime,
+- [x] **Auth migration for password users:** (b) forced reset — moot in
+      practice, the user base is two people.
+- [x] **Cutover pattern:** (a) short write-freeze + one-shot migration +
+      DNS flip, no dual-write.
+- [x] **Confirm accepted regressions until Phase 3:** polling realtime,
       in-process triggers with cron safety net.
-- [ ] **Registry case 3** (search moves from 1000-most-recent to
-      all-history ILIKE): OK now, or ask again when W5 reaches it
-      (recommended: ask again at W5).
-- [ ] **Raise with Felix:** cloud hosting target for the four-container
-      stack (blocks W4), and License + CLA timing.
+- [x] **Registry case 3** (search moves from 1000-most-recent to
+      all-history ILIKE): ask again when W5 reaches it.
+- [ ] **Raise with Felix (when back, Sunday 2026-07-26):** cloud hosting
+      target for the four-container stack (blocks W4), and License + CLA
+      timing.

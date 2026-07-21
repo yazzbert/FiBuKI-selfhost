@@ -20,6 +20,26 @@ scope, process, product rules, external commitments.
 
 ---
 
+## 2026-07-21 — Phase 2 kickoff: proposal accepted, cutover-first order
+
+**Decided by:** Stefan (in-session; Felix on-board with all decisions so far)
+
+[`phase-2-rip-the-shim.md`](phase-2-rip-the-shim.md) accepted: cutover-first
+strangler order (make the selfhost stack production-ready → cut fibuki.com
+over with code unchanged → tear the shim down and execute the deletion
+registry). Cutover pattern is **short write-freeze + one-shot migration +
+DNS flip**, no dual-write. Password-user migration is forced reset — moot in
+practice because the production user base is **exactly two people (Stefan
+and Felix)**, which collapses W2 into a step of W3. Accepted-until-Phase-3
+regressions confirmed: polling realtime, in-process triggers with the
+orphan-cron safety net. Registry case 3 (all-history ILIKE search) gets its
+own OK when W5 reaches it.
+
+Timing context: Felix is unavailable until Sunday 2026-07-26; the W4
+hosting-target and License+CLA conversations wait for him. Until then the
+work is W1 (Better Auth, uid-preserving) and W3 (migration tooling) plus
+the Phase-0 gap tests folded into their acceptance criteria.
+
 ## 2026-07-21 — fileConnections flatten merged; matching-engine workstream closed for Phase 1
 
 **Decided by:** Stefan (merge OK on PR #18)
