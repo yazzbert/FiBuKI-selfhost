@@ -1,6 +1,12 @@
 # Phase 1 workstream: delete matching-engine code Postgres joins make redundant
 
-**Status:** unblocked as of 2026-07-21 — `transactions` (PR #15) and
+**Status:** investigation session DONE 2026-07-21 — inventory + per-case
+proposal delivered in `docs/matching-engine-postgres-deletions.md`, awaiting
+Stefan's per-case decisions (log them in `docs/decisions.md`). Next session:
+whichever case Stefan OKs (likely the `fileConnections` flatten PR). The
+original brief follows unchanged.
+
+Originally: unblocked as of 2026-07-21 — `transactions` (PR #15) and
 `files` (PR #16) are both real tables, so the join pair exists. Decided by
 Stefan 2026-07-20 as a separate, later workstream with its own handoff
 (`docs/decisions.md`). This is an INVESTIGATION-FIRST chunk: the deliverable

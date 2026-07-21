@@ -237,7 +237,12 @@ Progress *(2026-07-21)*:
   roles, and the RLS loops now cover the `partners` table directly.
 - Open: delete the matching-engine code Postgres joins make redundant now
   that all four collections are real tables (separate handoff,
-  `handoffs/2026-07-21-matching-engine-deletions.md`).
+  `handoffs/2026-07-21-matching-engine-deletions.md`). Investigation done
+  *(2026-07-21)*: inventory + per-case proposal in
+  [`matching-engine-postgres-deletions.md`](matching-engine-postgres-deletions.md)
+  — finding: nearly all deletions are Phase-2-gated by the one-codebase/
+  two-backends constraint; the Phase-1-sized piece is flattening
+  `fileConnections` (pending Stefan's OK).
 
 ### Phase 2 — rip the shim
 
