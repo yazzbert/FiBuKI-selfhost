@@ -1,7 +1,13 @@
-# Auth findings: unverified JWT in API routes — Stefan decision needed
+# Auth findings: unverified JWT in API routes — FIXED
 
-**Status:** Investigation complete 2026-07-21 (Task 1 of post-CodeQL follow-ups).
-No code changed — the handoff said report before touching auth behavior.
+**Status:** Investigation 2026-07-21; Stefan approved the fix same day.
+`lib/auth/get-server-user.ts` now verifies tokens with Firebase Admin
+`verifyIdToken` (uid and admin claim both come from the verified token).
+Verified consumers: web UI and extension send real ID tokens; the CLI's
+device-flow API key only hits `/api/mcp/*` proxy routes, which forward auth
+to the Cloud Function and never used this helper. No selfhost branch point
+needed: the shims only alias client `firebase/*` for the browser bundle, and
+the Next API routes are not part of the selfhost data plane.
 
 ## Finding: `getServerUserIdWithFallback` is an auth bypass in the Next.js API layer
 
@@ -35,7 +41,7 @@ unverified decode was always a "for now" placeholder that shipped.
 - **2 admin routes** (`admin/tests`, `admin/cleanup-orphaned-transactions`)
   are gated by the forgeable `admin` claim.
 
-## Recommended fix (pending Stefan's go-ahead)
+## The fix (implemented)
 
 `firebase-admin` is already initialized with the service account in prod
 (`lib/firebase/admin.ts`) and points at the auth emulator in dev
@@ -55,17 +61,13 @@ One helper change fixes all 44 routes; no per-route edits needed. Caveats:
 - Emulator tokens verify fine when the env var is set (already is).
 - Adds one Google cert fetch (cached by the SDK) per cold start — negligible.
 
-## Other open decisions (Tasks 3–4 from the fulfilled handoff)
+## Other decisions (Stefan approved going ahead, 2026-07-21)
 
-- **Extension tests unwired:** `extensions/taxstudio-browser-tests/*.test.js`
-  can't run anywhere — `require("../lib/url-utils")` doesn't resolve, jest
-  config points at `./__tests__/`, jest not installed, no CI job. Pick: move
-  tests back under the extension with a CWS-zip exclusion, or point
-  rootDir/testMatch at the sibling dir and fix requires; either way add CI.
-- **Quality noise ×166** (unused-local ×147, useless-assignment ×8,
-  trivial-conditional ×8, misc ×3): dedicated cleanup round vs switching
-  CodeQL suite `security-and-quality` → `security-extended`; if suite stays,
-  consider path-based exclusion for generated/ported code.
+- **Extension tests:** wire them up and add a CI job (in progress).
+- **Quality noise ×166:** switch CodeQL suite `security-and-quality` →
+  `security-extended` — keeps/extends the security queries, drops the
+  quality-only ones; a dedicated cleanup round can still happen later
+  (in progress).
 
 ## Still pending externally
 
