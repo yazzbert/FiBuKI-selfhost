@@ -50,9 +50,12 @@ interface RequestBody {
 // ============================================================================
 
 async function convertMessages(messages: MessageInput[]) {
-  const { HumanMessage, AIMessage, SystemMessage, ToolMessage } = await getLangChainMessages();
+  const { HumanMessage, AIMessage, ToolMessage } = await getLangChainMessages();
 
-  return messages.map((msg) => {
+  // role:"system" is intentionally dropped — the agent graph always supplies its
+  // own SYSTEM_PROMPT; a client-sent system message must not be able to replace
+  // it (CodeQL js/system-prompt-injection).
+  return messages.filter((msg) => msg.role !== "system").map((msg) => {
     switch (msg.role) {
       case "user":
         return new HumanMessage(msg.content);
@@ -68,8 +71,6 @@ async function convertMessages(messages: MessageInput[]) {
           });
         }
         return new AIMessage(msg.content);
-      case "system":
-        return new SystemMessage(msg.content);
       case "tool":
         return new ToolMessage({
           content: msg.content,
@@ -84,7 +85,8 @@ async function convertMessages(messages: MessageInput[]) {
 async function serializeMessages(messages: unknown[]) {
   const { HumanMessage, AIMessage, SystemMessage, ToolMessage } = await getLangChainMessages();
 
-  return messages.map((msg) => {
+  // System messages never leave the server (and are dropped on ingest anyway)
+  return messages.filter((msg) => !(msg instanceof SystemMessage)).map((msg) => {
     if (msg instanceof HumanMessage) {
       return { role: "user", content: msg.content };
     }
@@ -102,9 +104,6 @@ async function serializeMessages(messages: unknown[]) {
         content: msg.content,
         ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
       };
-    }
-    if (msg instanceof SystemMessage) {
-      return { role: "system", content: msg.content };
     }
     if (msg instanceof ToolMessage) {
       return {
