@@ -227,9 +227,17 @@ Progress *(2026-07-21)*:
   (json-null rows under a pushed LIMIT via NULLS FIRST), JS-side null
   equality withholding LIMIT, and `!= null` staying JS-side entirely.
   `transactionSuggestions` stays payload data, not a column.
-- Open: flatten `partners` (last one), then delete the matching-engine code
-  Postgres joins make redundant now that transactions + files are the join
-  pair (separate handoff).
+- ✅ **`partners` flattened** *(2026-07-21, PR #17 — last collection)* — 4
+  generated columns (`userId`, `isActive`, `globalPartnerId`, `name`) from an
+  inventory of all ~93 call sites; every query shape was already pinned by
+  the sources suite, so the pushdown differential gained nothing (a valid
+  outcome the handoff predicted). The `partnerType` ternaries are doc-by-id
+  only and `globalPartners` stays in `docs`. `db/rls.test.ts` lost partners
+  as its "unflattened" representative twice over — `categories` took both
+  roles, and the RLS loops now cover the `partners` table directly.
+- Open: delete the matching-engine code Postgres joins make redundant now
+  that all four collections are real tables (separate handoff,
+  `handoffs/2026-07-21-matching-engine-deletions.md`).
 
 ### Phase 2 — rip the shim
 

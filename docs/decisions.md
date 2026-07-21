@@ -20,6 +20,17 @@ scope, process, product rules, external commitments.
 
 ---
 
+## 2026-07-21 — Partners flatten merged; Phase 1 flattening complete
+
+**Decided by:** Stefan (merge OK on PR #17)
+
+Conditional OK ("if the rls.test.ts problem is fixed, merge") — the fix was
+already in the reviewed, CI-green commit, so the PR merged as-is. All four
+collections (`sources`, `transactions`, `files`, `partners`) are now real
+tables; the JSONB `docs` bridge holds only unflattened collections and
+subcollections. Next workstream per the 2026-07-20 scope decision:
+matching-engine deletions (own handoff).
+
 ## 2026-07-21 — Docs changes ship without PR/review
 
 **Decided by:** Stefan
