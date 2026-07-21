@@ -24,11 +24,16 @@ function normalizeMimeType(mimeType: string, filename: string): string {
 
 function parseFromHeader(fromValue?: string | null): { email?: string; name?: string } {
   if (!fromValue) return {};
-  const match = fromValue.match(/(?:"?([^"]*)"?\s)?<?([^<>@\s]+@[^<>]+\.[^<>]+)>?/);
-  if (!match) return {};
-  const name = match[1]?.trim();
-  const email = match[2]?.trim();
-  return { email, name };
+  // Cap length: a legitimate From header is far below 1 KB, and the cap bounds regex time
+  const header = fromValue.slice(0, 1024);
+  const angle = header.match(/<([^<>]*)>/);
+  const candidate = (angle ? angle[1] : header).trim();
+  const emailMatch = candidate.match(/[^<>@\s"]+@[^<>@\s".]+(?:\.[^<>@\s".]+)+/);
+  if (!emailMatch) return {};
+  const name = angle
+    ? header.slice(0, angle.index).replace(/"/g, "").trim() || undefined
+    : undefined;
+  return { email: emailMatch[0], name };
 }
 
 function extractDomain(email?: string | null): string | null {

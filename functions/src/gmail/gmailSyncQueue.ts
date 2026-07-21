@@ -398,7 +398,7 @@ async function processQueueItem(
         const emailMatch = from.match(/<([^>]+)>/) || [null, from];
         const senderEmail = emailMatch[1] || from;
         const senderDomain = extractEmailDomain(senderEmail);
-        const senderName = from.replace(/<[^>]+>/, "").trim().replace(/"/g, "");
+        const senderName = from.split("<")[0].trim().replace(/"/g, "");
 
         for (const attachment of attachments) {
           // Check deduplication (including soft-deleted files to prevent re-import)
