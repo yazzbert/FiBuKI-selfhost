@@ -10,6 +10,7 @@ import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
 import {
   AIMessage,
   BaseMessage,
+  HumanMessage,
   SystemMessage,
   ToolMessage,
 } from "@langchain/core/messages";
@@ -330,12 +331,13 @@ async function agentNode(state: WorkerState): Promise<Partial<WorkerState>> {
   // Get the model
   const model = await getWorkerModel(workerType, modelProvider);
 
-  // Add system message if not present
-  const hasSystemMessage = messages.some((m) => m instanceof SystemMessage);
+  // The graph owns the system prompt: drop any SystemMessage that arrived in
+  // state (client-injected or stale) and always prepend the worker's own.
   const systemPrompt = getWorkerPrompt(config.systemPromptKey);
-  const messagesWithSystem = hasSystemMessage
-    ? messages
-    : [new SystemMessage(systemPrompt), ...messages];
+  const messagesWithSystem = [
+    new SystemMessage(systemPrompt),
+    ...messages.filter((m) => !(m instanceof SystemMessage)),
+  ];
 
   console.log(`[Worker:${sanitizeForLog(workerType)}] Agent node, ${messagesWithSystem.length} messages`);
 
@@ -580,8 +582,11 @@ Missing requirements:
 - ${gate.unmet.join("\n- ")}
 If you already have a perfect verified match, connect it; otherwise keep searching/validating.`;
 
+  // HumanMessage, not SystemMessage: agentNode strips SystemMessages from state
+  // (the graph owns the system prompt), and ChatAnthropic rejects mid-array
+  // system messages anyway.
   return {
-    messages: [new SystemMessage(reminder)],
+    messages: [new HumanMessage(reminder)],
     receiptSearchEnforcementCount: (state.receiptSearchEnforcementCount || 0) + 1,
   };
 }

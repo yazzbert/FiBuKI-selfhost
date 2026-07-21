@@ -9,7 +9,6 @@ export const dynamic = "force-dynamic";
  */
 
 import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
-import { SYSTEM_PROMPT } from "@/lib/chat/system-prompt";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
 
@@ -37,7 +36,7 @@ function sanitizeForLog(value: unknown): string {
 
 interface UIMessageInput {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant";
   content?: string;
   parts?: Array<{
     type: string;
@@ -69,8 +68,8 @@ interface UIMessageInput {
  * Convert UI messages to LangChain message format
  */
 async function convertToLangChainMessages(uiMessages: UIMessageInput[]) {
-  const { HumanMessage, AIMessage, SystemMessage, ToolMessage } = await getLangChainMessages();
-  const result: InstanceType<typeof HumanMessage | typeof AIMessage | typeof SystemMessage | typeof ToolMessage>[] = [];
+  const { HumanMessage, AIMessage, ToolMessage } = await getLangChainMessages();
+  const result: InstanceType<typeof HumanMessage | typeof AIMessage | typeof ToolMessage>[] = [];
 
   for (const msg of uiMessages) {
     if (msg.role === "user") {
@@ -262,9 +261,9 @@ async function convertToLangChainMessages(uiMessages: UIMessageInput[]) {
       continue;
     }
 
-    // role:"system" is intentionally dropped — the server owns the system prompt
-    // (POST always prepends SYSTEM_PROMPT); a client-sent system message must
-    // not be able to replace it (CodeQL js/system-prompt-injection).
+    // Any other role (including "system") is intentionally dropped — the agent
+    // graph owns the system prompt; a client-sent system message must not be
+    // able to replace it (CodeQL js/system-prompt-injection).
   }
 
   return result;
@@ -283,7 +282,6 @@ export async function POST(req: Request) {
   const { buildAgentGraph } = await getAgentGraph();
   const { getModelId, calculateCost } = await getAgentModel();
   const { createLangfuseHandler, flushLangfuse } = await getLangfuse();
-  const { SystemMessage } = await getLangChainMessages();
 
   const authHeader = req.headers.get("Authorization") || "";
   const userId = await getServerUserIdWithFallback(req);
@@ -294,11 +292,9 @@ export async function POST(req: Request) {
 
   console.log(`[Chat API] Starting LangGraph agent with ${sanitizeForLog(modelProvider)}, ${sanitizeForLog(rawMessages.length)} messages`);
 
-  // Convert messages to LangChain format
+  // Convert messages to LangChain format. The agent graph owns the system
+  // prompt (agentNode strips foreign SystemMessages and prepends its own).
   const messages = await convertToLangChainMessages(rawMessages);
-
-  // Server always owns the system prompt; client system roles are dropped on ingest
-  messages.unshift(new SystemMessage(SYSTEM_PROMPT));
 
   // Create Langfuse handler for tracing
   const langfuseHandler = createLangfuseHandler({

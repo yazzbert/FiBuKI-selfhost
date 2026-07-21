@@ -22,7 +22,7 @@ const getLangfuse = async () => import("@/lib/agent/langfuse");
 // ============================================================================
 
 interface MessageInput {
-  role: "user" | "assistant" | "system" | "tool";
+  role: "user" | "assistant" | "tool";
   content: string;
   tool_calls?: Array<{
     id: string;
@@ -52,10 +52,10 @@ interface RequestBody {
 async function convertMessages(messages: MessageInput[]) {
   const { HumanMessage, AIMessage, ToolMessage } = await getLangChainMessages();
 
-  // role:"system" is intentionally dropped — the agent graph always supplies its
-  // own SYSTEM_PROMPT; a client-sent system message must not be able to replace
-  // it (CodeQL js/system-prompt-injection).
-  return messages.filter((msg) => msg.role !== "system").map((msg) => {
+  // role:"system" is not accepted input, but bodies are unvalidated JSON — keep
+  // the runtime drop so a client-sent system message can never replace the
+  // graph's own SYSTEM_PROMPT (CodeQL js/system-prompt-injection).
+  return messages.filter((msg) => (msg.role as string) !== "system").map((msg) => {
     switch (msg.role) {
       case "user":
         return new HumanMessage(msg.content);
