@@ -1,10 +1,9 @@
 /**
  * W1 (Better Auth) — server acceptance suite. Written spec-first with every
- * test `it.fails` (xfail); chunk 1 (server core) implemented `./better-auth`
- * and flipped the marks it satisfies. The remaining `.fails` marks are the
- * auth-shim rewrite (chunk 2) — the implementation is DONE when none are
- * left and the suite is green — see
- * handoffs/2026-07-21-w1-better-auth-impl.md.
+ * test `it.fails` (xfail); chunk 1 (server core) implemented `./better-auth`,
+ * chunk 2 rewrote `./auth-shim` over the same store, and together they
+ * flipped every mark — this suite is now fully green acceptance
+ * (see handoffs/2026-07-21-w1-better-auth-impl.md).
  *
  * The seam these tests define (kept deliberately small):
  *
@@ -80,7 +79,7 @@ async function allowEmail(email: string): Promise<void> {
   await getFirestore().collection("allowedEmails").add({ email, createdAt: new Date() });
 }
 
-describe("Better Auth server acceptance — remaining xfails are the chunk-2 auth-shim rewrite", () => {
+describe("Better Auth server acceptance — server core + auth-shim over the real store", () => {
   it("createSelfhostAuth() boots against the selfhost Postgres", async () => {
     const auth = await loadAuth();
     expect(typeof auth.handler).toBe("function");
@@ -166,7 +165,7 @@ describe("Better Auth server acceptance — remaining xfails are the chunk-2 aut
     }
   });
 
-  it.fails("admin claims: setCustomUserClaims({admin:true}) is reflected on the next session", async () => {
+  it("admin claims: setCustomUserClaims({admin:true}) is reflected on the next session", async () => {
     const auth = await loadAuth();
     const email = uniqueEmail("promoted");
     await allowEmail(email);
@@ -180,7 +179,7 @@ describe("Better Auth server acceptance — remaining xfails are the chunk-2 aut
     expect((await auth.verifier(session.token))?.token?.admin).toBe(true);
   });
 
-  it.fails("auth-shim admin surface returns real users, not synthetic records", async () => {
+  it("auth-shim admin surface returns real users, not synthetic records", async () => {
     // auth-shim.ts is the `firebase-admin/auth` alias target consumed by 14
     // functions files (getUser ×13, getUserByEmail, listUsers, deleteUser,
     // setCustomUserClaims, …). Today it fabricates `${uid}@selfhost.local`
@@ -201,7 +200,7 @@ describe("Better Auth server acceptance — remaining xfails are the chunk-2 aut
     expect(users.map((u) => u.uid)).toContain(uid);
   });
 
-  it.fails("auth-shim verifyIdToken accepts a live session token (today it throws)", async () => {
+  it("auth-shim verifyIdToken accepts a live session token", async () => {
     const auth = await loadAuth();
     const email = uniqueEmail("verify");
     await allowEmail(email);
@@ -210,7 +209,7 @@ describe("Better Auth server acceptance — remaining xfails are the chunk-2 aut
     await expect(getAdminAuth().verifyIdToken(token)).resolves.toMatchObject({ uid });
   });
 
-  it.fails("auth-shim deleteUser removes the account and kills its sessions", async () => {
+  it("auth-shim deleteUser removes the account and kills its sessions", async () => {
     const auth = await loadAuth();
     const email = uniqueEmail("deleted");
     await allowEmail(email);

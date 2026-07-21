@@ -358,7 +358,16 @@ function resolveSecret(): string | undefined {
  * so stripping is parity, not divergence; without it an admin-set claim
  * like {"exp": ...} would mint effectively non-expiring tokens.
  */
-const RESERVED_CLAIMS = new Set(["iss", "sub", "aud", "exp", "nbf", "iat", "jti", "sid"]);
+export const RESERVED_CLAIMS: ReadonlySet<string> = new Set([
+  "iss",
+  "sub",
+  "aud",
+  "exp",
+  "nbf",
+  "iat",
+  "jti",
+  "sid",
+]);
 
 function parseClaims(user: Record<string, unknown>): Record<string, unknown> {
   const raw = user.customClaims;
