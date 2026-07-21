@@ -25,6 +25,9 @@ describe("tenant context + RLS backstop", () => {
     await __resetFirestoreShim();
     await getFirestore().collection("sources").doc("rls1").set({ userId: "u1", name: "RLS Source" });
     await getFirestore().collection("partners").doc("rlsp1").set({ userId: "u1", name: "P" });
+    await getFirestore().collection("fileConnections").doc("rlsfc1").set({
+      userId: "u1", fileId: "f1", transactionId: "t1", connectionType: "manual",
+    });
     // categories is unflattened — keeps a real row in the docs bridge so the
     // blocked-read assertions on `docs` below stay non-vacuous.
     await getFirestore().collection("categories").doc("rlsc1").set({ userId: "u1", name: "C" });
@@ -36,14 +39,14 @@ describe("tenant context + RLS backstop", () => {
   });
 
   it("blocks ALL access when the app role runs with no tenant configured", async () => {
-    for (const table of ["tenants", "docs", "sources", "partners"]) {
+    for (const table of ["tenants", "docs", "sources", "partners", "file_connections"]) {
       const res = await __rawSqlForTest(`SELECT * FROM ${table}`, [], null);
       expect(res.rows).toEqual([]);
     }
   });
 
   it("blocks cross-tenant reads", async () => {
-    for (const table of ["docs", "sources", "partners"]) {
+    for (const table of ["docs", "sources", "partners", "file_connections"]) {
       const res = await __rawSqlForTest(`SELECT * FROM ${table}`, [], OTHER_TENANT);
       expect(res.rows).toEqual([]);
     }
@@ -92,6 +95,32 @@ describe("flattened collection routing (sources)", () => {
       getTenantId(),
     );
     expect(inDocs.rows).toEqual([]);
+  });
+
+  it("routes fileConnections (camelCase collection) to the file_connections table", async () => {
+    await getFirestore().collection("fileConnections").doc("route1").set({
+      userId: "u1",
+      fileId: "f-route",
+      transactionId: "t-route",
+      connectionType: "auto_matched",
+    });
+    const inTable = await __rawSqlForTest(
+      `SELECT id, user_id, file_id, transaction_id, connection_type
+       FROM file_connections WHERE id = 'route1'`,
+      [],
+      getTenantId(),
+    );
+    expect(inTable.rows).toEqual([
+      { id: "route1", user_id: "u1", file_id: "f-route", transaction_id: "t-route", connection_type: "auto_matched" },
+    ]);
+    const inDocs = await __rawSqlForTest(
+      `SELECT id FROM docs WHERE collection_path = 'fileConnections'`,
+      [],
+      getTenantId(),
+    );
+    expect(inDocs.rows).toEqual([]);
+    const snap = await getFirestore().collection("fileConnections").doc("route1").get();
+    expect(snap.data()?.fileId).toBe("f-route");
   });
 
   it("generated columns are NULL for missing/wrong-typed fields, doc round-trips untouched", async () => {
@@ -169,6 +198,7 @@ describe("migration runner on a fresh client", () => {
       `INSERT INTO docs VALUES
        ('sources/a', 'sources', 'a', '{"userId": "u1", "name": "Old bank"}'),
        ('partners/p', 'partners', 'p', '{"userId": "u1"}'),
+       ('fileConnections/fc', 'fileConnections', 'fc', '{"userId": "u1", "fileId": "f1", "transactionId": "t1"}'),
        ('categories/c', 'categories', 'c', '{"userId": "u1"}'),
        ('transactions/t/history/h', 'transactions/t/history', 'h', '{"n": 1}')`,
     );
@@ -180,6 +210,11 @@ describe("migration runner on a fresh client", () => {
     expect(sources.rows).toEqual([{ id: "a", name: "Old bank", user_id: "u1" }]);
     const partners = await client.tx(tid, (q) => q(`SELECT id, user_id FROM partners`));
     expect(partners.rows).toEqual([{ id: "p", user_id: "u1" }]);
+    // First collection whose Firestore name (camelCase) differs from its
+    // table name — pins the collection_path → table mapping in the backfill.
+    const conns = await client.tx(tid, (q) =>
+      q(`SELECT id, user_id, file_id, transaction_id FROM file_connections`));
+    expect(conns.rows).toEqual([{ id: "fc", user_id: "u1", file_id: "f1", transaction_id: "t1" }]);
     const docs = await client.tx(tid, (q) => q(`SELECT path FROM docs ORDER BY path`));
     expect(docs.rows.map((r) => r.path)).toEqual(["categories/c", "transactions/t/history/h"]);
     const spike = await client.query(
