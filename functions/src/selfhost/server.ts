@@ -52,6 +52,20 @@ async function resolveVerifier(): Promise<ResolvedAuth> {
   }
 
   console.log("fibuki-api: built-in auth (Better Auth) — endpoints at /__auth");
+  if (
+    (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_SECRET) &&
+    !process.env.FIBUKI_AUTH_ISSUER &&
+    !process.env.BETTER_AUTH_URL
+  ) {
+    // The issuer doubles as the OAuth redirect_uri base — without it Google
+    // gets the unreachable internal placeholder and every social sign-in dies
+    // at the consent screen with a redirect_uri mismatch.
+    console.warn(
+      "fibuki-api: GOOGLE_CLIENT_ID is set but FIBUKI_AUTH_ISSUER is not — " +
+        "Google OAuth would use the internal placeholder URL. Set FIBUKI_AUTH_ISSUER " +
+        "to this deployment's public URL.",
+    );
+  }
   const auth = await createSelfhostAuth();
   return { verifyToken: auth.verifier, authHandler: auth.handler };
 }
@@ -97,4 +111,9 @@ async function main() {
   });
 }
 
-void main();
+main().catch((err) => {
+  // Fatal boot errors (e.g. DATABASE_URL without FIBUKI_AUTH_SECRET) exit
+  // cleanly with the message instead of an unhandled-rejection trace.
+  console.error(`fibuki-api: fatal startup error — ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});
