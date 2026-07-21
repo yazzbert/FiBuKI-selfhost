@@ -376,6 +376,42 @@ function parseClaims(user: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
+/**
+ * The invite gate — same data, same semantics as the Firebase build
+ * (CLAUDE.md auth section): allowedEmails collection, SUPER_ADMIN_EMAIL
+ * exempt. Enforced in the user.create database hook so EVERY account path
+ * is gated — provisionUser AND social sign-ins (Google auto-creates a user
+ * on first login; without the hook that would bypass invite-only).
+ */
+async function assertInvited(email: string): Promise<void> {
+  const normalized = email.trim().toLowerCase();
+  if (normalized === superAdminEmail()) return;
+  const snap = await getFirestore()
+    .collection("allowedEmails")
+    .where("email", "==", normalized)
+    .limit(1)
+    .get();
+  if (snap.empty) {
+    throw new Error(
+      `selfhost auth: ${normalized} is not in allowedEmails — this product is invite-only`,
+    );
+  }
+}
+
+/**
+ * Google social provider (decision 2026-07-21, docs/decisions.md): BYO
+ * OAuth client via env — "same features, bring your own OAuth". Absent env
+ * simply leaves the provider unregistered; email/password keeps working.
+ * The OAuth redirect URI to register at Google is
+ * `${FIBUKI_AUTH_ISSUER}/__auth/callback/google`.
+ */
+function socialProviders() {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return undefined;
+  return { google: { clientId, clientSecret } };
+}
+
 function buildAuth() {
   const issuer = issuerUrl();
   return betterAuth({
@@ -388,6 +424,17 @@ function buildAuth() {
       enabled: true,
       // Invite-only product: accounts exist only via provisionUser.
       disableSignUp: true,
+    },
+    socialProviders: socialProviders(),
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => {
+            await assertInvited(user.email);
+            return { data: user };
+          },
+        },
+      },
     },
     user: {
       modelName: "auth_users",
@@ -491,24 +538,11 @@ export async function createSelfhostAuth(): Promise<SelfhostAuth> {
     }
   };
 
-  const assertInvited = async (email: string): Promise<void> => {
-    // Same invite gate, same data as the Firebase build (CLAUDE.md auth
-    // section): allowedEmails collection, SUPER_ADMIN_EMAIL exempt.
-    if (email === superAdminEmail()) return;
-    const snap = await getFirestore()
-      .collection("allowedEmails")
-      .where("email", "==", email)
-      .limit(1)
-      .get();
-    if (snap.empty) {
-      throw new Error(
-        `selfhost auth: ${email} is not in allowedEmails — this product is invite-only`,
-      );
-    }
-  };
-
   const provisionUser: SelfhostAuth["provisionUser"] = async (opts) => {
     const email = opts.email.trim().toLowerCase();
+    // The user.create database hook enforces the invite gate for every
+    // account path; checking here too keeps the error surfaced BEFORE any
+    // adapter work and keeps this entry point self-documenting.
     await assertInvited(email);
     const ctx = await auth.$context;
     const user = await ctx.internalAdapter.createUser({
