@@ -142,4 +142,47 @@ export const FLATTENED: Readonly<Record<string, FlatSpec>> = {
       ["tenant_id", "source_id"],
     ],
   },
+  files: {
+    table: "files",
+    fields: {
+      // Query call sites (~125): tools/handlers.ts, files/*, matching/*,
+      // extraction/bulkRetryExtraction.ts, gmail/*, precision-search/*,
+      // partners/deleteUserPartner.ts, digest/*, emails/resolveMergeFields.ts,
+      // analytics/*, workflows/*, user-export/*. No array-contains anywhere;
+      // enrichment batches use `__name__ in` (id, no column needed).
+      userId: { col: "user_id", kind: "text" },
+      // Also queried as `== null` (matching/onPartnerUpdate.ts re-match) —
+      // null equality stays JS-side; the column serves the `== partnerId`
+      // sites (matchFilesForPartner, deleteUserPartner, precision-search).
+      partnerId: { col: "partner_id", kind: "text" },
+      partnerMatchedBy: { col: "partner_matched_by", kind: "text" },
+      // Content dedupe on upload/sync (gmail/gmailSyncQueue.ts,
+      // precision-search/precisionSearchQueue.ts).
+      contentHash: { col: "content_hash", kind: "text" },
+      sourceType: { col: "source_type", kind: "text" },
+      // Gmail attachment dedupe: (gmailMessageId, gmailAttachmentId) == pairs
+      // and gmailMessageId `in` chunks (gmail/searchGmailCallable.ts).
+      gmailMessageId: { col: "gmail_message_id", kind: "text" },
+      gmailAttachmentId: { col: "gmail_attachment_id", kind: "text" },
+      // Only queried as `!= null` (extraction/bulkRetryExtraction.ts), which
+      // stays JS-side today — kept here so the spec is the complete queried-
+      // field inventory and a future `!=` compiler needs no new migration.
+      extractionError: { col: "extraction_error", kind: "text" },
+      extractionComplete: { col: "extraction_complete", kind: "boolean" },
+      partnerMatchComplete: { col: "partner_match_complete", kind: "boolean" },
+      transactionMatchComplete: { col: "transaction_match_complete", kind: "boolean" },
+      extractedDate: { col: "extracted_date", kind: "timestamp" },
+      // listFiles workhorse orderBy (tools/handlers.ts:335).
+      uploadedAt: { col: "uploaded_at", kind: "timestamp" },
+      // Stale-scan: `< staleTime` + orderBy asc (matching/processOrphanedFiles.ts).
+      updatedAt: { col: "updated_at", kind: "timestamp" },
+      createdAt: { col: "created_at", kind: "timestamp" },
+    },
+    indexes: [
+      ["tenant_id", "user_id", "uploaded_at"],
+      ["tenant_id", "user_id", "content_hash"],
+      ["tenant_id", "user_id", "gmail_message_id"],
+      ["tenant_id", "partner_id"],
+    ],
+  },
 };
