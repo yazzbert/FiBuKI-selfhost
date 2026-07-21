@@ -106,3 +106,4 @@ function flatTable(collection: string) {
 }
 
 export const sources = flatTable("sources");
+export const transactions = flatTable("transactions");
