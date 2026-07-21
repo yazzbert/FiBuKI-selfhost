@@ -172,16 +172,25 @@ class AuthShim {
     const client = await getSqlClient();
     await client.tx(getTenantId(), async (q) => {
       const t = getTenantId();
-      await q(`DELETE FROM auth_sessions WHERE tenant_id = $1 AND "userId" = $2`, [t, uid]);
-      await q(`DELETE FROM auth_accounts WHERE tenant_id = $1 AND "userId" = $2`, [t, uid]);
-      await q(`DELETE FROM auth_members WHERE tenant_id = $1 AND "userId" = $2`, [t, uid]);
-      const res = await q(`DELETE FROM auth_users WHERE tenant_id = $1 AND id = $2 RETURNING id`, [
+      const user = await q(`SELECT email FROM auth_users WHERE tenant_id = $1 AND id = $2`, [
         t,
         uid,
       ]);
-      if (res.rows.length === 0) {
+      if (user.rows.length === 0) {
         throw new AuthShimError("auth/user-not-found", `selfhost auth: no user with uid ${uid}`);
       }
+      await q(`DELETE FROM auth_sessions WHERE tenant_id = $1 AND "userId" = $2`, [t, uid]);
+      await q(`DELETE FROM auth_accounts WHERE tenant_id = $1 AND "userId" = $2`, [t, uid]);
+      await q(`DELETE FROM auth_members WHERE tenant_id = $1 AND "userId" = $2`, [t, uid]);
+      // No FKs between auth_* tables — clean up the rows that reference this
+      // user indirectly so nothing orphans: invitations they sent, and
+      // pending verifications keyed by their email.
+      await q(`DELETE FROM auth_invitations WHERE tenant_id = $1 AND "inviterId" = $2`, [t, uid]);
+      await q(`DELETE FROM auth_verifications WHERE tenant_id = $1 AND identifier = $2`, [
+        t,
+        user.rows[0].email,
+      ]);
+      await q(`DELETE FROM auth_users WHERE tenant_id = $1 AND id = $2`, [t, uid]);
     });
   }
 }
