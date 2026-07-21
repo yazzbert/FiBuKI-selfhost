@@ -292,7 +292,7 @@ export async function POST(req: Request) {
   // Determine model provider (default to anthropic for tool-call reliability; gemini opt-in)
   const modelProvider: "anthropic" | "gemini" = requestedProvider || "anthropic";
 
-  console.log(`[Chat API] Starting LangGraph agent with ${sanitizeForLog(modelProvider)}, ${rawMessages.length} messages`);
+  console.log(`[Chat API] Starting LangGraph agent with ${sanitizeForLog(modelProvider)}, ${sanitizeForLog(rawMessages.length)} messages`);
 
   // Convert messages to LangChain format
   const messages = await convertToLangChainMessages(rawMessages);
