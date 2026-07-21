@@ -1,8 +1,10 @@
 /**
- * W1 (Better Auth) — server acceptance suite. ⚠ EVERY test is `it.fails`
- * (xfail): the module under test does not exist yet. The implementation is
- * DONE when `./better-auth` exists, the `.fails` marks are removed, and the
- * suite is green — see handoffs/2026-07-21-w1-better-auth-impl.md.
+ * W1 (Better Auth) — server acceptance suite. Written spec-first with every
+ * test `it.fails` (xfail); chunk 1 (server core) implemented `./better-auth`
+ * and flipped the marks it satisfies. The remaining `.fails` marks are the
+ * auth-shim rewrite (chunk 2) — the implementation is DONE when none are
+ * left and the suite is green — see
+ * handoffs/2026-07-21-w1-better-auth-impl.md.
  *
  * The seam these tests define (kept deliberately small):
  *
@@ -44,11 +46,11 @@ import { getFirestore } from "./firestore-shim";
 import { getAuth as getAdminAuth } from "./auth-shim";
 import { createDataPlane } from "./data-plane";
 import type { TokenVerifier } from "./host";
+import { createSelfhostAuth } from "./better-auth";
 
-/* The module under test — variable specifier so tsc/vite don't resolve the
- * not-yet-existing file; at runtime the import rejects and the xfail holds. */
-const MODULE = "./better-auth";
-
+/* The seam contract, restated locally ON PURPOSE: loadAuth() assigning the
+ * real module's return value to this interface is the compile-time proof
+ * the implementation still satisfies the spec'd shape. */
 interface SelfhostAuth {
   handler: (req: Request) => Promise<Response>;
   verifier: TokenVerifier;
@@ -63,10 +65,7 @@ interface SelfhostAuth {
 }
 
 async function loadAuth(): Promise<SelfhostAuth> {
-  const mod = (await import(/* @vite-ignore */ MODULE)) as {
-    createSelfhostAuth: () => Promise<SelfhostAuth>;
-  };
-  return mod.createSelfhostAuth();
+  return createSelfhostAuth();
 }
 
 /** A Firebase-shaped uid (28 url-safe chars) — the migration fixture. */
@@ -80,8 +79,8 @@ async function allowEmail(email: string): Promise<void> {
   await getFirestore().collection("allowedEmails").add({ email, createdAt: new Date() });
 }
 
-describe("Better Auth server acceptance — ⚠ all xfail until W1 lands", () => {
-  it.fails("createSelfhostAuth() boots against the selfhost Postgres", async () => {
+describe("Better Auth server acceptance — remaining xfails are the chunk-2 auth-shim rewrite", () => {
+  it("createSelfhostAuth() boots against the selfhost Postgres", async () => {
     const auth = await loadAuth();
     expect(typeof auth.handler).toBe("function");
     expect(typeof auth.verifier).toBe("function");
@@ -89,7 +88,7 @@ describe("Better Auth server acceptance — ⚠ all xfail until W1 lands", () =>
     expect(typeof auth.signInEmail).toBe("function");
   });
 
-  it.fails("preserves caller-provided Firebase uids end to end", async () => {
+  it("preserves caller-provided Firebase uids end to end", async () => {
     const auth = await loadAuth();
     const email = uniqueEmail("uid-preserve");
     await allowEmail(email);
@@ -101,13 +100,13 @@ describe("Better Auth server acceptance — ⚠ all xfail until W1 lands", () =>
     expect(authData?.uid).toBe(FIREBASE_UID);
   });
 
-  it.fails("verifier rejects garbage and expired-session tokens with null (host answers 401)", async () => {
+  it("verifier rejects garbage and expired-session tokens with null (host answers 401)", async () => {
     const auth = await loadAuth();
     expect(await auth.verifier("not-a-session-token")).toBeNull();
     expect(await auth.verifier("")).toBeNull();
   });
 
-  it.fails("sign-in with a wrong password yields no session", async () => {
+  it("sign-in with a wrong password yields no session", async () => {
     const auth = await loadAuth();
     const email = uniqueEmail("wrong-pw");
     await allowEmail(email);
@@ -115,7 +114,7 @@ describe("Better Auth server acceptance — ⚠ all xfail until W1 lands", () =>
     await expect(auth.signInEmail(email, "wrong password")).rejects.toBeTruthy();
   });
 
-  it.fails("invite-only: provisioning an email absent from allowedEmails is refused", async () => {
+  it("invite-only: provisioning an email absent from allowedEmails is refused", async () => {
     // Ports the allowedEmails semantics (CLAUDE.md auth section) onto Better
     // Auth: the SAME data that gates registration on the Firebase build gates
     // it here. SUPER_ADMIN_EMAIL is exempt (auto-granted on first login).
@@ -128,7 +127,7 @@ describe("Better Auth server acceptance — ⚠ all xfail until W1 lands", () =>
     await expect(auth.provisionUser({ email: invited, password: "whatever whatever" })).resolves.toBeTruthy();
   });
 
-  it.fails("admin claims: SUPER_ADMIN_EMAIL verifies with token.admin === true", async () => {
+  it("admin claims: SUPER_ADMIN_EMAIL verifies with token.admin === true", async () => {
     const email = uniqueEmail("super");
     process.env.SUPER_ADMIN_EMAIL = email;
     try {
@@ -198,7 +197,7 @@ describe("Better Auth server acceptance — ⚠ all xfail until W1 lands", () =>
     expect(await auth.verifier(token)).toBeNull();
   });
 
-  it.fails("two real users are owner-scoped by uid through the data plane, one tenant", async () => {
+  it("two real users are owner-scoped by uid through the data plane, one tenant", async () => {
     // Multi-user login on the selfhost stack, with db/tenant.ts semantics
     // unchanged: both users' rows live in the ONE tenant; isolation between
     // them is the data plane's owner-scoping by uid, RLS backstop untouched.

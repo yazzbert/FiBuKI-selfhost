@@ -72,7 +72,7 @@ type QueryFn = <R = Record<string, unknown>>(
  * set_config('app.tenant_id', <tenant>, true) applied first, which is what
  * arms the RLS policies (see drizzle/0000_init.sql).
  */
-interface SqlClient {
+export interface SqlClient {
   query: QueryFn;
   tx<T>(tenantId: string | null, fn: (q: QueryFn) => Promise<T>): Promise<T>;
 }
@@ -177,6 +177,16 @@ async function getPg(): Promise<SqlClient> {
     })();
   }
   return pgPromise;
+}
+
+/**
+ * Selfhost-internal accessor: the shared SQL client, migrations applied.
+ * better-auth.ts routes ALL auth-store IO through this so identity data
+ * rides the same connection/serialization queue as document IO — in tests
+ * that is the same in-memory PGlite instance the shim uses.
+ */
+export function getSqlClient(): Promise<SqlClient> {
+  return getPg();
 }
 
 /** Every document read/write runs tenant-scoped: one transaction, SET LOCAL app.tenant_id. */
