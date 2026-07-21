@@ -1,5 +1,23 @@
 # W1 — Better Auth: implementation (spec done, suites are the contract)
 
+> **STATUS 2026-07-21 (implementation session): ALL CHUNKS DONE.** Every
+> W1 spec mark (server, client, api-smoke) is flipped; each PR is CI-green
+> and adversarially reviewed (verdicts: MERGEABLE; findings addressed or
+> logged in PR comments). Awaiting Stefan's merge OK, suggested order
+> #21 → #22 → #23 → #24 (only #21/#23 share a file — better-auth.ts,
+> disjoint regions):
+>
+> - **PR #21** chunk 2 — auth-shim over the real store (4 server marks)
+> - **PR #22** chunk 3 — /__auth host mount, Better Auth = default verifier
+> - **PR #23** chunk 4 — client rewrite incl. Google social + invite gate
+>   as a user.create DB hook (3 client marks)
+> - **PR #24** chunk 5 — 401 contract on 43 app/api routes (6 smoke marks)
+>
+> Review follow-ups worth carrying to W2/W3 (details in PR #23 comments):
+> social path has no test coverage; mid-pickup reload strands a server
+> session; non-invited Google users fail silently (no "access requested"
+> banner); login page's GitHub button is dead under selfhost.
+
 Successor to the W1 spec handoff (fulfilled 2026-07-21, deleted). The spec
 session measured the surface and encoded acceptance as xfail suites —
 **PR #19** (`w1-better-auth-spec`). Implementation is DONE when every
