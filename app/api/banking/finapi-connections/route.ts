@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { FinapiClient, FinapiEnvironment } from "@/lib/finapi/client";
 import { callCloudFunction, setAuthToken } from "@/lib/firebase/callable-server";
@@ -308,6 +308,8 @@ export async function GET(request: NextRequest) {
       tokenExpired: tokenRefreshFailed,
     });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[finAPI Connections] Error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to fetch connections" },
@@ -449,6 +451,8 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[finAPI Connections] Delete error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to delete connection" },
@@ -531,6 +535,8 @@ export async function PATCH(request: NextRequest) {
       message: "finAPI user reset. You can now connect your bank fresh."
     });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[finAPI Connections] Reset error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to reset finAPI user" },

@@ -7,12 +7,13 @@
  *
  * What the measurement found (2026-07-21): `getServerUserIdWithFallback`
  * THROWS on a missing/invalid token, so the routes' `if (!userId) return 401`
- * branches are DEAD CODE — the throw lands in each route's generic catch and
- * comes back as a 500 (sources/disconnect and plaid/link-token additionally
- * echo the internal error message into the response body). The passing tests
- * pin only "an unauthenticated request gets a JSON error response, no crash";
- * the `it.fails` (⚠ xfail) tests state the 401 contract W1 must establish
- * when the verify seam is swapped. Remove the marks when it lands.
+ * branches were DEAD CODE — the throw landed in each route's generic catch
+ * and came back as a 500 (sources/disconnect and plaid/link-token
+ * additionally echoed the internal error message into the response body).
+ * W1 chunk 5 established the 401 contract: the helper throws a typed
+ * UnauthorizedError and every consumer route's catch opens with the
+ * unauthorizedResponse() guard, answering 401 {"error":"Unauthorized"}
+ * with no internal text. The former xfail marks below are now plain tests.
  *
  * Runs under vitest.api-smoke.config.ts ONLY (needs root node_modules).
  */
@@ -109,14 +110,13 @@ describe("unauthenticated requests to auth-touching routes", () => {
     it(`${route.name} returns a JSON error response (no crash, nothing served)`, async () => {
       const res = await route.invoke();
       expect(res).toBeInstanceOf(Response);
-      // Today most of these come back 500 (dead 401 branches — see header);
-      // the pin here is only: an error status and no data served.
+      // The pin here is only: an error status and no data served.
       expect(res.status).toBeGreaterThanOrEqual(400);
       const body = (await res.json()) as { error?: unknown };
       expect(body.error).toBeTruthy();
     });
 
-    it.fails(`⚠ ${route.name} answers 401 to a missing token (W1 contract)`, async () => {
+    it(`${route.name} answers 401 to a missing token (W1 contract)`, async () => {
       const res = await route.invoke();
       expect(res.status).toBe(401);
       // No internal error text may leak into the body once this is real.

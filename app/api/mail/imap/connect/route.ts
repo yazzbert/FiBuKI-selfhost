@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ImapFlow } from "imapflow";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { encrypt, getEncryptionKey } from "@/lib/crypto/encryption";
 
 const db = getAdminDb();
@@ -171,6 +171,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, integrationId: integrationRef.id });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[IMAP connect] error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to connect mailbox" },

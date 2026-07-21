@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
  * - Vercel AI SDK compatible response format
  */
 
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
 
@@ -284,7 +284,14 @@ export async function POST(req: Request) {
   const { createLangfuseHandler, flushLangfuse } = await getLangfuse();
 
   const authHeader = req.headers.get("Authorization") || "";
-  const userId = await getServerUserIdWithFallback(req);
+  let userId: string;
+  try {
+    userId = await getServerUserIdWithFallback(req);
+  } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
+    throw error;
+  }
   const { messages: rawMessages, modelProvider: requestedProvider } = await req.json();
 
   // Determine model provider (default to anthropic for tool-call reliability; gemini opt-in)

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 
 // Dynamic imports to avoid build-time analysis issues with LangChain
 const getLangChainMessages = async () => import("@langchain/core/messages");
@@ -179,6 +179,8 @@ export async function POST(request: NextRequest) {
       pendingConfirmation: result.pendingConfirmation,
     });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[Agent API] Error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal server error" },
