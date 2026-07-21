@@ -111,4 +111,35 @@ export const FLATTENED: Readonly<Record<string, FlatSpec>> = {
     },
     indexes: [["tenant_id", "user_id"]],
   },
+  transactions: {
+    table: "transactions",
+    fields: {
+      // Query call sites (~175): tools/handlers.ts, transactions/*,
+      // matching/*, banking/*, finapi/*, imports/*, sources/*, gmail/*,
+      // precision-search/*, billing/clearQuotaExceeded.ts, digest/*,
+      // emails/resolveMergeFields.ts, analytics/*, reconciliation/*,
+      // workers/*, workflows/*, user-export/*.
+      userId: { col: "user_id", kind: "text" },
+      partnerId: { col: "partner_id", kind: "text" },
+      sourceId: { col: "source_id", kind: "text" },
+      noReceiptCategoryId: { col: "no_receipt_category_id", kind: "text" },
+      importJobId: { col: "import_job_id", kind: "text" },
+      // Bank-sync dedupe: `in` chunks of 30 plus `>= iban| AND < iban|~`
+      // prefix ranges (banking/syncBankTransactions.ts, finapi/syncCallable.ts).
+      dedupeHash: { col: "dedupe_hash", kind: "text" },
+      partnerMatchedBy: { col: "partner_matched_by", kind: "text" },
+      noReceiptCategoryMatchedBy: { col: "no_receipt_category_matched_by", kind: "text" },
+      isComplete: { col: "is_complete", kind: "boolean" },
+      quotaExceeded: { col: "quota_exceeded", kind: "boolean" },
+      // The workhorse orderBy/range field (list views, balances, digests);
+      // first real user of the timestamp keyset-cursor path.
+      date: { col: "date", kind: "timestamp" },
+      createdAt: { col: "created_at", kind: "timestamp" },
+    },
+    indexes: [
+      ["tenant_id", "user_id", "date"],
+      ["tenant_id", "user_id", "dedupe_hash"],
+      ["tenant_id", "source_id"],
+    ],
+  },
 };

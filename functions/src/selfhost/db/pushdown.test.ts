@@ -265,3 +265,155 @@ describe("compile shapes (the perf contract)", () => {
     expect(c.sql).not.toContain("LIMIT");
   });
 });
+
+/**
+ * Transactions is the first collection to lean on the timestamp keyset-cursor
+ * path in production shapes. The fixtures mirror the app's hot queries:
+ * tools/handlers.ts listTransactions (userId == + date range + orderBy date
+ * desc + startAfter(snap) + limit) and the bank-sync dedupe scans
+ * (dedupeHash `in` chunks and `>= iban| AND < iban|~` prefix ranges).
+ *
+ * NOTE: `date` is only ever a Timestamp, json-null, or absent here — a
+ * wrong-typed date under a pushed LIMIT is the header's accepted divergence,
+ * so the wrong-typed fixture value sits on isComplete instead (like s08).
+ */
+describe("pushdown differential: transactions shapes", () => {
+  const TXFLAT = "transactions";
+  const TXREF = "txdiff"; // JSONB twin — no spec, pure JS pipeline
+
+  const TXFIXTURES: Record<string, Record<string, unknown>> = {
+    t01: { userId: "u1", sourceId: "s1", date: T(1000), createdAt: T(1000), dedupeHash: "AT1|a", isComplete: false },
+    t02: { userId: "u1", sourceId: "s1", date: T(2000), createdAt: T(1500), dedupeHash: "AT1|b", isComplete: true, partnerId: "p1", partnerMatchedBy: "manual" },
+    t03: { userId: "u1", sourceId: "s2", date: T(2000), dedupeHash: "AT2|a", isComplete: false, partnerId: "p1", partnerMatchedBy: "auto" },
+    t04: { userId: "u1", date: T(3000), isComplete: false, partnerMatchedBy: "ai", quotaExceeded: true },
+    t05: { userId: "u1", isComplete: false }, // date missing
+    t06: { userId: "u1", date: null, quotaExceeded: true },
+    t07: { userId: "u2", sourceId: "s3", date: T(1500), dedupeHash: "AT1|c", importJobId: "job1" },
+    t08: { userId: "u1", date: T(5000), isComplete: "yes" }, // wrong-typed boolean
+    t09: { userId: "u1", sourceId: "s1", date: T(4000), importJobId: "job1", noReceiptCategoryId: "cat1", noReceiptCategoryMatchedBy: "suggestion" },
+    t10: { userId: "u1", sourceId: "s1", date: T(2000), dedupeHash: "AT1|d", isComplete: true }, // date tie with t02/t03
+  };
+
+  beforeAll(async () => {
+    await __resetFirestoreShim();
+    for (const [id, data] of Object.entries(TXFIXTURES)) {
+      await db.collection(TXFLAT).doc(id).set(data);
+      await db.collection(TXREF).doc(id).set(data);
+    }
+  });
+
+  async function sameTx(build: Build): Promise<string[]> {
+    const a = await idsFrom(TXFLAT, build);
+    const b = await idsFrom(TXREF, build);
+    expect(a).toEqual(b);
+    return a;
+  }
+
+  async function sameTxSet(build: Build): Promise<string[]> {
+    const a = await idsFrom(TXFLAT, build);
+    const b = await idsFrom(TXREF, build);
+    expect([...a].sort()).toEqual([...b].sort());
+    return a;
+  }
+
+  it("listTransactions shape: date range + orderBy desc + limit, ties broken by id", async () => {
+    await sameTx((c) =>
+      c
+        .where("userId", "==", "u1")
+        .where("date", ">=", T(1000))
+        .where("date", "<", T(4000))
+        .orderBy("date", "desc")
+        .limit(3),
+    );
+  });
+
+  it("listTransactions cursor: startAfter(snapshot) paged to exhaustion over ties and nulls", async () => {
+    const page = async (col: any, after?: any) => {
+      let q = col.where("userId", "==", "u1").orderBy("date", "desc").limit(2);
+      if (after) q = q.startAfter(after);
+      return q.get();
+    };
+    const perBackend: string[][] = [];
+    for (const collection of [TXFLAT, TXREF]) {
+      const col = db.collection(collection);
+      const all: string[] = [];
+      let snap = await page(col);
+      while (snap.docs.length > 0) {
+        all.push(...snap.docs.map((d: any) => d.id));
+        snap = await page(col, snap.docs[snap.docs.length - 1]);
+      }
+      perBackend.push(all);
+    }
+    expect(perBackend[0]).toEqual(perBackend[1]);
+    expect(perBackend[0]).toHaveLength(9); // all u1 docs, incl. missing/null dates
+  });
+
+  it("bank-sync dedupe shapes: `in` chunk and iban| prefix range", async () => {
+    await sameTxSet((c) => c.where("userId", "==", "u1").where("dedupeHash", "in", ["AT1|a", "AT1|d", "AT9|x"]));
+    expect(
+      await sameTxSet((c) => c.where("userId", "==", "u1").where("dedupeHash", ">=", "AT1|").where("dedupeHash", "<", "AT1|~")),
+    ).toEqual(expect.arrayContaining(["t01", "t02", "t10"]));
+    await sameTxSet((c) => c.where("sourceId", "==", "s1").where("dedupeHash", "in", ["AT1|b"]));
+  });
+
+  it("matcher shapes: matchedBy `in`, isComplete ==, importJobId ==, quotaExceeded ==", async () => {
+    await sameTxSet((c) => c.where("userId", "==", "u1").where("partnerId", "==", "p1").where("partnerMatchedBy", "in", ["manual", "suggestion", "ai"]));
+    await sameTx((c) => c.where("userId", "==", "u1").where("isComplete", "==", false).orderBy("date", "desc").limit(3));
+    await sameTxSet((c) => c.where("userId", "==", "u1").where("importJobId", "==", "job1"));
+    await sameTxSet((c) => c.where("userId", "==", "u1").where("quotaExceeded", "==", true));
+    await sameTxSet((c) => c.where("userId", "==", "u1").where("noReceiptCategoryId", "==", "cat1").where("noReceiptCategoryMatchedBy", "in", ["manual", "suggestion"]));
+  });
+
+  it("createdAt range (digest shape) and __name__ in (enrichment batches)", async () => {
+    await sameTxSet((c) => c.where("userId", "==", "u1").where("createdAt", ">=", T(1200)));
+    await sameTxSet((c) => c.where("__name__", "in", ["t01", "t07", "transactions/t09"]));
+  });
+});
+
+describe("compile shapes: transactions (the perf contract)", () => {
+  const spec = FLATTENED.transactions;
+  const tid = getTenantId();
+
+  it("pushes the full tools/handlers.ts listTransactions shape incl. LIMIT", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [
+        { field: "userId", op: "==", value: "u1" },
+        { field: "date", op: ">=", value: T(1000) },
+        { field: "date", op: "<", value: T(4000) },
+      ],
+      [{ field: "date", dir: "desc" }],
+      50,
+      0,
+      { values: [T(2000)], snapId: "t03" },
+    );
+    // timestamp < stays exact (only text < is a superset), so LIMIT pushes
+    expect(c.sql).toContain("LIMIT 50");
+    // desc keyset: strictly-below branch treats NULL (missing/json-null,
+    // JS -Infinity) as past every value, then the id tiebreak branch
+    expect(c.sql).toContain(`("date" < $5 OR "date" IS NULL)`);
+    expect(c.sql).toContain(`"date" = $5 AND id COLLATE "C" < $6`);
+    expect(c.sql).toContain(`ORDER BY "date" DESC NULLS LAST, id COLLATE "C" DESC`);
+  });
+
+  it("pushes the dedupe prefix-range with LIMIT withheld only when unordered", () => {
+    const c = compileFlatQuery(
+      spec,
+      tid,
+      [
+        { field: "userId", op: "==", value: "u1" },
+        { field: "dedupeHash", op: ">=", value: "AT1|" },
+        { field: "dedupeHash", op: "<", value: "AT1|~" },
+      ],
+      [],
+      null,
+      0,
+      null,
+    );
+    expect(c.sql).toContain(`"user_id" = $2`);
+    expect(c.sql).toContain(`"dedupe_hash" COLLATE "C" >= $3`);
+    // text < ORs in json-null rows (superset; JS re-verifies)
+    expect(c.sql).toContain(`"dedupe_hash" COLLATE "C" < $4 OR jsonb_typeof("data"->'dedupeHash') = 'null'`);
+  });
+});
