@@ -124,8 +124,10 @@ removal (W5), no reconciliation backfill (W6), no Electric/pg-boss/billing
 Scoped runs only (`node node_modules/.bin/<runner> run <file> --pool=forks
 --maxWorkers=1` — the guard hook text-matches the runner's name anywhere in
 a command, including filenames: stage by directory, use `-F`/`--body-file`).
-**No npm on the audit box** — the `better-auth` install (chunk 1) must
-happen on CT 999 or a workstation, or land via a PR whose lockfile change
-someone else installs. Root `node_modules` is empty here: the api-smoke
-profile only runs in CI. Full suites on CT 999/CI. Code → PR + CI +
+npm/npx are installed since 2026-07-21 (official Node 24 tarball under
+`~/.local/node`), and **`better-auth@1.6.23` is already installed in
+functions/** — the resulting `package.json` + `package-lock.json` changes
+are sitting UNCOMMITTED in the working tree, waiting to be the first commit
+of the chunk-1 branch. Root `node_modules` is still empty (api-smoke
+profile runs in CI). Full suites on CT 999/CI. Code → PR + CI +
 adversarial review + explicit merge OK; handoffs/docs → straight to main.
