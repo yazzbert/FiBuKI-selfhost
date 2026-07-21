@@ -12,6 +12,12 @@ const db = getAdminDb();
 const FILES_COLLECTION = "files";
 const TRANSACTIONS_COLLECTION = "transactions";
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/[\r\n]/g, " ");
+}
+
 function normalizeMimeType(mimeType: string, filename: string): string {
   if (
     mimeType === "application/octet-stream" &&
@@ -114,7 +120,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("Error downloading attachment:", error);
+    console.error("Error downloading attachment:", sanitizeForLog(error));
 
     if (error instanceof Error && error.message === "AUTH_EXPIRED") {
       return NextResponse.json(
@@ -380,7 +386,7 @@ export async function POST(request: NextRequest) {
       connectedToTransaction: !!transactionId,
     });
   } catch (error) {
-    console.error("Error saving attachment:", error);
+    console.error("Error saving attachment:", sanitizeForLog(error));
 
     if (error instanceof Error && error.message === "AUTH_EXPIRED") {
       return NextResponse.json(

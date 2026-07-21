@@ -21,6 +21,12 @@ import { getWorkerPrompt } from "@/lib/chat/worker-prompts";
 import { createChatModel, ModelProvider } from "./model";
 import { WorkerType, WorkerAction } from "@/types/worker";
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/[\r\n]/g, " ");
+}
+
 // ============================================================================
 // State Definition
 // ============================================================================
@@ -283,7 +289,7 @@ function getWorkerTools(workerType: WorkerType): StructuredToolInterface[] {
   console.log(
     "[WorkerGraph] Filtered to %d tools for %s:",
     filteredTools.length,
-    workerType,
+    sanitizeForLog(workerType),
     filteredTools.map((t) => t.name).join(", ")
   );
 
@@ -662,7 +668,7 @@ function routeAfterTools(state: WorkerState): "agent" | "respond" {
  * Build a worker graph for a specific worker type
  */
 export function buildWorkerGraph(workerType: WorkerType) {
-  console.log(`[WorkerGraph] Building graph for ${workerType}`);
+  console.log(`[WorkerGraph] Building graph for ${sanitizeForLog(workerType)}`);
 
   const toolsNode = createToolsNode(workerType);
 

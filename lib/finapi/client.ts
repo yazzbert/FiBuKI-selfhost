@@ -21,6 +21,12 @@ const WEBFORM_ENVIRONMENTS = {
 
 export type FinapiEnvironment = keyof typeof FINAPI_ENVIRONMENTS;
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/[\r\n]/g, " ");
+}
+
 export interface FinapiConfig {
   clientId: string;
   clientSecret: string;
@@ -292,7 +298,7 @@ export class FinapiClient {
       headers["Authorization"] = `Bearer ${options.token}`;
     }
 
-    console.log(`[finAPI] ${method} ${url}`);
+    console.log(`[finAPI] ${sanitizeForLog(method)} ${sanitizeForLog(url)}`);
 
     const response = await fetch(url, {
       method,
@@ -542,7 +548,7 @@ export class FinapiClient {
    */
   async getWebForm(webFormId: string, userToken: string): Promise<FinapiWebForm> {
     const url = `${this.webformUrl}/api/webForms/${encodeURIComponent(webFormId)}`;
-    console.log(`[finAPI] GET ${url}`);
+    console.log(`[finAPI] GET ${sanitizeForLog(url)}`);
 
     const response = await fetch(url, {
       method: "GET",

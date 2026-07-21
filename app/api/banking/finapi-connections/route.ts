@@ -24,6 +24,12 @@ import {
   DeleteBankingConnectionResponse,
 } from "@/types/banking-sync";
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/[\r\n]/g, " ");
+}
+
 interface FinapiAccountInfo {
   accountId: number;
   iban?: string;
@@ -432,9 +438,9 @@ export async function DELETE(request: NextRequest) {
     // Delete the connection from finAPI
     try {
       await client.deleteBankConnection(bankConnectionId, userToken);
-      console.log(`[finAPI Connections] Deleted bank connection ${bankConnectionId}`);
+      console.log(`[finAPI Connections] Deleted bank connection ${sanitizeForLog(bankConnectionId)}`);
     } catch (err) {
-      console.error("[finAPI Connections] Failed to delete connection %s:", bankConnectionId, err);
+      console.error("[finAPI Connections] Failed to delete connection %s:", sanitizeForLog(bankConnectionId), sanitizeForLog(err));
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "Failed to delete connection from finAPI" },
         { status: 500 }

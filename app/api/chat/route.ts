@@ -25,6 +25,12 @@ const db = getAdminDb();
 
 export const maxDuration = 60;
 
+// Strip CR/LF so request-derived values cannot forge log lines
+function sanitizeForLog(value: unknown): string {
+  const raw = value instanceof Error ? value.stack || value.message : String(value);
+  return raw.replace(/[\r\n]/g, " ");
+}
+
 // ============================================================================
 // Message Conversion
 // ============================================================================
@@ -286,7 +292,7 @@ export async function POST(req: Request) {
   // Determine model provider (default to anthropic for tool-call reliability; gemini opt-in)
   const modelProvider: "anthropic" | "gemini" = requestedProvider || "anthropic";
 
-  console.log(`[Chat API] Starting LangGraph agent with ${modelProvider}, ${rawMessages.length} messages`);
+  console.log(`[Chat API] Starting LangGraph agent with ${sanitizeForLog(modelProvider)}, ${rawMessages.length} messages`);
 
   // Convert messages to LangChain format
   const messages = await convertToLangChainMessages(rawMessages);
