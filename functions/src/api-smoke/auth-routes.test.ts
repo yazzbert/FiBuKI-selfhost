@@ -1,8 +1,9 @@
 /**
  * W1 — auth smoke over a slice of the app/api/* routes (the auth-touching
  * ones sit directly on top of the token-verify seam Better Auth replaces).
- * First tests ever against these handlers; 40 of the 61 routes authenticate
- * via lib/auth/get-server-user.ts, this slice covers 6 representative ones.
+ * First tests ever against these handlers; 44 of the 61 routes authenticate
+ * via lib/auth/get-server-user.ts (blast radius measured in the 2026-07-21
+ * auth-verify investigation) — this slice covers 6 representative ones.
  *
  * What the measurement found (2026-07-21): `getServerUserIdWithFallback`
  * THROWS on a missing/invalid token, so the routes' `if (!userId) return 401`
@@ -95,19 +96,12 @@ describe("get-server-user helpers (the seam W1 swaps)", () => {
     await expect(isServerUserAdmin(new Request("http://test.local/x"))).resolves.toBe(false);
   });
 
-  it.fails("⚠ selfhost server-side verify seam exists (lib/selfhost/server-auth)", async () => {
-    // Under FIBUKI_BACKEND=selfhost the Next server must verify Better Auth
-    // session tokens instead of Firebase ID tokens — via the same alias
-    // mechanism as the client shims (next.config.ts), so the routes and
-    // get-server-user.ts stay untouched. This names that seam; the
-    // implementation session gives it the same helper surface.
-    const mod = (await import(/* @vite-ignore */ "@/lib/selfhost/" + "server-auth")) as {
-      getServerUserIdWithFallback?: unknown;
-      isServerUserAdmin?: unknown;
-    };
-    expect(typeof mod.getServerUserIdWithFallback).toBe("function");
-    expect(typeof mod.isServerUserAdmin).toBe("function");
-  });
+  // NOTE (2026-07-21): whether these routes ever verify selfhost sessions is
+  // an OPEN QUESTION, deliberately not encoded here — the auth-verify
+  // decision handoff records "the Next API routes are not part of the
+  // selfhost data plane", while several routes the selfhost UI does use
+  // (chat, gmail sync) live behind this helper. See the W1 implementation
+  // handoff's decision list before adding a selfhost seam test.
 });
 
 describe("unauthenticated requests to auth-touching routes", () => {
