@@ -19,7 +19,7 @@
  *   manifest.json                    DumpManifest (see below)
  *   collections/<file>.ndjson        one DocLine per line, wire-encoded data
  *   users.ndjson                     one UserLine per line
- *   storage-manifest.ndjsonl        one StorageLine per line
+ *   storage-manifest.ndjson          one StorageLine per line
  *   objects/<path...>                raw object bytes, Firebase paths verbatim
  *
  * The seams these tests define:
