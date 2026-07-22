@@ -74,3 +74,14 @@ Each needs a test pinning the new behavior:
 - Branch from main; small conventional commits; CI-green AND adversarially
   reviewed before asking to merge; merge only on Stefan's explicit
   go-ahead (do not self-merge).
+
+## On completion — notify Felix
+Once this chunk lands (and Stefan gives the merge go-ahead), send the prepared
+status email to Felix so he can act on the hosting decision:
+  - From: homelab@syh.at  ·  To: felixtosh@gmail.com  ·  Cc: stefan@syh.at
+  - Subject: "FiBuKI self-host is ready for cutover — need your call on hosting"
+  - Content: what's done (Phase 1 / W1 / W3 + this hardening), and his two
+    asks — DECIDE cloud hosting target (blocks W4), DO the creds-side
+    `selfhost:export`; plus License+CLA timing with Stefan.
+Note: the Gmail connector only exposes create_draft (no send) — create the
+draft in the homelab@syh.at account for Stefan to send, or Stefan sends direct.
