@@ -246,7 +246,7 @@ function txFixture(userId: string, over: Record<string, unknown> = {}): Record<s
 }
 
 describe("W3 dump format — ⚠ all xfail until W3 lands", () => {
-  it.fails("serializeDocData emits wire tags, drops undefined, refuses exotics", async () => {
+  it("serializeDocData emits wire tags, drops undefined, refuses exotics", async () => {
     const { serializeDocData } = await loadFormat();
 
     const out = serializeDocData({
@@ -277,7 +277,7 @@ describe("W3 dump format — ⚠ all xfail until W3 lands", () => {
     expect(() => serializeDocData({ __evil: 1 })).toThrow();
   });
 
-  it.fails("parseManifest validates the dump contract", async () => {
+  it("parseManifest validates the dump contract", async () => {
     const { parseManifest, DUMP_VERSION } = await loadFormat();
     expect(DUMP_VERSION).toBe(1);
 
