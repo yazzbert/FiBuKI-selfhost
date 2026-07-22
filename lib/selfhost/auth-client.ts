@@ -6,22 +6,31 @@
  * FIBUKI_BACKEND=selfhost). Zero app-code changes — same trick as the
  * firestore / storage / functions client shims.
  *
- * Identity is **Authentik** via an OIDC Authorization-Code + PKCE flow (public
- * SPA client, no client secret). Design: frontend-shim-design.md §4.
+ * Identity comes from one of two backends, mirroring the host's
+ * `server.ts#resolveVerifier` precedence (W1 chunk 4):
  *
+ *   - NEXT_PUBLIC_OIDC_ISSUER set → **external OIDC** (Authentik/Keycloak/
+ *     Entra) via Authorization-Code + PKCE (public SPA client, no secret).
+ *     Design: frontend-shim-design.md §4. Unchanged behavior.
+ *   - otherwise → **Better Auth built-in** (the default): real credential
+ *     sign-in against the host's `/__auth` endpoints.
+ *     `signInWithEmailAndPassword` POSTs the credentials, exchanges the
+ *     session for a JWKS-verifiable JWT at `/__auth/token`, and stores both;
+ *     `signInWithPopup(GoogleAuthProvider)` starts the Google social flow
+ *     (BYO OAuth client on the host — GOOGLE_CLIENT_ID/SECRET). The API
+ *     base comes from NEXT_PUBLIC_FIBUKI_API_URL or `__configureAuthClient`
+ *     (same pattern as the sibling firestore/storage client shims).
+ *
+ * Shared semantics (both modes):
  *   - `onAuthStateChanged(auth, cb)` is the SOLE state source (mirrors
  *     components/auth/auth-provider.tsx). It fires once with the restored
  *     user on subscribe, then on every login / logout / token change.
- *   - `signIn*()` redirect the browser to Authentik's authorize endpoint. The
- *     redirect lands back on the app; module init detects the `?code&state`
- *     callback on ANY page (no dedicated route needed — keeps the app
- *     unmodified), exchanges the code, and fires `onAuthStateChanged`.
- *   - `getIdToken()` returns the OIDC **id_token** (the host TokenVerifier
- *     validates it against Authentik's JWKS — same token for callables and
- *     `/api/*`). It refreshes via the refresh_token when near expiry or when
- *     `forceRefresh` is passed (auth-provider forces on visibilitychange).
- *   - `getIdTokenResult().claims.admin` is derived from the id_token: a direct
- *     `admin` claim, or membership of the Authentik group named by
+ *   - `getIdToken()` returns a locally-decodable JWT the host verifies via
+ *     JWKS (same token for callables and `/api/*`). It refreshes (session
+ *     token in Better Auth mode, refresh_token in OIDC mode) when near
+ *     expiry or when `forceRefresh` is passed.
+ *   - `getIdTokenResult().claims.admin` is derived from the token: a direct
+ *     `admin` claim, or membership of the group named by
  *     NEXT_PUBLIC_OIDC_ADMIN_GROUP (default "fibuki-admin").
  *   - Dev short-circuit: NEXT_PUBLIC_FIBUKI_DEV_UID mints a synthetic signed-in
  *     user with no network at all (pairs with the host's FIBUKI_DEV_UID, which
@@ -69,6 +78,38 @@ const TOKENS_KEY = "fibuki.oidc.tokens";
 const PKCE_KEY = "fibuki.oidc.pkce";
 
 const OIDC_REDIRECT_URI = or(process.env.NEXT_PUBLIC_OIDC_REDIRECT_URI);
+
+/* ------------------------------------------------------------------ */
+/* Better Auth transport (default mode: no external OIDC issuer)       */
+/* ------------------------------------------------------------------ */
+
+interface AuthClientTransport {
+  apiUrl: string;
+}
+
+let _transport: AuthClientTransport | null = null;
+
+/**
+ * Point the client at a fibuki-api host — same pattern as
+ * __configureFirestoreClient / __configureStorageClient. Tests boot the
+ * Better Auth handler over a socket and configure the client here; browsers
+ * normally rely on the NEXT_PUBLIC_FIBUKI_API_URL fallback instead.
+ */
+export function __configureAuthClient(t: AuthClientTransport): void {
+  _transport = { apiUrl: t.apiUrl.replace(/\/$/, "") };
+}
+
+/** Base URL of the host's Better Auth mount, e.g. "https://api.x/__auth". */
+function authApiBase(): string {
+  if (_transport) return `${_transport.apiUrl}/__auth`;
+  const apiUrl =
+    (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_FIBUKI_API_URL) || "";
+  if (apiUrl) return `${apiUrl.replace(/\/$/, "")}/__auth`;
+  throw new AuthError(
+    "auth/invalid-api-key",
+    "Auth client not configured: set NEXT_PUBLIC_FIBUKI_API_URL or call __configureAuthClient().",
+  );
+}
 
 function redirectUri(): string {
   if (OIDC_REDIRECT_URI) return OIDC_REDIRECT_URI;
@@ -142,6 +183,9 @@ interface StoredTokens {
   id_token: string;
   access_token?: string;
   refresh_token?: string;
+  /** Better Auth session token (built-in mode) — re-mints the JWT at
+   *  /__auth/token when it goes stale, and revokes the session on signOut. */
+  session_token?: string;
   /** ms epoch at which id_token expires (from its `exp`). */
   expires_at: number;
 }
@@ -472,7 +516,44 @@ async function freshIdToken(force: boolean): Promise<string> {
   return _refreshInFlight;
 }
 
+/** Built-in mode refresh: re-mint the JWT from the Better Auth session. */
+async function refreshViaSession(tokens: StoredTokens): Promise<string> {
+  let base: string;
+  try {
+    base = authApiBase();
+  } catch {
+    // Unconfigured (test-injected session) — hand back the existing token;
+    // the host will 401 once it truly expires.
+    return tokens.id_token;
+  }
+  const res = await fetch(`${base}/token`, {
+    headers: { authorization: `Bearer ${tokens.session_token}` },
+  });
+  if (!res.ok) {
+    // Session revoked or expired — sign out cleanly so the UI shows the
+    // login screen rather than looping on a dead token.
+    clearTokens();
+    _auth.currentUser = null;
+    notify();
+    throw new AuthError("auth/user-token-expired", `Session refresh failed (${res.status}).`);
+  }
+  const body = (await res.json()) as { token?: string };
+  if (!body.token) {
+    throw new AuthError("auth/internal-error", "Token refresh response had no token.");
+  }
+  const next: StoredTokens = {
+    ...tokens,
+    id_token: body.token,
+    expires_at: tokensToExpiry(body.token),
+  };
+  saveTokens(next);
+  setUserFromTokens(next);
+  notify();
+  return next.id_token;
+}
+
 async function refreshTokens(tokens: StoredTokens): Promise<string> {
+  if (tokens.session_token) return refreshViaSession(tokens);
   if (!tokens.refresh_token) {
     // No refresh token (offline_access not granted) — fall back to the
     // existing id_token; the host will 401 once it truly expires and the app's
@@ -621,12 +702,65 @@ async function maybeCompleteCallback(): Promise<boolean> {
   return true;
 }
 
+/** Query param marking a return from the Better Auth Google social flow. */
+const SOCIAL_MARKER = "fibuki_social";
+
+/**
+ * Complete a Google social sign-in (built-in mode). The Better Auth callback
+ * on the API host set a session COOKIE there and redirected back to us with
+ * the marker param; pick the session up and swap it for the bearer-token
+ * world the rest of the client lives in. Cookie pickup only works when app
+ * and API share an origin (the standard one-reverse-proxy deployment) — the
+ * host deliberately never allows credentialed CORS, so a split-origin
+ * Google flow needs an external OIDC front instead.
+ */
+async function maybeCompleteSocialCallback(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const params = new URLSearchParams(window.location.search);
+  if (!params.get(SOCIAL_MARKER)) return;
+  // Strip the marker first — a reload must not retry the pickup.
+  params.delete(SOCIAL_MARKER);
+  const clean = window.location.pathname + (params.toString() ? `?${params.toString()}` : "");
+  window.history.replaceState({}, "", clean);
+  try {
+    const base = authApiBase();
+    const res = await fetch(`${base}/get-session`, { credentials: "include" });
+    if (!res.ok) return;
+    // The session body carries the raw session token (get-session responses
+    // never emit the bearer plugin's set-auth-token header — that only rides
+    // along when a set-cookie is issued, e.g. on sign-in).
+    const body = (await res.json()) as { session?: { token?: string } } | null;
+    const sessionToken = body?.session?.token;
+    if (!sessionToken) return;
+    adoptSession(sessionToken, await mintJwt(base, sessionToken));
+  } catch {
+    /* not signed in — the login screen renders normally */
+  }
+}
+
 async function doSignOut(): Promise<void> {
+  const tokens = loadTokens();
   clearTokens();
   _auth.currentUser = null;
   notify();
-  // Best-effort RP-initiated logout so the Authentik session ends too. Fire and
-  // forget — the local session is already gone.
+  // Built-in mode: best-effort server-side sign-out so the SESSION is
+  // revoked (which revokes every JWT minted from it — the verifier's sid
+  // check), not merely forgotten locally. Fire and forget.
+  if (!DEV_UID && !OIDC_ISSUER) {
+    if (tokens?.session_token) {
+      try {
+        const base = authApiBase();
+        void fetch(`${base}/sign-out`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${tokens.session_token}` },
+        }).catch(() => undefined);
+      } catch {
+        /* unconfigured — local sign-out already done */
+      }
+    }
+    return;
+  }
+  // OIDC mode: best-effort RP-initiated logout so the IdP session ends too.
   if (!DEV_UID && typeof window !== "undefined") {
     try {
       const { end_session_endpoint } = await discover();
@@ -674,9 +808,14 @@ function initSession(): void {
   if (typeof window === "undefined") return;
 
   // Restore any persisted session immediately so the first onAuthStateChanged
-  // has the user, then complete a pending OIDC callback (which re-notifies).
+  // has the user, then complete a pending callback (which re-notifies) —
+  // OIDC code exchange in issuer mode, Google social pickup in built-in mode.
   setUserFromTokens(loadTokens());
-  void maybeCompleteCallback();
+  if (OIDC_ISSUER) {
+    void maybeCompleteCallback();
+  } else {
+    void maybeCompleteSocialCallback();
+  }
 
   // Cross-tab sync: a sign-in / sign-out / refresh in another tab writes
   // TOKENS_KEY; mirror it here so this tab doesn't keep operating on a stale
@@ -733,25 +872,124 @@ export interface UserCredential {
   operationType: "signIn";
 }
 
+/** Mint a JWKS-verifiable JWT from a Better Auth session token. */
+async function mintJwt(base: string, sessionToken: string): Promise<string> {
+  const res = await fetch(`${base}/token`, {
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  if (!res.ok) {
+    throw new AuthError("auth/internal-error", `Token mint failed (${res.status}).`);
+  }
+  const body = (await res.json()) as { token?: string };
+  if (!body.token) {
+    throw new AuthError("auth/internal-error", "Token endpoint returned no token.");
+  }
+  return body.token;
+}
+
+function adoptSession(sessionToken: string, idToken: string): void {
+  const stored: StoredTokens = {
+    id_token: idToken,
+    session_token: sessionToken,
+    expires_at: tokensToExpiry(idToken),
+  };
+  saveTokens(stored);
+  setUserFromTokens(stored);
+  notify();
+}
+
 /**
- * Email/password sign-in maps to the Authentik redirect (there are no local
- * passwords in the self-host build). The credentials are ignored; the browser
- * navigates to Authentik. Never resolves (page unloads).
+ * Email/password sign-in.
+ *   - OIDC mode: maps to the IdP redirect (there are no local passwords when
+ *     an external issuer owns identity). Credentials ignored; never resolves.
+ *   - Built-in mode (default): a REAL credential sign-in against the host's
+ *     Better Auth endpoints — session token, then JWT exchange.
  */
-export function signInWithEmailAndPassword(
-  _auth: unknown,
-  _email: string,
-  _password: string,
+export async function signInWithEmailAndPassword(
+  _authArg: unknown,
+  email: string,
+  password: string,
 ): Promise<UserCredential> {
-  return startLogin() as unknown as Promise<UserCredential>;
+  if (DEV_UID || OIDC_ISSUER) {
+    return startLogin() as unknown as Promise<UserCredential>;
+  }
+  const base = authApiBase();
+  let res: Response;
+  try {
+    res = await fetch(`${base}/sign-in/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch {
+    throw new AuthError("auth/network-request-failed", "Could not reach the auth backend.");
+  }
+  if (res.status === 400 || res.status === 401 || res.status === 403) {
+    throw new AuthError("auth/invalid-credential", "Invalid email or password.");
+  }
+  if (res.status === 429) {
+    throw new AuthError("auth/too-many-requests", "Too many sign-in attempts — try again later.");
+  }
+  if (!res.ok) {
+    throw new AuthError("auth/internal-error", `Sign-in failed (${res.status}).`);
+  }
+  const body = (await res.json()) as { token?: string };
+  if (!body.token) {
+    throw new AuthError("auth/internal-error", "Sign-in response had no session token.");
+  }
+  adoptSession(body.token, await mintJwt(base, body.token));
+  return { user: _auth.currentUser!, providerId: "password", operationType: "signIn" };
 }
 
-export function signInWithPopup(_auth: unknown, _provider: unknown): Promise<UserCredential> {
-  return startLogin() as unknown as Promise<UserCredential>;
+/**
+ * Popup sign-in.
+ *   - OIDC mode: the IdP redirect (Authentik shows its own provider list).
+ *   - Built-in mode: the Better Auth Google social flow — ask the host for
+ *     the authorization URL and navigate to it (a full-page redirect, not an
+ *     actual popup; the UserCredential promise never resolves because the
+ *     page unloads, same observable behavior as the OIDC path). On return,
+ *     module init picks the session up (see maybeCompleteSocialCallback).
+ */
+export async function signInWithPopup(_authArg: unknown, provider: unknown): Promise<UserCredential> {
+  if (DEV_UID || OIDC_ISSUER) {
+    return startLogin() as unknown as Promise<UserCredential>;
+  }
+  if (typeof window === "undefined") {
+    throw new AuthError("auth/operation-not-supported-in-this-environment", "Login requires a browser.");
+  }
+  const providerId = (provider as { providerId?: string } | null)?.providerId;
+  if (providerId !== "google.com") {
+    throw new AuthError(
+      "auth/operation-not-allowed",
+      `Provider "${providerId ?? "unknown"}" is not enabled in the self-host build (Google only).`,
+    );
+  }
+  const base = authApiBase();
+  const cb = new URL(window.location.href);
+  cb.searchParams.set(SOCIAL_MARKER, "1");
+  const res = await fetch(`${base}/sign-in/social`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "google", callbackURL: cb.toString() }),
+  });
+  if (!res.ok) {
+    throw new AuthError(
+      "auth/operation-not-allowed",
+      `Google sign-in unavailable (${res.status}) — are GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET set on the host?`,
+    );
+  }
+  const body = (await res.json()) as { url?: string };
+  if (!body.url) {
+    throw new AuthError("auth/internal-error", "Social sign-in returned no authorization URL.");
+  }
+  window.location.assign(body.url);
+  // Navigation is underway; never resolves.
+  return new Promise<never>(() => {});
 }
 
-export function signInWithRedirect(_auth: unknown, _provider: unknown): Promise<never> {
-  return startLogin();
+export function signInWithRedirect(_authArg: unknown, provider: unknown): Promise<never> {
+  if (DEV_UID || OIDC_ISSUER) return startLogin();
+  return signInWithPopup(_authArg, provider) as Promise<never>;
 }
 
 export function signOut(_auth?: unknown): Promise<void> {

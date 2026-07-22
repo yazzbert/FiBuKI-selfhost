@@ -11,9 +11,9 @@
  *    preserve. Mechanism-agnostic on purpose — no OIDC/Authentik specifics
  *    are pinned, only the module surface, session semantics, and error
  *    shapes the app observes.
- *  - Acceptance (`it.fails`, ⚠ xfail): behavior the rewrite must ADD. Green
- *    today because the test fails; the implementation removes the `.fails`
- *    marks. Done means: all marks removed, suite green.
+ *  - Acceptance (previously `it.fails` xfail): behavior the W1 rewrite
+ *    ADDED — real credential sign-in against a booted Better Auth handler.
+ *    All marks were removed by chunk 4; the whole suite is plain green.
  *
  * auth-client is browser code; there is no DOM package in this tree, so a
  * minimal hand-rolled `window` (localStorage/sessionStorage/location/history/
@@ -21,7 +21,13 @@
  * module loads. That keeps the suite runnable under the plain Node profile.
  */
 
-import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { toNodeHandler } from "better-auth/node";
+import { createSelfhostAuth } from "./better-auth";
+import { getFirestore, __rawSqlForTest } from "./firestore-shim";
+import { getTenantId } from "./db/tenant";
 
 type AuthClient = typeof import("../../../lib/selfhost/auth-client");
 
@@ -356,41 +362,116 @@ describe("selfhost auth-client — firebase/auth surface (W1 spec)", () => {
     });
   });
 
-  /* ---------------- Better Auth acceptance (xfail) ---------------- */
+  /* ---------------- Better Auth acceptance ---------------- */
 
-  describe("Better Auth acceptance — ⚠ remove .fails marks when W1 lands", () => {
-    it.fails("exposes __configureAuthClient like the sibling data-plane shims", async () => {
+  describe("Better Auth acceptance — real handler over a socket", () => {
+    // The integration shape the W1 handoff prescribes: boot the REAL
+    // createSelfhostAuth().handler over a listening socket (like
+    // firestore-client.test.ts boots the data plane) and point the client
+    // at it with __configureAuthClient.
+    //
+    // The provisioned user is unique PER RUN (uid still Firebase-shaped):
+    // the compose CI job runs every suite against ONE shared Postgres, so a
+    // fixed uid here would collide with better-auth.test.ts's fixture on
+    // the (tenant_id, id) primary key.
+    const UID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const REAL_UID = Array.from(
+      { length: 28 },
+      () => UID_ALPHABET[Math.floor(Math.random() * UID_ALPHABET.length)],
+    ).join("");
+    const REAL_EMAIL = `w1-client-${Date.now()}@example.test`;
+    let server: http.Server;
+    let base: string;
+
+    beforeAll(async () => {
+      // PGlite's emscripten loader browser-detects on a `window` global and
+      // then tries to fetch its wasm from the fake origin — hide the fake
+      // window while the database boots; queries after init don't re-detect.
+      const g = globalThis as Record<string, unknown>;
+      const savedWindow = g.window;
+      delete g.window;
+      let auth: Awaited<ReturnType<typeof createSelfhostAuth>>;
+      try {
+        auth = await createSelfhostAuth();
+        await getFirestore()
+          .collection("allowedEmails")
+          .add({ email: REAL_EMAIL, createdAt: new Date() });
+        await auth.provisionUser({
+          uid: REAL_UID,
+          email: REAL_EMAIL,
+          password: "correct horse",
+          displayName: "Stefan Test",
+        });
+      } finally {
+        g.window = savedWindow;
+      }
+      server = http.createServer(toNodeHandler(auth.handler));
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
+
+    afterAll(async () => {
+      await new Promise<void>((resolve, reject) =>
+        server.close((e) => (e ? reject(e) : resolve())),
+      );
+    });
+
+    it("exposes __configureAuthClient like the sibling data-plane shims", async () => {
       // The rewrite points the client at the selfhost auth backend the same
       // way firestore-client/storage-client are pointed at fibuki-api
-      // (__configureFirestoreClient / __configureStorageClient). Tests boot
-      // the Better Auth handler over a socket and configure the client here.
+      // (__configureFirestoreClient / __configureStorageClient).
       const hook = (client as unknown as Record<string, unknown>).__configureAuthClient;
       expect(typeof hook).toBe("function");
     });
 
-    it.fails("signInWithEmailAndPassword authenticates with the given credentials", async () => {
-      // Today the credentials are IGNORED and the browser is redirected to an
-      // external IdP (never resolves). Under Better Auth this must become a
-      // real credential sign-in that resolves a UserCredential whose uid is
-      // the server-side (Firebase-preserved) user id.
+    it("signInWithEmailAndPassword authenticates with the given credentials", async () => {
+      // Before W1 the credentials were IGNORED and the browser redirected to
+      // an external IdP (never resolved). Under Better Auth this is a real
+      // credential sign-in resolving a UserCredential whose uid is the
+      // server-side (Firebase-preserved) user id. The race guards the old
+      // never-resolves failure mode; the generous timeout only covers
+      // password hashing on a slow box, not the contract.
+      client.__configureAuthClient({ apiUrl: base });
       const cred = await Promise.race([
-        client.signInWithEmailAndPassword(client.getAuth(), "stefan@example.test", "correct horse"),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("sign-in did not resolve")), 250)),
+        client.signInWithEmailAndPassword(client.getAuth(), REAL_EMAIL, "correct horse"),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("sign-in did not resolve")), 10_000)),
       ]);
-      expect(cred.user.uid).toBe(UID);
+      expect(cred.user.uid).toBe(REAL_UID);
       expect(cred.operationType).toBe("signIn");
     });
 
-    it.fails("wrong credentials reject with auth/invalid-credential instead of redirecting", async () => {
-      // (Today an unconfigured client rejects with auth/invalid-api-key — the
-      // assertion is on the CREDENTIAL error so this stays xfail until the
-      // real password check exists.)
+    it("wrong credentials reject with auth/invalid-credential instead of redirecting", async () => {
+      client.__configureAuthClient({ apiUrl: base });
       await expect(
         Promise.race([
-          client.signInWithEmailAndPassword(client.getAuth(), "stefan@example.test", "wrong"),
-          new Promise<never>((_, rej) => setTimeout(() => rej(new Error("sign-in did not settle")), 250)),
+          client.signInWithEmailAndPassword(client.getAuth(), REAL_EMAIL, "wrong"),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error("sign-in did not settle")), 10_000)),
         ]),
       ).rejects.toMatchObject({ name: "FirebaseError", code: "auth/invalid-credential" });
+    });
+
+    it("signOut() after a real sign-in revokes the server-side session too", async () => {
+      client.__configureAuthClient({ apiUrl: base });
+      await client.signInWithEmailAndPassword(client.getAuth(), REAL_EMAIL, "correct horse");
+      await tick();
+      const token = await client.getAuth().currentUser!.getIdToken();
+      const sid = (JSON.parse(
+        Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
+      ) as { sid?: string }).sid;
+      expect(typeof sid).toBe("string");
+
+      await client.signOut(client.getAuth());
+      await tick();
+      expect(client.getAuth().currentUser).toBeNull();
+      // Give the fire-and-forget sign-out a beat, then prove the session row
+      // is gone — deleting it is what revokes every JWT minted from it.
+      await new Promise((r) => setTimeout(r, 200));
+      const rows = await __rawSqlForTest(
+        `SELECT 1 FROM auth_sessions WHERE id = $1`,
+        [sid],
+        getTenantId(),
+      );
+      expect(rows.rows).toHaveLength(0);
     });
   });
 
