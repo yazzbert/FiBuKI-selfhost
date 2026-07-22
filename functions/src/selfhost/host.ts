@@ -21,6 +21,7 @@
 
 import express from "express";
 import type { Express, NextFunction, Request, Response } from "express";
+import { toNodeHandler } from "better-auth/node";
 import type { AuthData, CallableFunction, FunctionsErrorCode, HttpsFunction } from "./https-shim";
 import { HttpsError } from "./https-shim";
 import { EXCLUDED_EXPORTS } from "./manifest";
@@ -32,6 +33,13 @@ export type TokenVerifier = (token: string) => Promise<AuthData | null>;
 
 export interface CreateHostOptions {
   verifyToken: TokenVerifier;
+  /**
+   * Built-in auth endpoints (W1 chunk 3): a WHATWG-fetch handler (Better
+   * Auth's) mounted at /__auth — same collision-free namespace trick as
+   * /__data. Absent when identity comes from an external OIDC front or the
+   * dev bypass; then /__auth stays a plain not-found.
+   */
+  authHandler?: (req: globalThis.Request) => Promise<globalThis.Response>;
   /** Barrel exports NOT to mount. Defaults to manifest EXCLUDED_EXPORTS. */
   exclude?: ReadonlySet<string>;
   /** JSON body limit for callable payloads (CSV imports are chunky). */
@@ -235,6 +243,16 @@ export function createHost(
       // Mounted by the cron host (work item 4), not over HTTP.
     }
     // Triggers registered themselves on the in-process bus at import time.
+  }
+
+  // Built-in auth endpoints (W1 chunk 3): Better Auth's fetch handler
+  // behind the same per-IP rate limiter as the callables (sign-in is the
+  // brute-forceable surface). No jsonParser here — the adapter streams the
+  // raw node request into a fetch Request itself, and a pre-consumed body
+  // would hang it. "__auth" can't collide with barrel exports for the same
+  // reason "__data" can't (see below).
+  if (options.authHandler) {
+    app.all(["/__auth", "/__auth/*"], limiter, toNodeHandler(options.authHandler));
   }
 
   // Client data plane (work item 6): query/get/write for the frontend

@@ -9,49 +9,75 @@
  *
  * Auth (in precedence order):
  *   1. FIBUKI_DEV_UID=<uid>  — dev bypass, accepts ANY bearer as that uid.
- *   2. OIDC_ISSUER set       — Authentik OIDC: verify id_token via JWKS
- *      (createOidcVerifier), map sub->uid, OIDC_ADMIN_GROUP -> token.admin.
- *   3. neither               — refuse to start rather than guess.
- * Never set FIBUKI_DEV_UID in production; it defeats OIDC.
+ *   2. OIDC_ISSUER set       — external OIDC (Authentik/Keycloak/Entra):
+ *      verify id_token via JWKS (createOidcVerifier), map sub->uid,
+ *      OIDC_ADMIN_GROUP -> token.admin. Built-in auth stays unmounted.
+ *   3. neither               — Better Auth built-in (the default since W1
+ *      chunk 3): createSelfhostAuth() verifies its own JWTs and its fetch
+ *      handler is mounted at /__auth. Requires FIBUKI_AUTH_SECRET whenever
+ *      DATABASE_URL is set (createSelfhostAuth refuses to start otherwise).
+ * Never set FIBUKI_DEV_UID in production; it defeats the other two.
  */
 
 import { createCronHost } from "./cron-host";
 import { createHost, type TokenVerifier } from "./host";
 import { createOidcVerifier } from "./oidc-verifier";
+import { createSelfhostAuth } from "./better-auth";
 
-function resolveVerifier(): TokenVerifier {
+interface ResolvedAuth {
+  verifyToken: TokenVerifier;
+  /** Set only in built-in mode: the Better Auth handler for /__auth. */
+  authHandler?: (req: Request) => Promise<Response>;
+}
+
+async function resolveVerifier(): Promise<ResolvedAuth> {
   const devUid = process.env.FIBUKI_DEV_UID;
   if (devUid) {
     console.warn(`fibuki-api: DEV AUTH MODE — every bearer token authenticates as "${devUid}"`);
-    return async () => ({ uid: devUid, token: {} });
+    return { verifyToken: async () => ({ uid: devUid, token: {} }) };
   }
 
   const issuer = process.env.OIDC_ISSUER;
   if (issuer) {
-    console.log(`fibuki-api: Authentik OIDC verification against issuer ${issuer}`);
-    return createOidcVerifier({
-      issuer,
-      jwksUri: process.env.OIDC_JWKS_URI,
-      audience: process.env.OIDC_AUDIENCE,
-      adminGroup: process.env.OIDC_ADMIN_GROUP,
-      groupsClaim: process.env.OIDC_GROUPS_CLAIM,
-    });
+    console.log(`fibuki-api: external OIDC verification against issuer ${issuer}`);
+    return {
+      verifyToken: createOidcVerifier({
+        issuer,
+        jwksUri: process.env.OIDC_JWKS_URI,
+        audience: process.env.OIDC_AUDIENCE,
+        adminGroup: process.env.OIDC_ADMIN_GROUP,
+        groupsClaim: process.env.OIDC_GROUPS_CLAIM,
+      }),
+    };
   }
 
-  console.error(
-    "fibuki-api: no token verifier configured. Set OIDC_ISSUER (+ optional OIDC_AUDIENCE/" +
-      "OIDC_ADMIN_GROUP) for production, or FIBUKI_DEV_UID=<uid> for dev mode. Refusing to start.",
-  );
-  process.exit(1);
+  console.log("fibuki-api: built-in auth (Better Auth) — endpoints at /__auth");
+  if (
+    (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_SECRET) &&
+    !process.env.FIBUKI_AUTH_ISSUER &&
+    !process.env.BETTER_AUTH_URL
+  ) {
+    // The issuer doubles as the OAuth redirect_uri base — without it Google
+    // gets the unreachable internal placeholder and every social sign-in dies
+    // at the consent screen with a redirect_uri mismatch.
+    console.warn(
+      "fibuki-api: GOOGLE_CLIENT_ID is set but FIBUKI_AUTH_ISSUER is not — " +
+        "Google OAuth would use the internal placeholder URL. Set FIBUKI_AUTH_ISSUER " +
+        "to this deployment's public URL.",
+    );
+  }
+  const auth = await createSelfhostAuth();
+  return { verifyToken: auth.verifier, authHandler: auth.handler };
 }
 
 async function main() {
   const barrel = await import("../index");
 
-  const verifyToken = resolveVerifier();
+  const { verifyToken, authHandler } = await resolveVerifier();
 
   const { app, inventory } = createHost(barrel as Record<string, unknown>, {
     verifyToken,
+    authHandler,
     log: (m) => console.error(m),
   });
 
@@ -85,4 +111,9 @@ async function main() {
   });
 }
 
-void main();
+main().catch((err) => {
+  // Fatal boot errors (e.g. DATABASE_URL without FIBUKI_AUTH_SECRET) exit
+  // cleanly with the message instead of an unhandled-rejection trace.
+  console.error(`fibuki-api: fatal startup error — ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});
