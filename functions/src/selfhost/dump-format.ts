@@ -58,12 +58,31 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Date);
 }
 
-/** Duck-types both the shim/real-SDK public shape and the admin-SDK internal shape. */
+/**
+ * Duck-types both the shim/real-SDK public shape and the admin-SDK internal
+ * shape. Requires the object have EXACTLY the two timestamp fields (and
+ * nothing else) so an unrelated business object that merely happens to have
+ * numeric `seconds`/`nanoseconds` fields (e.g. a duration) doesn't get
+ * mistaken for a Timestamp and silently lose its other fields.
+ */
 function timestampTag(v: Record<string, unknown>): { __ts: [number, number] } | null {
-  if (typeof v.seconds === "number" && typeof v.nanoseconds === "number") {
+  const keys = Object.keys(v);
+  if (
+    keys.length === 2 &&
+    keys.includes("seconds") &&
+    keys.includes("nanoseconds") &&
+    typeof v.seconds === "number" &&
+    typeof v.nanoseconds === "number"
+  ) {
     return { __ts: [v.seconds, v.nanoseconds] };
   }
-  if (typeof v._seconds === "number" && typeof v._nanoseconds === "number") {
+  if (
+    keys.length === 2 &&
+    keys.includes("_seconds") &&
+    keys.includes("_nanoseconds") &&
+    typeof v._seconds === "number" &&
+    typeof v._nanoseconds === "number"
+  ) {
     return { __ts: [v._seconds, v._nanoseconds] };
   }
   return null;
