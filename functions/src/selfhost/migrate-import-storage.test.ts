@@ -1,7 +1,7 @@
 /**
- * W3 (storage migration) — object-copy acceptance suite. ⚠ EVERY test is
- * `it.fails` (xfail): `./migrate-import` / `./migrate-export` do not exist
- * yet — see migrate-import.test.ts for the full seam and
+ * W3 (storage migration) — object-copy acceptance suite. GREEN as of chunk 3:
+ * `./migrate-import` extends importDump/verifyDump over a non-null
+ * manifest.storage — see migrate-import.test.ts for the full seam and
  * handoffs/2026-07-22-w3-migration-impl.md for the implementation brief.
  *
  * Storage side of the dump contract (version 1):
@@ -137,8 +137,8 @@ async function writeStorageDump(objects: FixtureObject[]): Promise<string> {
   return dir;
 }
 
-describe("W3 storage migration acceptance — ⚠ all xfail until W3 lands", () => {
-  it.fails("copies objects to verbatim paths with bytes and metadata intact", async () => {
+describe("W3 storage migration acceptance", () => {
+  it("copies objects to verbatim paths with bytes and metadata intact", async () => {
     const { importDump, verifyDump } = await loadImport();
     const pdf = Buffer.from(`%PDF-1.4 fixture ${RUN}`);
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 1, 2, 3]);
@@ -169,7 +169,7 @@ describe("W3 storage migration acceptance — ⚠ all xfail until W3 lands", () 
     expect((await verifyDump({ dir })).ok).toBe(true);
   });
 
-  it.fails("verification gate fails on corrupted and missing objects", async () => {
+  it("verification gate fails on corrupted and missing objects", async () => {
     const { importDump, verifyDump } = await loadImport();
     const goodPath = `${PREFIX}/v/good.bin`;
     const corruptPath = `${PREFIX}/v/corrupt.bin`;
@@ -193,7 +193,7 @@ describe("W3 storage migration acceptance — ⚠ all xfail until W3 lands", () 
     expect(verdict.storage.checksumFailures).not.toContain(goodPath);
   });
 
-  it.fails("dry-run writes nothing; re-running the import converges", async () => {
+  it("dry-run writes nothing; re-running the import converges", async () => {
     const { importDump } = await loadImport();
     const objPath = `${PREFIX}/idem/a.txt`;
     const bytes = Buffer.from("idempotent");
@@ -211,7 +211,7 @@ describe("W3 storage migration acceptance — ⚠ all xfail until W3 lands", () 
     expect(after.equals(bytes)).toBe(true);
   });
 
-  it.fails("round-trip: shim-stored objects export then re-import byte-identical", async () => {
+  it("round-trip: shim-stored objects export then re-import byte-identical", async () => {
     const { exportDump } = await loadExport();
     const { importDump, verifyDump } = await loadImport();
     const bucket = getStorage().bucket();
