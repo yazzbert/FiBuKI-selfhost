@@ -14,19 +14,25 @@
  *    claim ported from the dump. provisionUser calls assertInvited for EVERY
  *    account, so we seed the allowedEmails invite gate first — otherwise even
  *    an admin fixture email is rejected before any adapter work.
+ *  - Objects land through the ordinary storage-shim write path —
+ *    getStorage().bucket().file(path).save(bytes, {...}) at the Firebase path
+ *    VERBATIM — so every stored-path reference in migrated docs keeps
+ *    resolving, and save()'s put-overwrite makes a re-run idempotent. Verify
+ *    re-downloads each object and compares md5 against the manifest (the
+ *    storage analogue of the per-doc deep-equal).
  *
- * Storage import/verify is chunk 3 (migrate-import-storage.test.ts) — out of
- * scope here; dumps produced this chunk carry manifest.storage === null.
- *
- * Full seam + acceptance suite: migrate-import.test.ts. Brief:
- * handoffs/2026-07-22-w3-chunk2-migrate-import.md.
+ * Full seam + acceptance suites: migrate-import.test.ts (data/users) and
+ * migrate-import-storage.test.ts (storage). Brief:
+ * handoffs/2026-07-22-w3-migration-impl.md.
  */
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parseManifest, type DumpManifest, type DocLine, type UserLine } from "./dump-format";
+import { createHash } from "node:crypto";
+import { parseManifest, type DumpManifest, type DocLine, type UserLine, type StorageLine } from "./dump-format";
 import { decodeWire, encodeWire } from "./wire-values";
 import { getFirestore } from "./firestore-shim";
+import { getStorage } from "./storage-shim";
 import { getAuth } from "./auth-shim";
 import { createSelfhostAuth, type SelfhostAuth } from "./better-auth";
 
@@ -76,6 +82,20 @@ async function readUsers(dir: string, manifest: DumpManifest): Promise<UserLine[
   if (!manifest.users) return [];
   return readNdjson<UserLine>(path.join(dir, manifest.users.file));
 }
+
+async function readStorageManifest(dir: string, manifest: DumpManifest): Promise<StorageLine[]> {
+  if (!manifest.storage) return [];
+  return readNdjson<StorageLine>(path.join(dir, manifest.storage.manifest));
+}
+
+/** Absolute path of an object's raw bytes inside the dump. */
+function objectPath(dir: string, manifest: DumpManifest, storagePath: string): string {
+  // manifest.storage is non-null wherever this is called (guarded by the caller
+  // reading a non-empty StorageLine list).
+  return path.join(dir, manifest.storage!.objectsDir, storagePath);
+}
+
+const md5hex = (b: Buffer) => createHash("md5").update(b).digest("hex");
 
 // ---------------------------------------------------------------------------
 // Comparison — verify works in wire space: the dump's DocLine.data is already
@@ -172,12 +192,23 @@ export async function importDump(opts: { dir: string; dryRun?: boolean }): Promi
     provisioned.push(user.uid);
   }
 
-  // Storage is chunk 3 — dumps this chunk produce have manifest.storage null.
-  const storage = {
-    objects: manifest.storage?.count ?? 0,
-    written: 0,
-    bytes: manifest.storage?.bytes ?? 0,
-  };
+  // Objects replay through the shim save path at verbatim Firebase paths.
+  // save() is a put-overwrite, so a re-run converges without dedup logic.
+  const storageLines = await readStorageManifest(opts.dir, manifest);
+  let written = 0;
+  let bytes = 0;
+  for (const line of storageLines) {
+    const data = await fs.readFile(objectPath(opts.dir, manifest, line.path));
+    bytes += data.length;
+    if (!dryRun) {
+      await getStorage()
+        .bucket()
+        .file(line.path)
+        .save(data, { contentType: line.contentType, metadata: { metadata: line.metadata } });
+      written += 1;
+    }
+  }
+  const storage = { objects: storageLines.length, written, bytes };
 
   return { dryRun, collections, users: { provisioned, existing }, storage };
 }
@@ -217,8 +248,21 @@ export async function verifyDump(opts: { dir: string }): Promise<VerifyReport> {
     if (!(await userExists(user.uid))) usersMissing.push(user.uid);
   }
 
-  // Storage verify is chunk 3; dumps this chunk carry no storage section.
-  const storage = { expected: manifest.storage?.count ?? 0, missing: [] as string[], checksumFailures: [] as string[] };
+  // Storage: re-download each object and compare md5 against the manifest —
+  // a missing object is `missing`, a byte-level divergence `checksumFailures`.
+  const storageLines = await readStorageManifest(opts.dir, manifest);
+  const storageMissing: string[] = [];
+  const checksumFailures: string[] = [];
+  for (const line of storageLines) {
+    const file = getStorage().bucket().file(line.path);
+    if (!(await file.exists())[0]) {
+      storageMissing.push(line.path);
+      continue;
+    }
+    const [data] = await file.download();
+    if (md5hex(data) !== line.md5) checksumFailures.push(line.path);
+  }
+  const storage = { expected: storageLines.length, missing: storageMissing, checksumFailures };
 
   const ok =
     collections.every((c) => c.missing.length === 0 && c.mismatched.length === 0) &&
