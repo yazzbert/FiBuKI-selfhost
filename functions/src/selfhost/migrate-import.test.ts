@@ -297,7 +297,7 @@ describe("W3 dump format — ⚠ all xfail until W3 lands", () => {
 });
 
 describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
-  it.fails("module exposes the seam", async () => {
+  it("module exposes the seam", async () => {
     const imp = await loadImport();
     expect(typeof imp.importDump).toBe("function");
     expect(typeof imp.verifyDump).toBe("function");
@@ -305,7 +305,7 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     expect(typeof exp.exportDump).toBe("function");
   });
 
-  it.fails("dry-run reports the full plan and writes nothing", async () => {
+  it("dry-run reports the full plan and writes nothing", async () => {
     const { importDump } = await loadImport();
     const uid = uniqueUid();
     const email = uniqueEmail("dry");
@@ -333,7 +333,7 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     await expect(getAdminAuth().getUser(uid)).rejects.toThrow();
   });
 
-  it.fails("imports bridge-collection docs: ids preserved, Timestamps revived", async () => {
+  it("imports bridge-collection docs: ids preserved, Timestamps revived", async () => {
     const { importDump } = await loadImport();
     const docId = `bridge-${RUN}`;
     const dir = await writeFixtureDump({
@@ -364,7 +364,7 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     expect((data.paidAt as Timestamp).nanoseconds).toBe(40);
   });
 
-  it.fails("imports flattened collections through the shared write path (pushdown-queryable)", async () => {
+  it("imports flattened collections through the shared write path (pushdown-queryable)", async () => {
     const { importDump } = await loadImport();
     const uid = uniqueUid();
     const dir = await writeFixtureDump({
@@ -389,7 +389,7 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     expect(snap.docs[0].get("date")).toBeInstanceOf(Timestamp);
   });
 
-  it.fails("provisions users uid-preserving, passwordless, with admin claims and invite gate", async () => {
+  it("provisions users uid-preserving, passwordless, with admin claims and invite gate", async () => {
     const { importDump } = await loadImport();
     const adminUid = uniqueUid();
     const plainUid = uniqueUid();
@@ -422,7 +422,7 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     expect(gate.docs.length).toBeGreaterThan(0);
   });
 
-  it.fails("re-running the import converges (idempotent, resumable-by-rerun)", async () => {
+  it("re-running the import converges (idempotent, resumable-by-rerun)", async () => {
     const { importDump, verifyDump } = await loadImport();
     const uid = uniqueUid();
     const email = uniqueEmail("idem");
@@ -451,7 +451,7 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     expect(verdict.ok).toBe(true);
   });
 
-  it.fails("verifyDump fails the gate on missing and tampered docs", async () => {
+  it("verifyDump fails the gate on missing and tampered docs", async () => {
     const { importDump, verifyDump } = await loadImport();
     const uid = uniqueUid();
     const missingId = `gone-${RUN}`;
@@ -477,10 +477,14 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     expect(col?.mismatched).toContain(tamperedId);
   });
 
-  it.fails("round-trip: shim-seeded data exports, wipes, re-imports identically", async () => {
+  it("round-trip: shim-seeded data exports, wipes, re-imports identically", async () => {
     const { exportDump } = await loadExport();
     const { importDump, verifyDump } = await loadImport();
     const uid = uniqueUid();
+    // Isolated collection: the export below asserts a collection-wide count,
+    // which the shared BRIDGE_COLLECTION can't guarantee — the bridge-import
+    // and verify tests above legitimately leave their own docs in it.
+    const rtCol = `w3migRt${RUN}`;
 
     // Seed through the ordinary app write path, Timestamps included.
     const seeded = {
@@ -489,7 +493,7 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
       openedAt: new Timestamp(1750009999, 123456789),
       lines: [{ qty: 2, unit: "h" }],
     };
-    await getFirestore().collection(BRIDGE_COLLECTION).doc(`rt-${RUN}`).set(seeded);
+    await getFirestore().collection(rtCol).doc(`rt-${RUN}`).set(seeded);
     await getFirestore()
       .collection("transactions")
       .doc(`rt-tx-${RUN}`)
@@ -499,17 +503,17 @@ describe("W3 importer acceptance — ⚠ all xfail until W3 lands", () => {
     const manifest = await exportDump({
       dir,
       firestore: getFirestore(),
-      collections: [BRIDGE_COLLECTION, "transactions"],
+      collections: [rtCol, "transactions"],
     });
     expect(manifest.version).toBe(1);
-    expect(manifest.collections.find((c) => c.path === BRIDGE_COLLECTION)?.count).toBe(1);
+    expect(manifest.collections.find((c) => c.path === rtCol)?.count).toBe(1);
 
     // Wipe the tenant, then restore purely from the dump.
     await __resetFirestoreShim();
     await importDump({ dir });
     expect((await verifyDump({ dir })).ok).toBe(true);
 
-    const restored = (await getFirestore().collection(BRIDGE_COLLECTION).doc(`rt-${RUN}`).get()).data() as Record<
+    const restored = (await getFirestore().collection(rtCol).doc(`rt-${RUN}`).get()).data() as Record<
       string,
       unknown
     >;
