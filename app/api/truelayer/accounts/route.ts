@@ -14,7 +14,7 @@ import {
 import { getTrueLayerClient, getAccountIban } from "@/lib/truelayer";
 import { TrueLayerConnection, TrueLayerApiConfig } from "@/types/truelayer";
 import { normalizeIban } from "@/lib/import/deduplication";
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 
 // Initialize Firebase for server-side
 const firebaseConfig = {
@@ -107,6 +107,8 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("Error fetching accounts:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to fetch accounts" },
@@ -243,6 +245,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ sourceId: docRef.id, linked: false });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[TrueLayer Accounts POST] Error creating/linking source:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to create/link source" },

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase/admin";
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { Timestamp } from "firebase-admin/firestore";
 
 const db = getAdminDb();
@@ -105,6 +105,8 @@ export async function POST(request: NextRequest) {
       queueId: docRef.id,
     });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[PrecisionSearch API] Error triggering search:", error);
     return NextResponse.json(
       { error: "Failed to trigger precision search" },

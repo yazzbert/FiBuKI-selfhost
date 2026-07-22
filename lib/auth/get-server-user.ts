@@ -10,8 +10,37 @@
  * self-host data plane.
  */
 
+import { NextResponse } from "next/server";
 import { getAuth, DecodedIdToken } from "firebase-admin/auth";
 import { getAdminApp } from "@/lib/firebase/admin";
+
+/**
+ * Thrown by getServerUserIdWithFallback for a missing/invalid token so route
+ * catch blocks can answer 401 instead of a generic 500 (W1 decision
+ * 2026-07-21, docs/decisions.md: 401 shaping approved).
+ */
+export class UnauthorizedError extends Error {
+  constructor() {
+    super("Unauthorized: Missing or invalid Authorization header");
+    this.name = "UnauthorizedError";
+  }
+}
+
+/**
+ * The one 401 shape every route answers with — returns the response for an
+ * UnauthorizedError and null for anything else, so a route catch can open
+ * with:
+ *
+ *   const unauthorized = unauthorizedResponse(error);
+ *   if (unauthorized) return unauthorized;
+ *
+ * Never includes internal error text (two routes used to echo it).
+ */
+export function unauthorizedResponse(error: unknown): NextResponse | null {
+  return error instanceof UnauthorizedError
+    ? NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    : null;
+}
 
 // Strip CR/LF so request-derived values cannot forge log lines
 function sanitizeForLog(value: unknown): string {
@@ -45,7 +74,7 @@ export async function getServerUserIdWithFallback(
   if (decoded?.uid) {
     return decoded.uid;
   }
-  throw new Error("Unauthorized: Missing or invalid Authorization header");
+  throw new UnauthorizedError();
 }
 
 /**

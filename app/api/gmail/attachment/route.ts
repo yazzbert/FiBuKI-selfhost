@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb, getAdminBucket, getFirebaseStorageDownloadUrl } from "@/lib/firebase/admin";
 import { Timestamp, FieldValue } from "firebase-admin/firestore";
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { GmailClient } from "@/lib/email-providers/gmail-client";
 import { createHash, randomUUID } from "crypto";
 import { GmailResolutionError, resolveGmailIntegration } from "@/lib/gmail/resolve-integration";
@@ -120,6 +120,8 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("Error downloading attachment:", sanitizeForLog(error));
 
     if (error instanceof Error && error.message === "AUTH_EXPIRED") {
@@ -386,6 +388,8 @@ export async function POST(request: NextRequest) {
       connectedToTransaction: !!transactionId,
     });
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("Error saving attachment:", sanitizeForLog(error));
 
     if (error instanceof Error && error.message === "AUTH_EXPIRED") {

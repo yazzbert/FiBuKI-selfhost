@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
  */
 
 import { NextResponse, after } from "next/server";
-import { getServerUserIdWithFallback } from "@/lib/auth/get-server-user";
+import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp, FieldValue } from "firebase-admin/firestore";
 import { HumanMessage } from "@langchain/core/messages";
@@ -1445,6 +1445,8 @@ export async function POST(req: Request) {
     const result = await executeWorkerRun();
     return NextResponse.json(result);
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[Worker API] Request failed:", sanitizeForLog(error));
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Request failed" },
@@ -1483,6 +1485,8 @@ export async function GET(req: Request) {
 
     return NextResponse.json(runDoc.data());
   } catch (error) {
+    const unauthorized = unauthorizedResponse(error);
+    if (unauthorized) return unauthorized;
     console.error("[Worker API] GET failed:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Request failed" },
