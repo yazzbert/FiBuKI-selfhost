@@ -19,41 +19,28 @@
  * The auth seam is stubbed to supply identity (the real token-verify is covered
  * by auth-routes.test.ts); the fork under test here is the route's own
  * owner-scoping branch, exercised against a real (in-memory) data plane.
+ *
+ * Note on wiring: the gmail routes capture `const db = getAdminDb()` at MODULE
+ * load, so the whole suite shares ONE FakeFirestore that we reset() (not
+ * recreate) between tests. firebase-admin/firestore is deliberately NOT mocked —
+ * the route (repo root) and this test (functions/) resolve it to different
+ * physical trees, so a vi.mock here wouldn't intercept the route's copy anyway;
+ * the fake db stores the real Timestamp/FieldValue values opaquely, which is
+ * fine because the assertions read the HTTP contract and the userId scoping, not
+ * sentinel internals.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { FakeFirestore } from "./fake-firestore";
 
-// --- shared in-memory data plane -------------------------------------------
+// One shared data plane — the gmail routes bind `getAdminDb()` once at import,
+// so every route (and every test) must see the SAME instance. Held in a hoisted
+// box so the vi.mock factory below can reach it.
 const h = vi.hoisted(() => {
-  // Lazily created so the same instance backs every route's module-level
-  // `const db = getAdminDb()`. Reset (not recreated) between tests.
-  let db: unknown;
-  return {
-    getDb: () => db,
-    setDb: (d: unknown) => {
-      db = d;
-    },
-  };
+  const box: { db: unknown } = { db: undefined };
+  return { box, getDb: () => box.db };
 });
-
-// Timestamp/FieldValue as the fake-firestore's applyPatch understands them.
-const makeTs = (ms: number) => ({ toMillis: () => ms, toDate: () => new Date(ms) });
-
-vi.mock("firebase-admin/firestore", () => ({
-  Timestamp: {
-    now: () => makeTs(1_700_000_000_000),
-    fromDate: (d: Date) => makeTs(d.getTime()),
-    fromMillis: (ms: number) => makeTs(ms),
-  },
-  FieldValue: {
-    delete: () => ({ __sentinel: "delete" }),
-    serverTimestamp: () => ({ __sentinel: "serverTimestamp" }),
-    arrayUnion: (...values: unknown[]) => ({ __sentinel: "arrayUnion", values }),
-    arrayRemove: (...values: unknown[]) => ({ __sentinel: "arrayRemove", values }),
-  },
-}));
 
 vi.mock("@/lib/firebase/admin", () => ({
   getAdminDb: () => h.getDb(),
@@ -83,6 +70,13 @@ vi.mock("@/lib/auth/get-server-user", async (importActual) => {
 const USER_A = "user-A";
 const USER_B = "user-B";
 
+const store = new FakeFirestore();
+h.box.db = store;
+
+beforeEach(() => {
+  store.reset();
+});
+
 /** A request carrying `uid` as its bearer token (see the auth mock above). */
 function authed(uid: string, url: string, method = "POST", body?: unknown): NextRequest {
   return new NextRequest(url, {
@@ -92,18 +86,12 @@ function authed(uid: string, url: string, method = "POST", body?: unknown): Next
   });
 }
 
-let db: FakeFirestore;
-beforeEach(() => {
-  db = new FakeFirestore();
-  h.setDb(db);
-});
-
 // ---------------------------------------------------------------------------
 // POST /api/gmail/pause
 // ---------------------------------------------------------------------------
 describe("POST /api/gmail/pause", () => {
   const seedIntegration = (owner: string) =>
-    db.seed("emailIntegrations", "int-1", {
+    store.seed("emailIntegrations", "int-1", {
       userId: owner,
       email: "a@example.com",
       isPaused: false,
@@ -116,8 +104,7 @@ describe("POST /api/gmail/pause", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ success: true });
-    // The write actually landed.
-    const after = (await db.collection("emailIntegrations").doc("int-1").get()).data()!;
+    const after = (await store.collection("emailIntegrations").doc("int-1").get()).data()!;
     expect(after.isPaused).toBe(true);
   });
 
@@ -129,7 +116,7 @@ describe("POST /api/gmail/pause", () => {
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Integration not found" });
     // Crucially: user A's row is untouched.
-    const after = (await db.collection("emailIntegrations").doc("int-1").get()).data()!;
+    const after = (await store.collection("emailIntegrations").doc("int-1").get()).data()!;
     expect(after.isPaused).toBe(false);
   });
 });
@@ -139,7 +126,7 @@ describe("POST /api/gmail/pause", () => {
 // ---------------------------------------------------------------------------
 describe("POST /api/gmail/resume", () => {
   const seedIntegration = (owner: string) =>
-    db.seed("emailIntegrations", "int-1", {
+    store.seed("emailIntegrations", "int-1", {
       userId: owner,
       email: "a@example.com",
       isPaused: true,
@@ -153,7 +140,7 @@ describe("POST /api/gmail/resume", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ success: true });
-    const after = (await db.collection("emailIntegrations").doc("int-1").get()).data()!;
+    const after = (await store.collection("emailIntegrations").doc("int-1").get()).data()!;
     expect(after.isPaused).toBe(false);
   });
 
@@ -164,7 +151,7 @@ describe("POST /api/gmail/resume", () => {
 
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Integration not found" });
-    const after = (await db.collection("emailIntegrations").doc("int-1").get()).data()!;
+    const after = (await store.collection("emailIntegrations").doc("int-1").get()).data()!;
     expect(after.isPaused).toBe(true);
   });
 });
@@ -174,7 +161,7 @@ describe("POST /api/gmail/resume", () => {
 // ---------------------------------------------------------------------------
 describe("GET /api/gmail/sync", () => {
   const seedIntegration = (owner: string) =>
-    db.seed("emailIntegrations", "int-1", {
+    store.seed("emailIntegrations", "int-1", {
       userId: owner,
       email: "a@example.com",
       lastSyncStatus: "success",
@@ -208,7 +195,7 @@ describe("GET /api/gmail/sync", () => {
 // ---------------------------------------------------------------------------
 describe("POST /api/gmail/sync", () => {
   const seedIntegration = (owner: string) =>
-    db.seed("emailIntegrations", "int-1", {
+    store.seed("emailIntegrations", "int-1", {
       userId: owner,
       email: "a@example.com",
       needsReauth: false,
@@ -223,7 +210,7 @@ describe("POST /api/gmail/sync", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ success: true });
     // A queue item owned by A was created.
-    const queue = await db.collection("gmailSyncQueue").where("integrationId", "==", "int-1").get();
+    const queue = await store.collection("gmailSyncQueue").where("integrationId", "==", "int-1").get();
     expect(queue.size).toBeGreaterThan(0);
     expect(queue.docs[0].data()!.userId).toBe(USER_A);
   });
@@ -236,7 +223,7 @@ describe("POST /api/gmail/sync", () => {
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Integration not found" });
     // No queue item was created for B.
-    const queue = await db.collection("gmailSyncQueue").where("integrationId", "==", "int-1").get();
+    const queue = await store.collection("gmailSyncQueue").where("integrationId", "==", "int-1").get();
     expect(queue.empty).toBe(true);
   });
 });
@@ -246,31 +233,34 @@ describe("POST /api/gmail/sync", () => {
 // ---------------------------------------------------------------------------
 describe("POST /api/sources/[id]/disconnect", () => {
   const seedApiSource = (owner: string) =>
-    db.seed("sources", "src-1", {
+    store.seed("sources", "src-1", {
       userId: owner,
       type: "api",
       apiConfig: { provider: "gocardless", bankConnectionId: "bc-1" },
     });
 
-  it("disconnects the owner's source and clears its api config (happy path)", async () => {
+  it("disconnects the owner's source and removes its transactions (happy path)", async () => {
     seedApiSource(USER_A);
-    db.seed("transactions", "t1", { userId: USER_A, sourceId: "src-1" });
+    store.seed("transactions", "t1", { userId: USER_A, sourceId: "src-1" });
     const { POST } = await import("@/app/api/sources/[id]/disconnect/route");
     const res = await POST(authed(USER_A, "http://test.local/api/sources/src-1/disconnect"), {
       params: Promise.resolve({ id: "src-1" }),
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ success: true });
-    const after = (await db.collection("sources").doc("src-1").get()).data()!;
+    expect(await res.json()).toMatchObject({ success: true, deletedTransactions: 1 });
+    const after = (await store.collection("sources").doc("src-1").get()).data()!;
     expect(after.type).toBe("csv");
-    expect("apiConfig" in after).toBe(false);
+    // The bank config was cleared (whether the FieldValue.delete sentinel is
+    // interpreted or stored opaquely, it is no longer the gocardless config).
+    expect((after.apiConfig as { provider?: string } | undefined)?.provider).not.toBe("gocardless");
     // The source's transactions were removed as part of the disconnect.
-    expect((await db.collection("transactions").where("sourceId", "==", "src-1").get()).empty).toBe(true);
+    expect((await store.collection("transactions").where("sourceId", "==", "src-1").get()).empty).toBe(true);
   });
 
   it("does not disconnect another user's source (owner-scoping → 404)", async () => {
     seedApiSource(USER_A);
+    store.seed("transactions", "t1", { userId: USER_A, sourceId: "src-1" });
     const { POST } = await import("@/app/api/sources/[id]/disconnect/route");
     const res = await POST(authed(USER_B, "http://test.local/api/sources/src-1/disconnect"), {
       params: Promise.resolve({ id: "src-1" }),
@@ -278,9 +268,11 @@ describe("POST /api/sources/[id]/disconnect", () => {
 
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Source not found" });
-    // User A's source is untouched — still an api source.
-    const after = (await db.collection("sources").doc("src-1").get()).data()!;
+    // User A's source is untouched — still an api source with its bank config…
+    const after = (await store.collection("sources").doc("src-1").get()).data()!;
     expect(after.type).toBe("api");
-    expect(after.apiConfig).toBeDefined();
+    expect((after.apiConfig as { provider?: string }).provider).toBe("gocardless");
+    // …and its transaction was not deleted.
+    expect((await store.collection("transactions").where("sourceId", "==", "src-1").get()).empty).toBe(false);
   });
 });
