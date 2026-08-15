@@ -43,6 +43,16 @@ vi.mock("firebase-admin/firestore", () => {
   };
 });
 
+// Storage: uploadFile only needs bucket().file().save() to resolve and a name.
+vi.mock("firebase-admin/storage", () => ({
+  getStorage: () => ({
+    bucket: () => ({
+      name: "test-bucket",
+      file: () => ({ save: async () => undefined }),
+    }),
+  }),
+}));
+
 // Import handlers after mocking
 const handlers = await import("../handlers");
 
@@ -271,6 +281,26 @@ describe("Tool Registry Handlers", () => {
 
       expect(connected).toHaveLength(1);
       expect(unconnected).toHaveLength(1);
+    });
+  });
+
+  describe("uploadFile", () => {
+    it("writes the MIME type under `fileType`, the field every reader uses", async () => {
+      // Every other file writer (UI upload, gmail sync, inbound email, invoicing,
+      // createFile) sets `fileType`, and the file panel dereferences it unguarded
+      // (`fileType.startsWith("image/")`). This tool wrote only `mimeType`, so
+      // every MCP-uploaded file crashed the file detail page.
+      const result = await handlers.uploadFile(userId, {
+        fileName: "receipt.pdf",
+        mimeType: "application/pdf",
+        base64: Buffer.from("%PDF-1.4 test").toString("base64"),
+      });
+      expect(result.success).toBe(true);
+      const record = store.getDoc("files", result.fileId as string);
+      expect(record).toBeDefined();
+      expect(record!.fileType).toBe("application/pdf");
+      expect(record!.userId).toBe(userId);
+      expect(record!.fileName).toBe("receipt.pdf");
     });
   });
 
