@@ -1060,6 +1060,13 @@ export async function uploadFile(userId: string, args: Record<string, unknown>) 
   const fileDoc = await db.collection("files").add({
     userId,
     fileName: fileName as string,
+    // The record's MIME field is `fileType` (types/file.ts) — every other writer
+    // (UI upload, gmail sync, inbound email, invoicing, createFile) uses it, and
+    // the file panel does `fileType.startsWith("image/")` unguarded. This tool
+    // wrote `mimeType` alone, so every MCP-uploaded file crashed the file
+    // detail page with `can't access property "startsWith", i is undefined`.
+    // `mimeType` stays for anyone reading the tool's own output shape.
+    fileType: mimeType as string,
     mimeType: mimeType as string,
     storagePath,
     downloadUrl,
