@@ -206,7 +206,7 @@ const OPENAPI_SPEC = {
     disconnect_file_from_transaction:
       "Disconnect a file from a transaction. Args: fileId (string), transactionId (string)",
     list_transactions_needing_files:
-      "Find transactions without receipts. Args: minAmount? (number, in cents), limit? (number)",
+      "Find transactions without receipts. Returns { transactions, nextCursor, count } — count is this page, not a total. Args: minAmount? (number, in cents), limit? (number, max 500), cursor? (string, nextCursor from the previous page)",
     auto_connect_file_suggestions:
       "Auto-connect files to transactions above confidence threshold. Args: fileId? (string), minConfidence? (number, 0-100, default 89)",
     list_no_receipt_categories: "List categories for transactions that don't need receipts (bank fees, payroll, etc.)",
