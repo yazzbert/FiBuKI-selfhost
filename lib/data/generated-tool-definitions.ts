@@ -1,6 +1,5 @@
 // AUTO-GENERATED — DO NOT EDIT
 // Source: functions/src/tools/definitions.ts
-// Generated at: 2026-06-21T01:04:11.226Z
 // Regenerate: npm run generate:tool-definitions
 
 export interface ToolDefinition {
@@ -167,7 +166,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     "name": "list_transactions_needing_files",
-    "description": "Find transactions without receipts (no files, no category)",
+    "description": "Find transactions without receipts (no files, no category). Returns { transactions, nextCursor, count }. `count` is the size of this page, not a total — page with nextCursor until it comes back null to see everything that still needs a receipt.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -177,7 +176,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         "limit": {
           "type": "number",
-          "description": "Max results (default 50)"
+          "description": "Max results per page (default 50, max 500)"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "nextCursor from the previous response to fetch the next page"
         }
       }
     }
@@ -248,7 +251,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     "name": "list_files",
-    "description": "List uploaded files (receipts/invoices) with match suggestions",
+    "description": "List uploaded files (receipts/invoices) with match suggestions. Returns { files, nextCursor, count }. `count` is the size of this page, not a total — page with nextCursor until it comes back null to see every file.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -262,7 +265,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         "limit": {
           "type": "number",
-          "description": "Max results (default 50)"
+          "description": "Max results per page (default 50, max 500)"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "nextCursor from the previous response to fetch the next page"
         }
       }
     }
@@ -322,6 +329,42 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "required": [
         "fileId",
         "transactionId"
+      ]
+    }
+  },
+  {
+    "name": "mark_file_as_not_invoice",
+    "description": "Flag a file as not an invoice (duplicate re-send, payment reminder, statement, anything that documents nothing). Clears its extracted data and takes it out of the unmatched-file queue. Refuses while the file is still connected to a transaction. Reversible with unmark_file_as_not_invoice.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The file ID"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why it is not an invoice — stored on the file"
+        }
+      },
+      "required": [
+        "fileId"
+      ]
+    }
+  },
+  {
+    "name": "unmark_file_as_not_invoice",
+    "description": "Restore a file previously flagged as not an invoice. Re-opens extraction, which recovers the fields marking cleared.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "description": "The file ID"
+        }
+      },
+      "required": [
+        "fileId"
       ]
     }
   },
