@@ -15,6 +15,7 @@
 
 import { FieldValue, Timestamp } from "@google-cloud/firestore";
 import { emitChange } from "./bus";
+import { enqueueTriggerEvent, usesDurableTriggerQueue } from "./trigger-queue";
 import { notifyChange } from "./change-notify";
 import { FLATTENED, FlatSpec } from "./db/collections";
 import { runMigrations } from "./db/migrate";
@@ -256,6 +257,9 @@ export async function __resetFirestoreShim(): Promise<void> {
   await withTenant(async (q) => {
     await q(`DELETE FROM docs`);
     for (const spec of Object.values(FLATTENED)) await q(`DELETE FROM ${spec.table}`);
+    // Undelivered trigger events are per-test state too: leaving them behind
+    // lets one case's queued write fire inside the next case's drain.
+    await q(`DELETE FROM trigger_events`);
   });
 }
 
@@ -291,6 +295,16 @@ function encodeValue(v: unknown): unknown {
   return v;
 }
 
+/**
+ * The `docs.data` codec, exported for `trigger-queue-drain.ts`: a queued
+ * trigger event stores wire-encoded documents, and the snapshot pair handed to
+ * a handler must decode through exactly this path or a Timestamp arrives as a
+ * `{ __fbts__: ... }` bag and every `.toDate()` in a handler throws.
+ */
+export function __decodeDocValue(v: unknown): unknown {
+  return decodeValue(v);
+}
+
 function decodeValue(v: unknown): unknown {
   if (v === null || v === undefined) return v;
   if (Array.isArray(v)) return v.map((x) => decodeValue(x));
@@ -315,15 +329,56 @@ function decodeValue(v: unknown): unknown {
 // Sentinel (FieldValue transform) application
 // ---------------------------------------------------------------------------
 
-function sentinelKind(v: unknown): string | null {
-  if (!v || typeof v !== "object") return null;
-  const name = (v as object).constructor?.name || "";
+/**
+ * Constructor -> sentinel kind, built by asking FieldValue for one of each.
+ *
+ * The transform classes (ServerTimestampTransform, DeleteTransform, ...) are
+ * internal to @google-cloud/firestore and never exported, so identity is only
+ * obtainable this way. It is worth the trouble: the web container is a MINIFIED
+ * Next build, where `constructor.name` is mangled to something like "t" and a
+ * name-based check silently stops recognising every sentinel. It does not throw
+ * — the sentinel falls through to the generic object branch and serialises to
+ * `{}`, so `createdAt: FieldValue.serverTimestamp()` lands in Postgres as an
+ * empty object. That reached the browser as a timestamp with no toDate(), and
+ * one such row crashed every page in the app. Class identity survives
+ * minification; names do not.
+ */
+const SENTINEL_KINDS: ReadonlyArray<readonly [unknown, string]> = [
+  [FieldValue.serverTimestamp(), "serverTimestamp"],
+  [FieldValue.delete(), "delete"],
+  [FieldValue.increment(1), "increment"],
+  [FieldValue.arrayUnion("probe"), "arrayUnion"],
+  [FieldValue.arrayRemove("probe"), "arrayRemove"],
+];
+
+const SENTINEL_BY_CTOR = new Map<unknown, string>(
+  SENTINEL_KINDS.map(([probe, kind]) => [(probe as object).constructor, kind]),
+);
+
+// Distinctness is the load-bearing assumption: if two probes shared a
+// constructor the map would silently mis-classify one of them. They are
+// separate classes today; assert it rather than trust it, and fall back to the
+// name check if a future version of the library collapses them.
+const SENTINEL_CTORS_DISTINCT = SENTINEL_BY_CTOR.size === SENTINEL_KINDS.length;
+
+function sentinelKindByName(name: string): string | null {
   if (name.includes("ServerTimestamp")) return "serverTimestamp";
   if (name.includes("ArrayUnion")) return "arrayUnion";
   if (name.includes("ArrayRemove")) return "arrayRemove";
   if (name.includes("NumericIncrement")) return "increment";
   if (name === "DeleteTransform" || name.includes("Delete")) return "delete";
   return null;
+}
+
+function sentinelKind(v: unknown): string | null {
+  if (!v || typeof v !== "object") return null;
+  const ctor = (v as object).constructor;
+  if (SENTINEL_CTORS_DISTINCT) {
+    const byCtor = SENTINEL_BY_CTOR.get(ctor);
+    if (byCtor) return byCtor;
+  }
+  // Fallback: a subclass, a second copy of the library, or collapsed classes.
+  return sentinelKindByName(ctor?.name || "");
 }
 
 function sentinelElements(v: unknown): unknown[] {
@@ -510,6 +565,7 @@ async function rawPut(
   collectionPath: string,
   id: string,
   data: Record<string, unknown>,
+  before: Record<string, unknown> | undefined,
 ): Promise<void> {
   const spec = flatSpecFor(collectionPath);
   const path = `${collectionPath}/${id}`;
@@ -536,10 +592,25 @@ async function rawPut(
       id,
       op: "w",
     });
+    // Same transaction, same reason: a process that does not dispatch triggers
+    // itself must hand the change to one that does, and must not do so for a
+    // write that then rolls back.
+    if (usesDurableTriggerQueue()) {
+      await enqueueTriggerEvent(q, getTenantId(), {
+        collectionPath,
+        id,
+        path,
+        before: encodeValue(before),
+        after: encodeValue(data),
+      });
+    }
   });
 }
 
-async function rawDelete(path: string): Promise<void> {
+async function rawDelete(
+  path: string,
+  before: Record<string, unknown> | undefined,
+): Promise<void> {
   const segs = path.split("/");
   const spec = segs.length === 2 ? flatSpecFor(segs[0]) : undefined;
   await withTenant(async (q) => {
@@ -554,6 +625,15 @@ async function rawDelete(path: string): Promise<void> {
       id: segs[segs.length - 1],
       op: "d",
     });
+    if (usesDurableTriggerQueue()) {
+      await enqueueTriggerEvent(q, getTenantId(), {
+        collectionPath: segs.slice(0, -1).join("/"),
+        id: segs[segs.length - 1],
+        path,
+        before: encodeValue(before),
+        after: undefined,
+      });
+    }
   });
 }
 
@@ -565,11 +645,19 @@ async function writeDoc(
   const path = `${collectionPath}/${id}`;
   const before = await rawGet(path);
   if (next === undefined) {
-    await rawDelete(path);
+    await rawDelete(path, before);
   } else {
-    await rawPut(collectionPath, id, next);
+    await rawPut(collectionPath, id, next, before);
   }
-  emitChange({ collectionPath, id, path, before, after: next });
+  // Two delivery paths, never both, chosen by whether THIS process dispatches
+  // triggers. fibuki-api emits in-process (cheap, and handler cascades stay in
+  // memory where the drain's loop guard can see them). Everyone else has
+  // already appended to trigger_events inside the write's transaction above;
+  // emitting here as well would queue a change onto a bus with no listeners,
+  // which is exactly the silent drop this replaces.
+  if (!usesDurableTriggerQueue()) {
+    emitChange({ collectionPath, id, path, before, after: next });
+  }
 }
 
 // ---------------------------------------------------------------------------

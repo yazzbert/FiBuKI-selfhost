@@ -5,10 +5,23 @@ import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { encrypt, getEncryptionKey } from "@/lib/crypto/encryption";
+import { startImapInitialSync } from "@/functions/src/gmail/startImapInitialSync";
 
 const db = getAdminDb();
 const INTEGRATIONS_COLLECTION = "emailIntegrations";
 const TOKENS_COLLECTION = "emailTokens";
+
+/**
+ * Whether this build talks to the self-host backend rather than Firebase.
+ *
+ * next.config.ts bakes NEXT_PUBLIC_FIBUKI_BACKEND in at build time whenever
+ * FIBUKI_BACKEND=selfhost, so the public copy is the one that is reliably
+ * present in the running web container; FIBUKI_BACKEND itself is only
+ * guaranteed during the build. Both are checked so the flag holds either way.
+ */
+const IS_SELFHOST =
+  process.env.NEXT_PUBLIC_FIBUKI_BACKEND === "selfhost" ||
+  process.env.FIBUKI_BACKEND === "selfhost";
 
 interface ConnectBody {
   host?: string;
@@ -26,8 +39,26 @@ interface ConnectBody {
  * whether the host, the TLS cert, or the credentials are wrong.
  */
 function classifyImapError(error: unknown): { code: string; message: string } {
-  const msg = error instanceof Error ? error.message : String(error);
-  const authCode = (error as { authenticationFailed?: boolean })?.authenticationFailed;
+  // imapflow reports a server NO/BAD as the bare message "Command failed" and
+  // puts the useful part on the error object (responseText, serverResponseCode,
+  // mailboxMissing). Fold those in so the regexes below see the real reason and
+  // the fallback surfaces the server's own words instead of "Command failed".
+  const e = (error ?? {}) as {
+    responseText?: string;
+    serverResponseCode?: string;
+    mailboxMissing?: boolean;
+    authenticationFailed?: boolean;
+  };
+  const base = error instanceof Error ? error.message : String(error);
+  const msg = [base, e.serverResponseCode, e.responseText].filter(Boolean).join(" ");
+  const authCode = e.authenticationFailed;
+  if (e.mailboxMissing) {
+    const detail = e.responseText ? ` (${e.responseText})` : "";
+    return {
+      code: "mailbox_not_found",
+      message: `Mailbox not found on the server${detail}. Use the folder name, e.g. INBOX, not the email address.`,
+    };
+  }
   if (authCode || /AUTHENTICATIONFAILED|invalid credentials|auth/i.test(msg)) {
     return { code: "auth_failed", message: "Authentication failed. Check the username and app-password." };
   }
@@ -47,8 +78,14 @@ function classifyImapError(error: unknown): { code: string; message: string } {
  * POST /api/mail/imap/connect
  *
  * Verify an IMAP mailbox with a live login, then persist an `emailIntegrations`
- * document (provider "imap") plus the AES-encrypted app-password. The
- * onMailServiceConnected trigger enqueues the initial sync.
+ * document (provider "imap") plus the AES-encrypted app-password, then start
+ * the initial sync.
+ *
+ * On Firebase the sync is started by the onMailServiceConnected trigger and the
+ * call below is skipped. A self-host deployment gets no such trigger for this
+ * write — it happens in the web container, and trigger delivery is in-process in
+ * the API container — so the route enqueues it directly. See
+ * functions/src/gmail/startImapInitialSync.ts.
  *
  * Body: { host, port?, secure?, user, password, mailbox?, allowSelfSigned?, keywordPrefilter? }
  */
@@ -137,7 +174,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. Create the integration (triggers onMailServiceConnected → initial sync).
+    // 4. Create the integration (on Firebase this fires onMailServiceConnected).
     const now = Timestamp.now();
     const integrationRef = await db.collection(INTEGRATIONS_COLLECTION).add({
       userId,
@@ -168,6 +205,21 @@ export async function POST(request: NextRequest) {
       secretIv,
       updatedAt: now,
     });
+
+    // 6. Start the initial sync ourselves when no trigger will do it for us.
+    //    Failure here must not fail the connect: the mailbox IS connected and
+    //    stored, and a sync can still be started by hand from the sync route.
+    if (IS_SELFHOST) {
+      try {
+        await startImapInitialSync({
+          integrationId: integrationRef.id,
+          userId,
+          email,
+        });
+      } catch (error) {
+        console.error("[IMAP connect] initial sync enqueue failed:", error);
+      }
+    }
 
     return NextResponse.json({ success: true, integrationId: integrationRef.id });
   } catch (error) {

@@ -86,9 +86,23 @@ const workerIcons: Record<WorkerType, { icon: typeof Bot }> = {
   },
 };
 
+/** Coerce a Firestore-ish timestamp to a Date, or null if it is not one. */
+function toDateOrNull(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === "object" && typeof (value as { toDate?: unknown }).toDate === "function") {
+    const d = (value as { toDate: () => Date }).toDate();
+    return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+  }
+  return null;
+}
+
 function formatTime(timestamp: { toDate: () => Date } | Date | null | undefined) {
-  if (!timestamp) return "Just now";
-  const date = "toDate" in timestamp ? timestamp.toDate() : timestamp;
+  const date = toDateOrNull(timestamp);
+  // A stored timestamp can be malformed (a sentinel that failed to resolve
+  // serialises to `{}`). This component renders inside the dashboard layout, so
+  // throwing here blanks EVERY page rather than one line of one card.
+  if (!date) return "Just now";
   const now = new Date();
   const diff = now.getTime() - date.getTime();
   const minutes = Math.floor(diff / 60000);
