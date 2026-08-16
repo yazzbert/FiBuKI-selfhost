@@ -13,6 +13,7 @@
 
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { buildDownloadUrl } from "../utils/buildDownloadUrl";
+import { buildMarkNotInvoiceUpdates, buildUnmarkNotInvoiceUpdates } from "../files/notInvoiceOps";
 import { getStorage } from "firebase-admin/storage";
 import { randomUUID } from "crypto";
 import { TOOL_DEFINITIONS, TOOL_NAMES } from "./definitions";
@@ -108,6 +109,10 @@ export async function handleTool(
       return uploadFile(userId, args);
     case "score_file_transaction_match":
       return scoreFileTransactionMatch(userId, args);
+    case "mark_file_as_not_invoice":
+      return markFileAsNotInvoice(userId, args);
+    case "unmark_file_as_not_invoice":
+      return unmarkFileAsNotInvoice(userId, args);
 
     // Identity entities (the user's personal/company entities used as invoice
     // sender). Returns id + name + vatId + ibans + address per entity.
@@ -521,6 +526,86 @@ export async function disconnectFileFromTransaction(userId: string, args: Record
 
   await batch.commit();
   return { success: true, fileId, transactionId };
+}
+
+/**
+ * Flag a file as not an invoice — the tool-surface twin of the
+ * markFileAsNotInvoice callable, writing the identical field set via the
+ * shared builder in files/notInvoiceOps.
+ *
+ * Refuses while the file is still connected to a transaction. The callable has
+ * no such guard because the UI shows the connection right next to the button;
+ * an agent working from a list does not, and a flagged-but-connected file is a
+ * transaction whose receipt has silently become a non-receipt.
+ */
+export async function markFileAsNotInvoice(userId: string, args: Record<string, unknown>) {
+  const fileId = args.fileId as string;
+  if (!fileId) {
+    throw new Error("fileId is required");
+  }
+
+  const fileRef = db.collection("files").doc(fileId);
+  const fileSnap = await fileRef.get();
+
+  if (!fileSnap.exists || fileSnap.data()?.userId !== userId) {
+    throw new Error("File not found");
+  }
+
+  const fileData = fileSnap.data()!;
+
+  const connectedTo = (fileData.transactionIds as string[] | undefined) ?? [];
+  if (connectedTo.length > 0) {
+    throw new Error(
+      `File is connected to ${connectedTo.length} transaction(s) — disconnect it first ` +
+        `(disconnect_file_from_transaction) before marking it as not an invoice`
+    );
+  }
+
+  await fileRef.update(buildMarkNotInvoiceUpdates(fileData, args.reason as string | undefined));
+
+  console.log(`[markFileAsNotInvoice] Marked file ${fileId} as not invoice`, {
+    userId,
+    reason: (args.reason as string) || "Marked by user",
+    via: "tools",
+  });
+
+  return { success: true, fileId, isNotInvoice: true };
+}
+
+/**
+ * Restore a file as an invoice. Re-opens extraction, which is what recovers the
+ * extracted fields that marking cleared — so the pair is reversible.
+ */
+export async function unmarkFileAsNotInvoice(userId: string, args: Record<string, unknown>) {
+  const fileId = args.fileId as string;
+  if (!fileId) {
+    throw new Error("fileId is required");
+  }
+
+  const fileRef = db.collection("files").doc(fileId);
+  const fileSnap = await fileRef.get();
+
+  if (!fileSnap.exists || fileSnap.data()?.userId !== userId) {
+    throw new Error("File not found");
+  }
+
+  const fileData = fileSnap.data()!;
+
+  // Manual connections outrank a re-run of transaction matching.
+  const manualConnections = await db
+    .collection("fileConnections")
+    .where("fileId", "==", fileId)
+    .where("connectionType", "==", "manual")
+    .get();
+
+  await fileRef.update(buildUnmarkNotInvoiceUpdates(fileData, !manualConnections.empty));
+
+  console.log(`[unmarkFileAsNotInvoice] Unmarked file ${fileId} as invoice`, {
+    userId,
+    via: "tools",
+  });
+
+  return { success: true, fileId, isNotInvoice: false };
 }
 
 export async function autoConnectFileSuggestions(userId: string, args: Record<string, unknown>) {

@@ -629,6 +629,163 @@ describe("Tool Registry Handlers", () => {
     });
   });
 
+  describe("markFileAsNotInvoice / unmarkFileAsNotInvoice", () => {
+    it("should flag the file, clear extracted data and empty the suggestion queue", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          transactionIds: [],
+          isNotInvoice: false,
+          extractedAmount: 1999,
+          extractedIssuer: "Anthropic, PBC",
+          extractionConfidence: 92,
+          transactionMatchComplete: true,
+          transactionSuggestions: [{ transactionId: "tx-1", confidence: 91 }],
+        })
+      );
+
+      const result = await handlers.markFileAsNotInvoice(userId, {
+        fileId: "f-1",
+        reason: "duplicate re-send",
+      });
+
+      expect(result).toMatchObject({ success: true, fileId: "f-1", isNotInvoice: true });
+
+      const file = store.getDoc("files", "f-1");
+      expect(file?.isNotInvoice).toBe(true);
+      expect(file?.notInvoiceReason).toBe("duplicate re-send");
+      expect(file?.extractedAmount).toBeNull();
+      expect(file?.extractionConfidence).toBeNull();
+      expect(file?.transactionSuggestions).toEqual([]);
+      expect(file?.transactionMatchComplete).toBe(false);
+      // Nothing left to extract, so extraction counts as done.
+      expect(file?.extractionComplete).toBe(true);
+    });
+
+    it("should default the reason when none is given", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId, transactionIds: [] }));
+
+      await handlers.markFileAsNotInvoice(userId, { fileId: "f-1" });
+
+      expect(store.getDoc("files", "f-1")?.notInvoiceReason).toBe("Marked by user");
+    });
+
+    it("should preserve a manually-set partner", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          transactionIds: [],
+          partnerId: "p-1",
+          partnerMatchedBy: "manual",
+        })
+      );
+
+      await handlers.markFileAsNotInvoice(userId, { fileId: "f-1" });
+
+      const file = store.getDoc("files", "f-1");
+      expect(file?.partnerId).toBe("p-1");
+      expect(file?.partnerMatchedBy).toBe("manual");
+    });
+
+    it("should clear an auto-matched partner", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({ userId, transactionIds: [], partnerId: "p-1", partnerMatchedBy: "auto" })
+      );
+
+      await handlers.markFileAsNotInvoice(userId, { fileId: "f-1" });
+
+      expect(store.getDoc("files", "f-1")?.partnerId).toBeNull();
+    });
+
+    it("should refuse while the file is still connected to a transaction", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId, transactionIds: ["tx-1"] }));
+
+      await expect(handlers.markFileAsNotInvoice(userId, { fileId: "f-1" })).rejects.toThrow(
+        /connected to 1 transaction/
+      );
+
+      // The refusal must not have written anything.
+      expect(store.getDoc("files", "f-1")?.isNotInvoice).toBeFalsy();
+    });
+
+    it("should require a fileId", async () => {
+      await expect(handlers.markFileAsNotInvoice(userId, {})).rejects.toThrow("fileId is required");
+      await expect(handlers.unmarkFileAsNotInvoice(userId, {})).rejects.toThrow("fileId is required");
+    });
+
+    it("should not reach another user's file", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId: otherUserId, transactionIds: [] }));
+
+      await expect(handlers.markFileAsNotInvoice(userId, { fileId: "f-1" })).rejects.toThrow("File not found");
+      await expect(handlers.unmarkFileAsNotInvoice(userId, { fileId: "f-1" })).rejects.toThrow("File not found");
+    });
+
+    it("should re-open extraction on unmark", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          isNotInvoice: true,
+          notInvoiceReason: "duplicate re-send",
+          extractionComplete: true,
+        })
+      );
+
+      const result = await handlers.unmarkFileAsNotInvoice(userId, { fileId: "f-1" });
+
+      expect(result).toMatchObject({ success: true, isNotInvoice: false });
+
+      const file = store.getDoc("files", "f-1");
+      expect(file?.isNotInvoice).toBe(false);
+      expect(file?.notInvoiceReason).toBeNull();
+      expect(file?.extractionComplete).toBe(false);
+      expect(file?.transactionMatchComplete).toBe(false);
+    });
+
+    it("should leave transaction matching alone when a manual connection exists", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({ userId, isNotInvoice: true, transactionMatchComplete: true })
+      );
+      store.setDoc("fileConnections", "conn-1", {
+        fileId: "f-1",
+        transactionId: "tx-1",
+        userId,
+        connectionType: "manual",
+      });
+
+      await handlers.unmarkFileAsNotInvoice(userId, { fileId: "f-1" });
+
+      const file = store.getDoc("files", "f-1");
+      expect(file?.isNotInvoice).toBe(false);
+      // Re-running the match would discard a connection a human made by hand.
+      expect(file?.transactionMatchComplete).toBe(true);
+    });
+
+    it("should round-trip mark then unmark", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId, transactionIds: [], extractedAmount: 1999 }));
+
+      await handlers.markFileAsNotInvoice(userId, { fileId: "f-1", reason: "statement" });
+      expect(store.getDoc("files", "f-1")?.isNotInvoice).toBe(true);
+
+      await handlers.unmarkFileAsNotInvoice(userId, { fileId: "f-1" });
+
+      const file = store.getDoc("files", "f-1");
+      expect(file?.isNotInvoice).toBe(false);
+      expect(file?.notInvoiceReason).toBeNull();
+      // The cleared fields come back via re-extraction, which this re-opens.
+      expect(file?.extractionComplete).toBe(false);
+    });
+  });
+
   // ==========================================================================
   // Categories
   // ==========================================================================
