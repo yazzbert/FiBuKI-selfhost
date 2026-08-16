@@ -49,8 +49,13 @@ let durable = false;
  * process that genuinely needs this is fibuki-web, and it has an unambiguous
  * marker: `lib/selfhost/admin-shim.ts` is loaded in that container and nowhere
  * else, so it is the caller.
+ *
+ * Named `enable…`, matching `enableAutoDrain()`, and NOT `use…`: an exported
+ * `use[A-Z]` name is a React hook to eslint's `react-hooks/rules-of-hooks`, so
+ * calling it at module scope (which is exactly what admin-shim.ts must do) was
+ * a lint error in a file with no React in it.
  */
-export function useDurableTriggerQueue(): void {
+export function enableDurableTriggerQueue(): void {
   durable = true;
 }
 

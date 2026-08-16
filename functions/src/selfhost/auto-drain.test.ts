@@ -28,6 +28,29 @@ function until(cond: () => boolean, timeoutMs = 5000): Promise<void> {
   });
 }
 
+/**
+ * Resolve once `read()` has held the same value for `quietMs`, i.e. the thing
+ * being counted has stopped moving. Rejects if it never stops — which is the
+ * failure this is here to catch, so an uncut loop still fails the test rather
+ * than passing slowly.
+ */
+async function quiesced(read: () => number, quietMs = 500, timeoutMs = 15_000): Promise<number> {
+  const start = Date.now();
+  let last = read();
+  let lastChange = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50));
+    const now = read();
+    if (now !== last) {
+      last = now;
+      lastChange = Date.now();
+    } else if (Date.now() - lastChange >= quietMs) {
+      return now;
+    }
+  }
+  throw new Error(`still changing after ${timeoutMs}ms (last value ${last}) — loop never cut`);
+}
+
 beforeEach(async () => {
   await __resetFirestoreShim();
   __resetTriggerShim();
@@ -95,11 +118,21 @@ describe("auto-drain", () => {
     // the loop must have been cut somewhere around the per-path cap rather
     // than running forever.
     await until(() => seen.includes("b1"), 10_000);
-    const settled = spins;
-    await new Promise((r) => setTimeout(r, 200));
+
+    // Wait for the loop to actually stop, rather than assuming it already has.
+    // Each spin is one real document update, so how long the cap takes to bite
+    // is a property of the backend, not of the guard: against PGlite the ~100
+    // spins are in-memory and land inside a few ms, against a real Postgres
+    // they are round trips and take well over a second. A fixed sleep here read
+    // as "the guard failed to cut the loop" on the real-Postgres job while the
+    // guard was working correctly.
+    const settled = await quiesced(() => spins);
     expect(spins).toBe(settled);
     expect(spins).toBeLessThanOrEqual(110);
-  }, 20_000);
+    // 30s, not 20s: the two waits above can legitimately spend 10s + 15s before
+    // giving up, and a test that dies on its own timeout reports "timed out"
+    // rather than quiesced()'s "loop never cut", losing the diagnosis.
+  }, 30_000);
 });
 
 describe("resweepPendingExtractions", () => {
