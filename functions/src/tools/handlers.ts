@@ -13,11 +13,13 @@
 
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { buildDownloadUrl } from "../utils/buildDownloadUrl";
+import { buildMarkNotInvoiceUpdates, buildUnmarkNotInvoiceUpdates } from "../files/notInvoiceOps";
 import { getStorage } from "firebase-admin/storage";
 import { randomUUID } from "crypto";
 import { TOOL_DEFINITIONS, TOOL_NAMES } from "./definitions";
 import type { ToolName } from "./definitions";
 import { PLANS } from "../billing/config";
+import { KNOWN_AUSTRIAN_RATES } from "../uva/rateSet";
 import type { PlanId, PlanFeatures } from "../billing/config";
 
 /**
@@ -108,6 +110,10 @@ export async function handleTool(
       return uploadFile(userId, args);
     case "score_file_transaction_match":
       return scoreFileTransactionMatch(userId, args);
+    case "mark_file_as_not_invoice":
+      return markFileAsNotInvoice(userId, args);
+    case "unmark_file_as_not_invoice":
+      return unmarkFileAsNotInvoice(userId, args);
 
     // Identity entities (the user's personal/company entities used as invoice
     // sender). Returns id + name + vatId + ibans + address per entity.
@@ -285,8 +291,26 @@ export async function getTransaction(userId: string, transactionId: string) {
 }
 
 export async function updateTransaction(userId: string, args: Record<string, unknown>) {
-  const { transactionId, description, isComplete } = args;
+  const { transactionId, description, isComplete, vatRate, isReverseCharge } = args;
   if (!transactionId) throw new Error("transactionId is required");
+
+  // Manual override lane (fork #64, spec §3 step 3): the UVA calculation
+  // validates the rate against the transaction's period; this only rejects
+  // values that are never an Austrian rate (19 = Jungholz/Mittelberg).
+  if (vatRate !== undefined && vatRate !== null) {
+    if (typeof vatRate !== "number" || !KNOWN_AUSTRIAN_RATES.includes(vatRate)) {
+      throw new Error(
+        `vatRate must be one of ${KNOWN_AUSTRIAN_RATES.join(", ")} (or null to clear the override)`
+      );
+    }
+  }
+  if (
+    isReverseCharge !== undefined &&
+    isReverseCharge !== null &&
+    typeof isReverseCharge !== "boolean"
+  ) {
+    throw new Error("isReverseCharge must be true, false, or null to clear");
+  }
 
   const docRef = db.collection("transactions").doc(transactionId as string);
   const doc = await docRef.get();
@@ -297,34 +321,69 @@ export async function updateTransaction(userId: string, args: Record<string, unk
   const updates: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
   if (description !== undefined) updates.description = description;
   if (isComplete !== undefined) updates.isComplete = isComplete;
+  if (vatRate !== undefined) updates.vatRate = vatRate;
+  if (isReverseCharge !== undefined) updates.isReverseCharge = isReverseCharge;
 
   await docRef.update(updates);
   return { success: true, transactionId };
 }
 
 export async function listTransactionsNeedingFiles(userId: string, args: Record<string, unknown>) {
-  let query = db.collection("transactions").where("userId", "==", userId).orderBy("date", "desc");
+  let query: FirebaseFirestore.Query = db
+    .collection("transactions")
+    .where("userId", "==", userId)
+    .orderBy("date", "desc");
 
-  const limit = Math.min((args.limit as number) || 50, 100);
-  query = query.limit(500); // Fetch more to filter
+  // Cursor pagination: cursor is the last document id from the previous page.
+  if (args.cursor) {
+    const cursorSnap = await db.collection("transactions").doc(args.cursor as string).get();
+    if (cursorSnap.exists && cursorSnap.data()?.userId === userId) {
+      query = query.startAfter(cursorSnap);
+    }
+  }
+
+  // "needs a receipt" is three absent-field tests (fileIds empty,
+  // noReceiptCategoryId unset, quotaExceeded unset) and Firestore has no
+  // "field missing" predicate, so the filtering happens in memory and the read
+  // deliberately overfetches — a page is built from up to `scanLimit`
+  // documents. Rows past that are reached via `nextCursor`, not silently
+  // dropped, and the returned `count` is the page size, never a count of what
+  // the account still owes receipts for.
+  const requestedLimit = Math.min(Math.max((args.limit as number) || 50, 1), 500);
+  const scanLimit = Math.min(requestedLimit * 5, 1000);
+  query = query.limit(scanLimit);
 
   const snapshot = await query.get();
-  let transactions = snapshot.docs
-    .map((doc) => {
-      const data = doc.data();
-      return { id: doc.id, ...data, date: toLocalDate(data.date) || data.date } as Record<string, unknown>;
-    })
-    .filter(
-      (t) =>
-        (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) && !t.noReceiptCategoryId && !t.quotaExceeded
-    );
+  const scanned = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return { id: doc.id, ...data, date: toLocalDate(data.date) || data.date } as Record<string, unknown>;
+  });
+
+  let transactions = scanned.filter(
+    (t) =>
+      (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) && !t.noReceiptCategoryId && !t.quotaExceeded
+  );
 
   if (args.minAmount !== undefined) {
     const minAmount = args.minAmount as number;
     transactions = transactions.filter((t) => Math.abs((t.amount as number) || 0) >= minAmount);
   }
 
-  return transactions.slice(0, limit);
+  // The page ends either at the requested limit or at the end of the scan.
+  // The cursor is the last document actually consumed, so the next page
+  // resumes exactly where this one stopped — rows filtered out in memory are
+  // skipped, rows that simply didn't fit are not.
+  const page = transactions.slice(0, requestedLimit);
+  const truncated = transactions.length > requestedLimit;
+  const hasMore = truncated || scanned.length === scanLimit;
+
+  const nextCursor = !hasMore
+    ? null
+    : truncated
+      ? (page[page.length - 1].id as string)
+      : ((scanned[scanned.length - 1]?.id as string) ?? null);
+
+  return { transactions: page, nextCursor, count: page.length };
 }
 
 // ============================================================================
@@ -488,6 +547,86 @@ export async function disconnectFileFromTransaction(userId: string, args: Record
 
   await batch.commit();
   return { success: true, fileId, transactionId };
+}
+
+/**
+ * Flag a file as not an invoice — the tool-surface twin of the
+ * markFileAsNotInvoice callable, writing the identical field set via the
+ * shared builder in files/notInvoiceOps.
+ *
+ * Refuses while the file is still connected to a transaction. The callable has
+ * no such guard because the UI shows the connection right next to the button;
+ * an agent working from a list does not, and a flagged-but-connected file is a
+ * transaction whose receipt has silently become a non-receipt.
+ */
+export async function markFileAsNotInvoice(userId: string, args: Record<string, unknown>) {
+  const fileId = args.fileId as string;
+  if (!fileId) {
+    throw new Error("fileId is required");
+  }
+
+  const fileRef = db.collection("files").doc(fileId);
+  const fileSnap = await fileRef.get();
+
+  if (!fileSnap.exists || fileSnap.data()?.userId !== userId) {
+    throw new Error("File not found");
+  }
+
+  const fileData = fileSnap.data()!;
+
+  const connectedTo = (fileData.transactionIds as string[] | undefined) ?? [];
+  if (connectedTo.length > 0) {
+    throw new Error(
+      `File is connected to ${connectedTo.length} transaction(s) — disconnect it first ` +
+        `(disconnect_file_from_transaction) before marking it as not an invoice`
+    );
+  }
+
+  await fileRef.update(buildMarkNotInvoiceUpdates(fileData, args.reason as string | undefined));
+
+  console.log(`[markFileAsNotInvoice] Marked file ${fileId} as not invoice`, {
+    userId,
+    reason: (args.reason as string) || "Marked by user",
+    via: "tools",
+  });
+
+  return { success: true, fileId, isNotInvoice: true };
+}
+
+/**
+ * Restore a file as an invoice. Re-opens extraction, which is what recovers the
+ * extracted fields that marking cleared — so the pair is reversible.
+ */
+export async function unmarkFileAsNotInvoice(userId: string, args: Record<string, unknown>) {
+  const fileId = args.fileId as string;
+  if (!fileId) {
+    throw new Error("fileId is required");
+  }
+
+  const fileRef = db.collection("files").doc(fileId);
+  const fileSnap = await fileRef.get();
+
+  if (!fileSnap.exists || fileSnap.data()?.userId !== userId) {
+    throw new Error("File not found");
+  }
+
+  const fileData = fileSnap.data()!;
+
+  // Manual connections outrank a re-run of transaction matching.
+  const manualConnections = await db
+    .collection("fileConnections")
+    .where("fileId", "==", fileId)
+    .where("connectionType", "==", "manual")
+    .get();
+
+  await fileRef.update(buildUnmarkNotInvoiceUpdates(fileData, !manualConnections.empty));
+
+  console.log(`[unmarkFileAsNotInvoice] Unmarked file ${fileId} as invoice`, {
+    userId,
+    via: "tools",
+  });
+
+  return { success: true, fileId, isNotInvoice: false };
 }
 
 export async function autoConnectFileSuggestions(userId: string, args: Record<string, unknown>) {

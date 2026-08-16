@@ -101,25 +101,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "update_transaction",
-    description: "Update a transaction's description or completion status",
+    description: "Update a transaction's description, completion status, or manual VAT-rate override (the override feeds the UVA calculation when no receipt resolves the rate)",
     inputSchema: {
       type: "object",
       properties: {
         transactionId: { type: "string", description: "The transaction ID" },
         description: { type: "string", description: "Description for tax purposes" },
         isComplete: { type: "boolean", description: "Mark as complete/incomplete" },
+        vatRate: {
+          type: ["number", "null"],
+          description:
+            "Manual VAT rate override for UVA derivation: one of 0, 4.9, 10, 13, 19, 20. Pass null to clear. The calculation still validates the rate against the transaction's period.",
+        },
+        isReverseCharge: {
+          type: ["boolean", "null"],
+          description:
+            "Reverse-charge classification for UVA derivation: true forces the §19 service regime (KZ 057/066), false vetoes the automatic foreign-supplier heuristic, null clears and lets the heuristic decide.",
+        },
       },
       required: ["transactionId"],
     },
   },
   {
     name: "list_transactions_needing_files",
-    description: "Find transactions without receipts (no files, no category)",
+    description: "Find transactions without receipts (no files, no category). Returns { transactions, nextCursor, count }. `count` is the size of this page, not a total — page with nextCursor until it comes back null to see everything that still needs a receipt.",
     inputSchema: {
       type: "object",
       properties: {
         minAmount: { type: "number", description: "Minimum amount in cents" },
-        limit: { type: "number", description: "Max results (default 50)" },
+        limit: { type: "number", description: "Max results per page (default 50, max 500)" },
+        cursor: { type: "string", description: "nextCursor from the previous response to fetch the next page" },
       },
     },
   },
@@ -200,6 +211,31 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         transactionId: { type: "string", description: "The transaction ID" },
       },
       required: ["fileId", "transactionId"],
+    },
+  },
+  {
+    name: "mark_file_as_not_invoice",
+    description:
+      "Flag a file as not an invoice (duplicate re-send, payment reminder, statement, anything that documents nothing). Clears its extracted data and takes it out of the unmatched-file queue. Refuses while the file is still connected to a transaction. Reversible with unmark_file_as_not_invoice.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+        reason: { type: "string", description: "Why it is not an invoice — stored on the file" },
+      },
+      required: ["fileId"],
+    },
+  },
+  {
+    name: "unmark_file_as_not_invoice",
+    description:
+      "Restore a file previously flagged as not an invoice. Re-opens extraction, which recovers the fields marking cleared.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+      },
+      required: ["fileId"],
     },
   },
   {
