@@ -114,12 +114,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "list_transactions_needing_files",
-    description: "Find transactions without receipts (no files, no category)",
+    description: "Find transactions without receipts (no files, no category). Returns { transactions, nextCursor, count }. `count` is the size of this page, not a total — page with nextCursor until it comes back null to see everything that still needs a receipt.",
     inputSchema: {
       type: "object",
       properties: {
         minAmount: { type: "number", description: "Minimum amount in cents" },
-        limit: { type: "number", description: "Max results (default 50)" },
+        limit: { type: "number", description: "Max results per page (default 50, max 500)" },
+        cursor: { type: "string", description: "nextCursor from the previous response to fetch the next page" },
       },
     },
   },

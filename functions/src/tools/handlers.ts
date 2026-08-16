@@ -303,28 +303,61 @@ export async function updateTransaction(userId: string, args: Record<string, unk
 }
 
 export async function listTransactionsNeedingFiles(userId: string, args: Record<string, unknown>) {
-  let query = db.collection("transactions").where("userId", "==", userId).orderBy("date", "desc");
+  let query: FirebaseFirestore.Query = db
+    .collection("transactions")
+    .where("userId", "==", userId)
+    .orderBy("date", "desc");
 
-  const limit = Math.min((args.limit as number) || 50, 100);
-  query = query.limit(500); // Fetch more to filter
+  // Cursor pagination: cursor is the last document id from the previous page.
+  if (args.cursor) {
+    const cursorSnap = await db.collection("transactions").doc(args.cursor as string).get();
+    if (cursorSnap.exists && cursorSnap.data()?.userId === userId) {
+      query = query.startAfter(cursorSnap);
+    }
+  }
+
+  // "needs a receipt" is three absent-field tests (fileIds empty,
+  // noReceiptCategoryId unset, quotaExceeded unset) and Firestore has no
+  // "field missing" predicate, so the filtering happens in memory and the read
+  // deliberately overfetches — a page is built from up to `scanLimit`
+  // documents. Rows past that are reached via `nextCursor`, not silently
+  // dropped, and the returned `count` is the page size, never a count of what
+  // the account still owes receipts for.
+  const requestedLimit = Math.min(Math.max((args.limit as number) || 50, 1), 500);
+  const scanLimit = Math.min(requestedLimit * 5, 1000);
+  query = query.limit(scanLimit);
 
   const snapshot = await query.get();
-  let transactions = snapshot.docs
-    .map((doc) => {
-      const data = doc.data();
-      return { id: doc.id, ...data, date: toLocalDate(data.date) || data.date } as Record<string, unknown>;
-    })
-    .filter(
-      (t) =>
-        (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) && !t.noReceiptCategoryId && !t.quotaExceeded
-    );
+  const scanned = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return { id: doc.id, ...data, date: toLocalDate(data.date) || data.date } as Record<string, unknown>;
+  });
+
+  let transactions = scanned.filter(
+    (t) =>
+      (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) && !t.noReceiptCategoryId && !t.quotaExceeded
+  );
 
   if (args.minAmount !== undefined) {
     const minAmount = args.minAmount as number;
     transactions = transactions.filter((t) => Math.abs((t.amount as number) || 0) >= minAmount);
   }
 
-  return transactions.slice(0, limit);
+  // The page ends either at the requested limit or at the end of the scan.
+  // The cursor is the last document actually consumed, so the next page
+  // resumes exactly where this one stopped — rows filtered out in memory are
+  // skipped, rows that simply didn't fit are not.
+  const page = transactions.slice(0, requestedLimit);
+  const truncated = transactions.length > requestedLimit;
+  const hasMore = truncated || scanned.length === scanLimit;
+
+  const nextCursor = !hasMore
+    ? null
+    : truncated
+      ? (page[page.length - 1].id as string)
+      : ((scanned[scanned.length - 1]?.id as string) ?? null);
+
+  return { transactions: page, nextCursor, count: page.length };
 }
 
 // ============================================================================

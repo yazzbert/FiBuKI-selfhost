@@ -233,8 +233,10 @@ describe("Tool Registry Handlers", () => {
 
       const result = await handlers.listTransactionsNeedingFiles(userId, {});
 
-      expect(result).toHaveLength(1);
-      expect(result[0].id).toBe("tx-1");
+      expect(result.transactions).toHaveLength(1);
+      expect(result.transactions[0].id).toBe("tx-1");
+      expect(result.count).toBe(1);
+      expect(result.nextCursor).toBeNull();
     });
 
     it("should filter by minAmount", async () => {
@@ -243,8 +245,134 @@ describe("Tool Registry Handlers", () => {
 
       const result = await handlers.listTransactionsNeedingFiles(userId, { minAmount: 1000 });
 
-      expect(result).toHaveLength(1);
-      expect(result[0].id).toBe("tx-1");
+      expect(result.transactions).toHaveLength(1);
+      expect(result.transactions[0].id).toBe("tx-1");
+    });
+
+    it("should exclude transactions parked on a quota-exceeded flag", async () => {
+      store.setDoc("transactions", "tx-1", createTestTransaction({ userId, fileIds: [] }));
+      store.setDoc("transactions", "tx-2", createTestTransaction({ userId, fileIds: [], quotaExceeded: true }));
+
+      const result = await handlers.listTransactionsNeedingFiles(userId, {});
+
+      expect(result.count).toBe(1);
+      expect(result.transactions[0].id).toBe("tx-1");
+    });
+  });
+
+  describe("listTransactionsNeedingFiles - paging and the limit", () => {
+    // Seed n transactions, newest first by date so page order is deterministic.
+    const seedTransactions = (n: number, overridesFor: (i: number) => Record<string, unknown> = () => ({})) => {
+      for (let i = 0; i < n; i++) {
+        store.setDoc(
+          "transactions",
+          `tx-${String(i).padStart(3, "0")}`,
+          createTestTransaction({
+            userId,
+            fileIds: [],
+            date: new Date(Date.UTC(2026, 0, 1) + (n - i) * 60_000),
+            ...overridesFor(i),
+          })
+        );
+      }
+    };
+
+    it("honours a limit above 100 instead of silently clamping to it", async () => {
+      seedTransactions(120);
+
+      const result = await handlers.listTransactionsNeedingFiles(userId, { limit: 200 });
+
+      expect(result.count).toBe(120);
+      expect(result.transactions).toHaveLength(120);
+    });
+
+    it("caps the page at 500 for an absurd limit, and says there is more", async () => {
+      seedTransactions(600);
+
+      const result = await handlers.listTransactionsNeedingFiles(userId, { limit: 10_000 });
+
+      expect(result.count).toBe(500);
+      expect(result.nextCursor).not.toBeNull();
+    });
+
+    it("reaches transactions past the old 500-document scan", async () => {
+      // The pre-fix handler read exactly 500 documents and filtered inside
+      // them, so anything older than the newest 500 was unreachable through
+      // the tool no matter what limit was passed.
+      seedTransactions(700);
+
+      const seen = new Set<string>();
+      let cursor: string | null | undefined = undefined;
+      let guard = 0;
+
+      do {
+        const page: Awaited<ReturnType<typeof handlers.listTransactionsNeedingFiles>> =
+          await handlers.listTransactionsNeedingFiles(userId, { limit: 200, ...(cursor ? { cursor } : {}) });
+        page.transactions.forEach((t) => seen.add(t.id as string));
+        cursor = page.nextCursor;
+      } while (cursor && ++guard < 20);
+
+      expect(seen.size).toBe(700);
+      expect(seen.has("tx-699")).toBe(true);
+    });
+
+    it("fills the page past already-matched rows instead of letting them consume slots", async () => {
+      // The 60 newest already have receipts, the ones needing files sit behind
+      // them. The pre-fix handler filtered after the cap, so a small limit
+      // could come back empty while work remained.
+      seedTransactions(120, (i) => (i < 60 ? { fileIds: ["file-1"] } : {}));
+
+      const result = await handlers.listTransactionsNeedingFiles(userId, { limit: 20 });
+
+      expect(result.count).toBe(20);
+      expect(result.transactions.every((t) => ((t.fileIds as string[]) || []).length === 0)).toBe(true);
+    });
+
+    it("pages to exhaustion via nextCursor, no duplicates, no gaps", async () => {
+      seedTransactions(25);
+
+      const seen: string[] = [];
+      let cursor: string | null | undefined = undefined;
+      let guard = 0;
+
+      do {
+        const page: Awaited<ReturnType<typeof handlers.listTransactionsNeedingFiles>> =
+          await handlers.listTransactionsNeedingFiles(userId, { limit: 7, ...(cursor ? { cursor } : {}) });
+        seen.push(...page.transactions.map((t) => t.id as string));
+        cursor = page.nextCursor;
+      } while (cursor && ++guard < 20);
+
+      expect(seen).toHaveLength(25);
+      expect(new Set(seen).size).toBe(25);
+    });
+
+    it("keeps paging when a whole scan window is filtered away", async () => {
+      // 60 matched rows in front of 5 unmatched ones, page size 5 -> scan
+      // window 25, so the first two pages are empty but must still hand back
+      // a cursor.
+      seedTransactions(65, (i) => (i < 60 ? { fileIds: ["file-1"] } : {}));
+
+      const seen: string[] = [];
+      let cursor: string | null | undefined = undefined;
+      let guard = 0;
+
+      do {
+        const page: Awaited<ReturnType<typeof handlers.listTransactionsNeedingFiles>> =
+          await handlers.listTransactionsNeedingFiles(userId, { limit: 5, ...(cursor ? { cursor } : {}) });
+        seen.push(...page.transactions.map((t) => t.id as string));
+        cursor = page.nextCursor;
+      } while (cursor && ++guard < 30);
+
+      expect(seen).toHaveLength(5);
+    });
+
+    it("ignores a cursor belonging to another user", async () => {
+      seedTransactions(3);
+      store.setDoc("transactions", "tx-other", createTestTransaction({ userId: otherUserId }));
+
+      const result = await handlers.listTransactionsNeedingFiles(userId, { cursor: "tx-other" });
+
+      expect(result.count).toBe(3);
     });
   });
 
@@ -807,7 +935,9 @@ describe("Tool Registry Handlers", () => {
 
       const result = await handlers.listTransactionsNeedingFiles(userId, { limit: 4 });
 
-      expect(result).toHaveLength(4);
+      expect(result.transactions).toHaveLength(4);
+      expect(result.count).toBe(4);
+      expect(result.nextCursor).not.toBeNull();
     });
   });
 
