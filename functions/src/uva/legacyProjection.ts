@@ -5,6 +5,7 @@
  * UvaReportResult directly.
  */
 
+import { OUTPUT_BASE_KZ } from "./calculateUva";
 import type { UvaReportResult } from "./types";
 
 export interface TransactionStats {
@@ -86,7 +87,7 @@ export function toLegacyReportData(
 }
 
 function outputKzFor(rate: number): string {
-  return { 20: "022", 10: "029", 13: "006", 4.9: "124" }[rate] ?? "";
+  return OUTPUT_BASE_KZ[rate] ?? "";
 }
 
 function contributionCount(result: UvaReportResult, rate: number): number {

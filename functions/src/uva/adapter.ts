@@ -108,16 +108,23 @@ const EU_UID_PREFIXES = new Set([
 /**
  * D3 classification. Only the service regime has a data source today:
  *  - tx.isReverseCharge === true is a manual/override signal;
+ *  - tx.isReverseCharge === false is a manual VETO of the heuristic;
  *  - a foreign supplier UID on a document that charges no VAT is the
  *    heuristic signal (Anthropic pattern: US/IE supplier, 0% VAT line).
  * Goods regimes (ig. Erwerb, import) currently classify only via
- * override — nothing in the data model marks a purchase as goods.
+ * override — nothing in the data model marks a purchase as goods, so an
+ * EU GOODS purchase under the UID looks identical to the service
+ * pattern. That is why every heuristic classification is flagged
+ * basis: "heuristic" in the reverse-charge list for human review, and
+ * why the veto lane exists: set isReverseCharge = false on the
+ * transaction and classify goods regimes via override instead.
  */
 export function deriveForeignRegime(
   tx: TransactionRecord,
   files: UvaFile[]
 ): UvaForeignRegime | null {
   if (tx.amount >= 0) return null;
+  if (tx.isReverseCharge === false) return null;
 
   const foreignUidFile = files.find((f) => {
     const uid = f.supplierVatId?.toUpperCase();
@@ -201,6 +208,10 @@ export function buildUvaTransaction(
     files,
     foreignRegime: deriveForeignRegime(tx, files),
     priorClaimedFraction,
+    // invoiceRateGroups stays unset: the data model has no
+    // invoice↔transaction link yet. Income resolves via connected files
+    // (uploaded AR invoices) or falls back per spec §3 step 4; the pure
+    // module already supports invoice groups for when linkage lands.
   };
 }
 

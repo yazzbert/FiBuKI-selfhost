@@ -87,6 +87,16 @@ describe("deriveForeignRegime", () => {
     expect(deriveForeignRegime(tx, [deFile])).toBeNull();
   });
 
+  it("isReverseCharge === false vetoes the heuristic (goods-classified-elsewhere lane)", () => {
+    const tx: TransactionRecord = {
+      id: "t",
+      date: ts("2026-01-15T00:00:00Z"),
+      amount: -2160,
+      isReverseCharge: false,
+    };
+    expect(deriveForeignRegime(tx, [anthropicFile])).toBeNull();
+  });
+
   it("never classifies income", () => {
     const tx: TransactionRecord = {
       id: "t",

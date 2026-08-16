@@ -104,6 +104,23 @@ describe("step 0: zero-VAT classes", () => {
     expect(r.unresolved).toHaveLength(0);
   });
 
+  it("payroll claims zero input VAT via the same class gate", () => {
+    const r = run([
+      {
+        id: "t-payroll",
+        date: "2026-02-28",
+        amount: -250000,
+        noReceiptCategory: {
+          id: "cp",
+          templateId: "payroll",
+          vatTreatment: "exempt-class",
+        },
+      },
+    ]);
+    expect(r.totalInputVat).toBe(0);
+    expect(r.unresolved).toHaveLength(0);
+  });
+
   it("needs-receipt categories land in the unresolved bucket", () => {
     const r = run([
       {
@@ -538,6 +555,43 @@ describe("D3: foreign regimes", () => {
     expect(r.unresolved).toHaveLength(0);
     // never in the domestic input VAT line
     expect(kz(r, "060")).toBe(0);
+  });
+
+  it("self-assesses a reduced-rate service at its domestic rate, not 20%", () => {
+    const r = run([
+      {
+        id: "t-svc-10",
+        date: "2026-01-15",
+        amount: -1000,
+        foreignRegime: {
+          kind: "service",
+          origin: "third-country",
+          basis: "override",
+          domesticRate: 10,
+        },
+      },
+    ]);
+    expect(kz(r, "057")).toBe(100);
+    expect(kz(r, "066")).toBe(100);
+  });
+
+  it("books deferred EUSt (§26) in KZ083 instead of KZ061", () => {
+    const r = run([
+      {
+        id: "t-import-deferred",
+        date: "2026-01-15",
+        amount: -8000,
+        foreignRegime: {
+          kind: "goods",
+          origin: "third-country",
+          basis: "override",
+          importVatPaid: 1600,
+          importVatScheme: "deferred",
+        },
+      },
+    ]);
+    expect(kz(r, "083")).toBe(1600);
+    expect(kz(r, "061")).toBe(0);
   });
 
   it("reverse-charges an EU B2B service identically (not EU-only)", () => {

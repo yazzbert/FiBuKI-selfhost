@@ -69,12 +69,19 @@ export interface UvaForeignRegime {
   origin: "eu" | "third-country";
   basis: "heuristic" | "override";
   /**
-   * goods/eu: the Austrian rate the goods would carry domestically
-   * (default 20). goods/third-country: ignored.
+   * service and goods/eu: the Austrian rate the supply would carry
+   * domestically (default 20) — the self-assessment rate.
+   * goods/third-country: ignored.
    */
   domesticRate?: number | null;
   /** goods/third-country only: Einfuhrumsatzsteuer actually paid, cents. */
   importVatPaid?: number | null;
+  /**
+   * goods/third-country only: how the EUSt was settled — "paid" (KZ 061,
+   * default) or "deferred" via §26 Abs 3 Z 2 charge to the tax account
+   * (KZ 083).
+   */
+  importVatScheme?: "paid" | "deferred" | null;
 }
 
 /** Per-rate group: the atom of derivation (R4/R6). */

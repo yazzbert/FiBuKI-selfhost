@@ -8,6 +8,14 @@ import type { UvaPeriod } from "./types";
 const RATE_49_FROM = "2026-07-01";
 
 /**
+ * Every rate that is EVER an Austrian VAT rate, including the 19%
+ * Jungholz/Mittelberg enclave rate (§10 Abs 4). Period validity is a
+ * separate question (ratesValidOn); this is the vocabulary for override
+ * validation and implied-rate snapping.
+ */
+export const KNOWN_AUSTRIAN_RATES = [0, 4.9, 10, 13, 19, 20];
+
+/**
  * Austrian VAT rates valid on a given Vienna calendar day (YYYY-MM-DD).
  * 19% (Jungholz/Mittelberg, §10 Abs 4) is deliberately NOT in this set —
  * it is only accepted with an ATU supplier UID (handled in derivation).

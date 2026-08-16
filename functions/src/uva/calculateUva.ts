@@ -15,7 +15,12 @@
  *           to 20% flagged (understating output VAT is the worse error)
  */
 
-import { periodBoundaries, ratesValidInPeriod, ratesValidOn } from "./rateSet";
+import {
+  KNOWN_AUSTRIAN_RATES,
+  periodBoundaries,
+  ratesValidInPeriod,
+  ratesValidOn,
+} from "./rateSet";
 import type {
   DerivationStep,
   KennzahlFigure,
@@ -28,14 +33,14 @@ import type {
 } from "./types";
 
 /** Bank-vs-invoice equality tolerance in cents — a product decision, not a legal bright line (spec §10.5). */
-const RECONCILE_TOLERANCE_CENTS = 2;
+export const RECONCILE_TOLERANCE_CENTS = 2;
 /** A restaurant overpay up to this fraction of the invoice total classifies as tip (R5) — product decision. */
 const TIP_MAX_FRACTION = 0.1;
 /** Tolerance in percentage points when matching an implied rate (vatAmount only) to the valid set. */
 const IMPLIED_RATE_TOLERANCE = 0.5;
 
-/** Output-side base Kennzahlen per rate (spec §4). */
-const OUTPUT_BASE_KZ: Record<number, string> = {
+/** Output-side base Kennzahlen per rate (spec §4). Single source — legacyProjection imports this. */
+export const OUTPUT_BASE_KZ: Record<number, string> = {
   20: "022",
   10: "029",
   13: "006",
@@ -127,8 +132,11 @@ export function calculateUva(input: UvaCalculationInput): UvaReportResult {
       if (regime.kind === "service") {
         // Reverse charge §3a Abs 6 + §19 Abs 1 — EU and third country alike.
         // The bank amount IS the net (the supplier charged no VAT); the
-        // self-assessed Austrian rate for these services is the standard 20%.
-        const vat = Math.round((bank * 20) / 100);
+        // self-assessed rate is the Austrian rate the service carries
+        // domestically — standard 20% unless overridden (R8 pins the KZ
+        // pair, not the rate).
+        const rate = regime.domesticRate ?? 20;
+        const vat = Math.round((bank * rate) / 100);
         addKz("057", vat, "reverse-charge");
         addKz("066", vat, "reverse-charge");
         totalOutputVat += vat;
@@ -151,10 +159,11 @@ export function calculateUva(input: UvaCalculationInput): UvaReportResult {
         totalOutputVat += tax;
         totalInputVat += tax;
       } else {
-        // Import: Einfuhrumsatzsteuer is deductible only when actually
-        // paid and documented (KZ 061).
+        // Import: Einfuhrumsatzsteuer is deductible only when documented —
+        // KZ 061 when paid, KZ 083 when deferred via §26 to the tax account.
         if (regime.importVatPaid != null && regime.importVatPaid > 0) {
-          addKz("061", regime.importVatPaid, "import");
+          const kzCode = regime.importVatScheme === "deferred" ? "083" : "061";
+          addKz(kzCode, regime.importVatPaid, "import");
           totalInputVat += regime.importVatPaid;
         } else {
           markUnresolved(tx, "no-vat-data", null);
@@ -415,7 +424,7 @@ function fileRateGroups(
     const implied = (f.vatAmount / (gross - f.vatAmount)) * 100;
     // Snap to the nearest known rate; validation against the period set
     // happens in the caller. 19 included so DE-vs-ATU can be told apart.
-    const candidates = [0, 4.9, 10, 13, 19, 20];
+    const candidates = KNOWN_AUSTRIAN_RATES;
     const rate = candidates.reduce((best, r) =>
       Math.abs(r - implied) < Math.abs(best - implied) ? r : best
     );

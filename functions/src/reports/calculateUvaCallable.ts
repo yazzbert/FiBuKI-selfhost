@@ -9,7 +9,7 @@
 
 import { Timestamp } from "firebase-admin/firestore";
 import { createCallable, HttpsError } from "../utils/createCallable";
-import { calculateUva } from "../uva/calculateUva";
+import { calculateUva, RECONCILE_TOLERANCE_CENTS } from "../uva/calculateUva";
 import { periodBoundaries } from "../uva/rateSet";
 import {
   buildUvaTransactions,
@@ -37,8 +37,6 @@ interface CalculateUvaResponse {
 
 /** Firestore getAll takes at most this many refs per call comfortably. */
 const FETCH_CHUNK = 100;
-/** Bank-vs-invoice tolerance mirrored from the calculation module. */
-const RECONCILE_TOLERANCE_CENTS = 2;
 
 export const calculateUvaCallable = createCallable<
   CalculateUvaRequest,

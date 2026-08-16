@@ -113,6 +113,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description:
             "Manual VAT rate override for UVA derivation: one of 0, 4.9, 10, 13, 19, 20. Pass null to clear. The calculation still validates the rate against the transaction's period.",
         },
+        isReverseCharge: {
+          type: ["boolean", "null"],
+          description:
+            "Reverse-charge classification for UVA derivation: true forces the §19 service regime (KZ 057/066), false vetoes the automatic foreign-supplier heuristic, null clears and lets the heuristic decide.",
+        },
       },
       required: ["transactionId"],
     },
