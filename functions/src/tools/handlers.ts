@@ -289,9 +289,25 @@ export async function getTransaction(userId: string, transactionId: string) {
   };
 }
 
+/**
+ * VAT rates accepted for the manual override lane (fork #64, spec §3 step 3).
+ * 19 is the Jungholz/Mittelberg enclave rate; 4.9 applies from 2026-07-01 —
+ * the UVA calculation validates the rate against the transaction's period,
+ * this list only rejects values that are never an Austrian rate.
+ */
+const VALID_VAT_RATES = [0, 4.9, 10, 13, 19, 20];
+
 export async function updateTransaction(userId: string, args: Record<string, unknown>) {
-  const { transactionId, description, isComplete } = args;
+  const { transactionId, description, isComplete, vatRate } = args;
   if (!transactionId) throw new Error("transactionId is required");
+
+  if (vatRate !== undefined && vatRate !== null) {
+    if (typeof vatRate !== "number" || !VALID_VAT_RATES.includes(vatRate)) {
+      throw new Error(
+        `vatRate must be one of ${VALID_VAT_RATES.join(", ")} (or null to clear the override)`
+      );
+    }
+  }
 
   const docRef = db.collection("transactions").doc(transactionId as string);
   const doc = await docRef.get();
@@ -302,6 +318,7 @@ export async function updateTransaction(userId: string, args: Record<string, unk
   const updates: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
   if (description !== undefined) updates.description = description;
   if (isComplete !== undefined) updates.isComplete = isComplete;
+  if (vatRate !== undefined) updates.vatRate = vatRate;
 
   await docRef.update(updates);
   return { success: true, transactionId };

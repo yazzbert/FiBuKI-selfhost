@@ -101,13 +101,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "update_transaction",
-    description: "Update a transaction's description or completion status",
+    description: "Update a transaction's description, completion status, or manual VAT-rate override (the override feeds the UVA calculation when no receipt resolves the rate)",
     inputSchema: {
       type: "object",
       properties: {
         transactionId: { type: "string", description: "The transaction ID" },
         description: { type: "string", description: "Description for tax purposes" },
         isComplete: { type: "boolean", description: "Mark as complete/incomplete" },
+        vatRate: {
+          type: ["number", "null"],
+          description:
+            "Manual VAT rate override for UVA derivation: one of 0, 4.9, 10, 13, 19, 20. Pass null to clear. The calculation still validates the rate against the transaction's period.",
+        },
       },
       required: ["transactionId"],
     },
