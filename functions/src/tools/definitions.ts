@@ -204,6 +204,31 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "mark_file_as_not_invoice",
+    description:
+      "Flag a file as not an invoice (duplicate re-send, payment reminder, statement, anything that documents nothing). Clears its extracted data and takes it out of the unmatched-file queue. Refuses while the file is still connected to a transaction. Reversible with unmark_file_as_not_invoice.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+        reason: { type: "string", description: "Why it is not an invoice — stored on the file" },
+      },
+      required: ["fileId"],
+    },
+  },
+  {
+    name: "unmark_file_as_not_invoice",
+    description:
+      "Restore a file previously flagged as not an invoice. Re-opens extraction, which recovers the fields marking cleared.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+      },
+      required: ["fileId"],
+    },
+  },
+  {
     name: "auto_connect_file_suggestions",
     description: "Auto-connect files to transactions above confidence threshold",
     requiredFeature: "aiMatching",
