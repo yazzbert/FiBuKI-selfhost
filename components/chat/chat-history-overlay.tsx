@@ -47,8 +47,17 @@ export function ChatHistoryPanel({
   });
 
   // Format timestamp to relative time
-  const formatTime = (timestamp: Timestamp | Date) => {
-    const date = timestamp instanceof Timestamp ? timestamp.toDate() : timestamp;
+  const formatTime = (timestamp: Timestamp | Date | null | undefined) => {
+    // Same guard as notification-card: a sentinel that failed to resolve is
+    // stored as `{}`, and formatDistanceToNow throws on an invalid date, which
+    // would take down the whole overlay over one unreadable session row.
+    const date =
+      timestamp instanceof Timestamp
+        ? timestamp.toDate()
+        : timestamp instanceof Date
+          ? timestamp
+          : null;
+    if (!date || Number.isNaN(date.getTime())) return "";
     return formatDistanceToNow(date, { addSuffix: true, locale: de });
   };
 

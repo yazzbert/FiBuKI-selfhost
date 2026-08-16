@@ -315,15 +315,56 @@ function decodeValue(v: unknown): unknown {
 // Sentinel (FieldValue transform) application
 // ---------------------------------------------------------------------------
 
-function sentinelKind(v: unknown): string | null {
-  if (!v || typeof v !== "object") return null;
-  const name = (v as object).constructor?.name || "";
+/**
+ * Constructor -> sentinel kind, built by asking FieldValue for one of each.
+ *
+ * The transform classes (ServerTimestampTransform, DeleteTransform, ...) are
+ * internal to @google-cloud/firestore and never exported, so identity is only
+ * obtainable this way. It is worth the trouble: the web container is a MINIFIED
+ * Next build, where `constructor.name` is mangled to something like "t" and a
+ * name-based check silently stops recognising every sentinel. It does not throw
+ * — the sentinel falls through to the generic object branch and serialises to
+ * `{}`, so `createdAt: FieldValue.serverTimestamp()` lands in Postgres as an
+ * empty object. That reached the browser as a timestamp with no toDate(), and
+ * one such row crashed every page in the app. Class identity survives
+ * minification; names do not.
+ */
+const SENTINEL_KINDS: ReadonlyArray<readonly [unknown, string]> = [
+  [FieldValue.serverTimestamp(), "serverTimestamp"],
+  [FieldValue.delete(), "delete"],
+  [FieldValue.increment(1), "increment"],
+  [FieldValue.arrayUnion("probe"), "arrayUnion"],
+  [FieldValue.arrayRemove("probe"), "arrayRemove"],
+];
+
+const SENTINEL_BY_CTOR = new Map<unknown, string>(
+  SENTINEL_KINDS.map(([probe, kind]) => [(probe as object).constructor, kind]),
+);
+
+// Distinctness is the load-bearing assumption: if two probes shared a
+// constructor the map would silently mis-classify one of them. They are
+// separate classes today; assert it rather than trust it, and fall back to the
+// name check if a future version of the library collapses them.
+const SENTINEL_CTORS_DISTINCT = SENTINEL_BY_CTOR.size === SENTINEL_KINDS.length;
+
+function sentinelKindByName(name: string): string | null {
   if (name.includes("ServerTimestamp")) return "serverTimestamp";
   if (name.includes("ArrayUnion")) return "arrayUnion";
   if (name.includes("ArrayRemove")) return "arrayRemove";
   if (name.includes("NumericIncrement")) return "increment";
   if (name === "DeleteTransform" || name.includes("Delete")) return "delete";
   return null;
+}
+
+function sentinelKind(v: unknown): string | null {
+  if (!v || typeof v !== "object") return null;
+  const ctor = (v as object).constructor;
+  if (SENTINEL_CTORS_DISTINCT) {
+    const byCtor = SENTINEL_BY_CTOR.get(ctor);
+    if (byCtor) return byCtor;
+  }
+  // Fallback: a subclass, a second copy of the library, or collapsed classes.
+  return sentinelKindByName(ctor?.name || "");
 }
 
 function sentinelElements(v: unknown): unknown[] {
