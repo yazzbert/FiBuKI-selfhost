@@ -12,6 +12,7 @@
 
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { buildDownloadUrl } from "../utils/buildDownloadUrl";
+import { isTransactionDismissed } from "../matching/dismissedTransactions";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { getFirestore, Timestamp, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
@@ -952,6 +953,18 @@ async function executePartnerFilesStrategy(
         continue;
       }
 
+      // ...and the mirror image: a pair the file itself dismissed. The hint
+      // below only re-triggers matching, which now drops dismissed candidates —
+      // so hinting one burns a read and then counts a connection that never
+      // happened.
+      if (isTransactionDismissed(file, transaction.id)) {
+        console.log(
+          `[PrecisionSearch] Skipping dismissed pair: file ${file.fileName} (${file.id}) ` +
+          `x transaction ${transaction.id}`
+        );
+        continue;
+      }
+
       // Match found! Add hint and re-trigger matching logic
       await db.collection("files").doc(file.id).update({
         precisionSearchHint: {
@@ -1082,9 +1095,11 @@ async function executeAmountFilesStrategy(
       return attempt;
     }
 
-    // Add hints to top candidates and re-trigger matching (skip rejected files)
+    // Add hints to top candidates and re-trigger matching (skip rejected files,
+    // and pairs the file itself dismissed — matching drops those anyway)
     const topCandidates = scoredCandidates
       .filter(({ file }) => !isFileRejectedByTransaction(file.id, transaction))
+      .filter(({ file }) => !isTransactionDismissed(file, transaction.id))
       .slice(0, 3); // Top 3 non-rejected matches
 
     for (const { file: candidate, score } of topCandidates) {
@@ -1337,6 +1352,14 @@ async function executeEmailAttachmentStrategy(
                       console.log(`[PrecisionSearch] Skipping rejected file ${fileName} (${existingFile.id})`);
                       continue;
                     }
+                    // ...or dismissed on the file's side
+                    if (isTransactionDismissed(existingFile, transaction.id)) {
+                      console.log(
+                        `[PrecisionSearch] Skipping dismissed pair: file ${fileName} ` +
+                        `(${existingFile.id}) x transaction ${transaction.id}`
+                      );
+                      continue;
+                    }
                     await db.collection("files").doc(existingFile.id).update({
                       precisionSearchHint: {
                         transactionId: transaction.id,
@@ -1429,6 +1452,11 @@ async function executeEmailAttachmentStrategy(
                         // Check if this file was rejected by the transaction
                         if (isFileRejectedByTransaction(existingFileId, transaction)) {
                           console.log(`[PrecisionSearch] Skipping rejected file ${fileName} (${existingFileId})`);
+                        } else if (isTransactionDismissed(existingFile, transaction.id)) {
+                          console.log(
+                            `[PrecisionSearch] Skipping dismissed pair: file ${fileName} ` +
+                            `(${existingFileId}) x transaction ${transaction.id}`
+                          );
                         } else {
                           await db.collection("files").doc(existingFileId).update({
                             precisionSearchHint: {
