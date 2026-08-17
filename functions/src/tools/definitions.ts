@@ -380,6 +380,52 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["transactionId"],
     },
   },
+  {
+    name: "partner_rematch_report",
+    description:
+      "READ-ONLY. Re-runs the current partner matcher over transactions that ALREADY have a partner " +
+      "assigned and returns only the cases where its answer differs from what is stored: a different " +
+      "partner would be applied, or nothing would be applied because no candidate reaches the " +
+      "auto-apply threshold. Writes nothing — no assignment is changed and no false positive is " +
+      "recorded. Use it to review assignments made before a matcher fix; partner matching itself skips " +
+      "any transaction that already has a partner, so those are never re-scored on their own. " +
+      "Counts cover every evaluated transaction; `rows` is capped by `limit` and sets `truncated`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        minConfidence: {
+          type: "number",
+          description: "Only stored assignments with confidence >= this value",
+        },
+        maxConfidence: {
+          type: "number",
+          description: "Only stored assignments with confidence <= this value",
+        },
+        assignedBefore: {
+          type: "string",
+          description:
+            "ISO 8601 instant — only assignments recorded before it. Transactions whose " +
+            "automationHistory has no partner_assigned entry are kept (they are older, not newer).",
+        },
+        matchedBy: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Which partnerMatchedBy values to review. Default [\"auto\",\"ai\"]; pass [\"manual\"] " +
+            "only to inspect human assignments, which should never be mechanically re-matched.",
+        },
+        includeAgreements: {
+          type: "boolean",
+          description:
+            "Also return transactions where the matcher agrees (default false, disagreements only)",
+        },
+        limit: {
+          type: "number",
+          description: "Max rows to return (default 50, max 500)",
+        },
+      },
+    },
+  },
 
   // =========================================================================
   // Categories
