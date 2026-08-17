@@ -150,6 +150,8 @@ export async function handleTool(
       return removePartnerFromTx(userId, args);
     case "partner_rematch_report":
       return partnerRematchReport(userId, args);
+    case "rematch_assigned_partners":
+      return rematchAssignedPartnersTool(userId, args);
 
     // Categories
     case "list_no_receipt_categories":
@@ -1054,6 +1056,25 @@ export async function removePartnerFromTx(userId: string, args: Record<string, u
  * first, and that records a false positive that permanently vetoes the pair —
  * including for the assignments that were correct all along.
  */
+function rematchNumberArg(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${field} must be a number`);
+  }
+  return value;
+}
+
+function rematchAssignedBeforeArg(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new Error("assignedBefore must be an ISO 8601 string");
+  }
+  if (isNaN(new Date(value).getTime())) {
+    throw new Error("assignedBefore must be a valid ISO 8601 date");
+  }
+  return value;
+}
+
 export async function partnerRematchReport(
   userId: string,
   args: Record<string, unknown>
@@ -1062,13 +1083,7 @@ export async function partnerRematchReport(
     "../matching/partnerRematchReport"
   );
 
-  const asNumber = (value: unknown, field: string): number | undefined => {
-    if (value === undefined || value === null) return undefined;
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new Error(`${field} must be a number`);
-    }
-    return value;
-  };
+  const asNumber = rematchNumberArg;
 
   let matchedBy: string[] | undefined;
   if (args.matchedBy !== undefined) {
@@ -1079,21 +1094,55 @@ export async function partnerRematchReport(
     matchedBy = args.matchedBy as string[];
   }
 
-  if (args.assignedBefore !== undefined && typeof args.assignedBefore !== "string") {
-    throw new Error("assignedBefore must be an ISO 8601 string");
-  }
-  if (typeof args.assignedBefore === "string" &&
-      isNaN(new Date(args.assignedBefore).getTime())) {
-    throw new Error("assignedBefore must be a valid ISO 8601 date");
-  }
-
   return buildPartnerRematchReport(userId, {
     minConfidence: asNumber(args.minConfidence, "minConfidence"),
     maxConfidence: asNumber(args.maxConfidence, "maxConfidence"),
-    assignedBefore: args.assignedBefore as string | undefined,
+    assignedBefore: rematchAssignedBeforeArg(args.assignedBefore),
     matchedBy,
     limit: asNumber(args.limit, "limit"),
     includeAgreements: args.includeAgreements === true,
+  });
+}
+
+/**
+ * Whole-account re-match (fork #86, piece 2). Dry run unless the caller passes
+ * dryRun exactly false — a boolean that defaults to "write" is how an account
+ * gets rewritten by a typo.
+ */
+export async function rematchAssignedPartnersTool(
+  userId: string,
+  args: Record<string, unknown>
+) {
+  const { rematchAssignedPartners } = await import(
+    "../matching/rematchAssignedPartners"
+  );
+
+  for (const field of ["dryRun", "clearUnconfirmed", "includeKept"]) {
+    if (args[field] !== undefined && typeof args[field] !== "boolean") {
+      throw new Error(`${field} must be a boolean`);
+    }
+  }
+
+  // The tool takes no matchedBy: this path rewrites `auto` assignments only, and
+  // an argument implying otherwise would invite exactly the mistake it forbids.
+  if (args.matchedBy !== undefined) {
+    throw new Error(
+      "matchedBy is not accepted here — this tool only re-matches auto-assigned " +
+      "transactions. Manual, suggestion and ai assignments are judgements it must not overwrite; " +
+      "use partner_rematch_report to inspect those read-only."
+    );
+  }
+
+  return rematchAssignedPartners(userId, {
+    dryRun: args.dryRun === undefined ? true : (args.dryRun as boolean),
+    clearUnconfirmed:
+      args.clearUnconfirmed === undefined ? true : (args.clearUnconfirmed as boolean),
+    minConfidence: rematchNumberArg(args.minConfidence, "minConfidence"),
+    maxConfidence: rematchNumberArg(args.maxConfidence, "maxConfidence"),
+    assignedBefore: rematchAssignedBeforeArg(args.assignedBefore),
+    maxWrites: rematchNumberArg(args.maxWrites, "maxWrites"),
+    limit: rematchNumberArg(args.limit, "limit"),
+    includeKept: args.includeKept === true,
   });
 }
 
