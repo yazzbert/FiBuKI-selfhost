@@ -148,6 +148,8 @@ export async function handleTool(
       return assignPartnerToTx(userId, args);
     case "remove_partner_from_transaction":
       return removePartnerFromTx(userId, args);
+    case "partner_rematch_report":
+      return partnerRematchReport(userId, args);
 
     // Categories
     case "list_no_receipt_categories":
@@ -1044,6 +1046,55 @@ export async function removePartnerFromTx(userId: string, args: Record<string, u
   });
 
   return { success: true, transactionId };
+}
+
+/**
+ * Read-only re-match review (fork #86). Deliberately no write path: the only
+ * existing way to re-match an assigned transaction is to remove the partner
+ * first, and that records a false positive that permanently vetoes the pair —
+ * including for the assignments that were correct all along.
+ */
+export async function partnerRematchReport(
+  userId: string,
+  args: Record<string, unknown>
+) {
+  const { buildPartnerRematchReport } = await import(
+    "../matching/partnerRematchReport"
+  );
+
+  const asNumber = (value: unknown, field: string): number | undefined => {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`${field} must be a number`);
+    }
+    return value;
+  };
+
+  let matchedBy: string[] | undefined;
+  if (args.matchedBy !== undefined) {
+    if (!Array.isArray(args.matchedBy) ||
+        args.matchedBy.some((v) => typeof v !== "string")) {
+      throw new Error("matchedBy must be an array of strings");
+    }
+    matchedBy = args.matchedBy as string[];
+  }
+
+  if (args.assignedBefore !== undefined && typeof args.assignedBefore !== "string") {
+    throw new Error("assignedBefore must be an ISO 8601 string");
+  }
+  if (typeof args.assignedBefore === "string" &&
+      isNaN(new Date(args.assignedBefore).getTime())) {
+    throw new Error("assignedBefore must be a valid ISO 8601 date");
+  }
+
+  return buildPartnerRematchReport(userId, {
+    minConfidence: asNumber(args.minConfidence, "minConfidence"),
+    maxConfidence: asNumber(args.maxConfidence, "maxConfidence"),
+    assignedBefore: args.assignedBefore as string | undefined,
+    matchedBy,
+    limit: asNumber(args.limit, "limit"),
+    includeAgreements: args.includeAgreements === true,
+  });
 }
 
 // ============================================================================
