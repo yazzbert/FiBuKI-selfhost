@@ -378,6 +378,20 @@ export function useImport(
     const amountMapping = state.mappings.find((m) => m.targetField === "amount");
     const balanceMapping = state.mappings.find((m) => m.targetField === "balance");
 
+    // No format on the date column means detection could not settle DD/MM vs
+    // MM/DD from the data (#70) and the user has not picked. Falling back to a
+    // default here reads every row with a format nobody chose, so ask instead.
+    if (dateMapping && !dateMapping.format) {
+      setState((s) => ({
+        ...s,
+        error:
+          `Select the date format for column "${dateMapping.csvColumn}" before importing — ` +
+          `its day/month order cannot be read from the file.`,
+        transientStep: null,
+      }));
+      return;
+    }
+
     const dateFormat = dateMapping?.format || "de";
     const amountFormat = amountMapping?.format || "de";
     const balanceFormat = balanceMapping?.format || amountFormat;
@@ -429,16 +443,23 @@ export function useImport(
       const conflict = findDateColumnConflict(dateColumn, dateFormat);
 
       if (conflict) {
-        const suggestion = conflict.suggestedParserId
-          ? ` This column reads as ${getDateParserName(conflict.suggestedParserId)}.`
-          : " This column mixes both orders, so no single format fits it.";
+        const offending = conflict.offendingValue ? ` (for example "${conflict.offendingValue}")` : "";
+        const detail =
+          conflict.evidence === "conflict"
+            ? `Some rows${offending} put the day first and others put the month first, ` +
+              `so no single format reads the column correctly. Correct those rows and import again.`
+            : conflict.suggestedParserId
+              ? `The column${offending} reads as ` +
+                `${getDateParserName(conflict.suggestedParserId)}. Select that format and import again.`
+              : `The column${offending} puts the ` +
+                `${conflict.evidence === "day-first" ? "day" : "month"} first. ` +
+                `Select a matching date format and import again.`;
 
         setState((s) => ({
           ...s,
           error:
             `The date column does not match the selected format ` +
-            `(${getDateParserName(dateFormat)}).${suggestion} ` +
-            `Pick the date format before importing.`,
+            `(${getDateParserName(dateFormat)}). ${detail}`,
           transientStep: null,
         }));
         return;

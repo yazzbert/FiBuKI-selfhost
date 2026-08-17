@@ -116,16 +116,21 @@ export type DayMonthEvidence = DayMonthOrder | "none" | "conflict";
 const NUMERIC_DAY_MONTH = /^(\d{1,2})[./-](\d{1,2})[./-]\d{2,4}$/;
 
 /**
+ * A format that leads with two numeric day/month components, which is the only
+ * shape where the two can be confused. Year-first (ISO) cannot swap, and a
+ * spelled-out month ("MMM"/"MMMM") names itself.
+ */
+const NUMERIC_DAY_MONTH_FORMAT = /^(dd|MM)([./-])(dd|MM)\2y{2,4}$/;
+
+/**
  * The order a parser reads, derived from its date-fns format, or null when the
- * format cannot swap day and month (ISO, or a spelled-out month).
+ * format cannot swap day and month.
  */
 export function dayMonthOrderOfFormat(format: string): DayMonthOrder | null {
-  const day = format.indexOf("dd");
-  // "MMM"/"MMMM" spell the month out, so there is nothing to confuse.
-  const month = /MMM/.test(format) ? -1 : format.indexOf("MM");
-  if (day === -1 || month === -1) return null;
+  const match = NUMERIC_DAY_MONTH_FORMAT.exec(format);
+  if (!match || match[1] === match[3]) return null;
 
-  return day < month ? "day-first" : "month-first";
+  return match[1] === "dd" ? "day-first" : "month-first";
 }
 
 /**
@@ -138,24 +143,43 @@ export function dayMonthOrderOfFormat(format: string): DayMonthOrder | null {
  * (ISO, text months) contribute nothing either way.
  */
 export function analyzeDayMonthOrder(values: string[]): DayMonthEvidence {
-  let dayFirst = false;
-  let monthFirst = false;
+  return readDayMonthEvidence(values).evidence;
+}
+
+/**
+ * The evidence plus one value proving each order, so a caller can name the
+ * rows a reader has to look at rather than just declaring a contradiction.
+ */
+export function readDayMonthEvidence(values: string[]): {
+  evidence: DayMonthEvidence;
+  provingDayFirst: string | null;
+  provingMonthFirst: string | null;
+} {
+  let provingDayFirst: string | null = null;
+  let provingMonthFirst: string | null = null;
 
   for (const value of values) {
-    const match = NUMERIC_DAY_MONTH.exec(value?.trim() ?? "");
+    const trimmed = value?.trim() ?? "";
+    const match = NUMERIC_DAY_MONTH.exec(trimmed);
     if (!match) continue;
 
     const first = Number(match[1]);
     const second = Number(match[2]);
 
-    if (first > 12 && first <= 31) dayFirst = true;
-    if (second > 12 && second <= 31) monthFirst = true;
+    if (first > 12 && first <= 31) provingDayFirst ??= trimmed;
+    if (second > 12 && second <= 31) provingMonthFirst ??= trimmed;
   }
 
-  if (dayFirst && monthFirst) return "conflict";
-  if (dayFirst) return "day-first";
-  if (monthFirst) return "month-first";
-  return "none";
+  const evidence: DayMonthEvidence =
+    provingDayFirst && provingMonthFirst
+      ? "conflict"
+      : provingDayFirst
+        ? "day-first"
+        : provingMonthFirst
+          ? "month-first"
+          : "none";
+
+  return { evidence, provingDayFirst, provingMonthFirst };
 }
 
 /**
@@ -265,20 +289,31 @@ export function looksLikeDateColumn(values: string[]): boolean {
 export function findDateColumnConflict(
   values: string[],
   parserId: string
-): { evidence: DayMonthEvidence; expected: DayMonthOrder; suggestedParserId: string | null } | null {
+): {
+  evidence: DayMonthEvidence;
+  expected: DayMonthOrder;
+  suggestedParserId: string | null;
+  /** A value the chosen parser cannot read in the order it assumes. */
+  offendingValue: string | null;
+} | null {
   const parser = getDateParser(parserId);
   if (!parser) return null;
 
   const expected = dayMonthOrderOfFormat(parser.format);
   if (!expected) return null;
 
-  const evidence = analyzeDayMonthOrder(values);
+  const { evidence, provingDayFirst, provingMonthFirst } = readDayMonthEvidence(values);
   if (evidence === "none" || evidence === expected) return null;
+
+  // Whichever value contradicts the chosen order is the one to look at: with
+  // a day-first parser that is the month-first proof, and the other way round.
+  const offendingValue = expected === "day-first" ? provingMonthFirst : provingDayFirst;
 
   return {
     evidence,
     expected,
     suggestedParserId: evidence === "conflict" ? null : oppositeOrderParser(parser)?.id ?? null,
+    offendingValue,
   };
 }
 

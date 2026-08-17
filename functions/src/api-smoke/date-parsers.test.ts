@@ -22,7 +22,9 @@ import {
   analyzeDayMonthOrder,
   findDateColumnConflict,
   looksLikeDateColumn,
+  dayMonthOrderOfFormat,
   parseDate,
+  DATE_PARSERS,
 } from "@/lib/import/date-parsers";
 import { autoMatchColumnsRuleBased } from "@/lib/import/field-matcher";
 
@@ -132,6 +134,39 @@ describe("looksLikeDateColumn", () => {
   });
 });
 
+describe("dayMonthOrderOfFormat", () => {
+  it("reads the order of a numeric day/month format", () => {
+    expect(dayMonthOrderOfFormat("dd/MM/yyyy")).toBe("day-first");
+    expect(dayMonthOrderOfFormat("MM/dd/yyyy")).toBe("month-first");
+    expect(dayMonthOrderOfFormat("dd.MM.yyyy")).toBe("day-first");
+    expect(dayMonthOrderOfFormat("dd-MM-yyyy")).toBe("day-first");
+    expect(dayMonthOrderOfFormat("MM/dd/yy")).toBe("month-first");
+  });
+
+  it("returns null for formats that cannot swap day and month", () => {
+    // Year-first: "yyyy-MM-dd" holds both tokens but in no ambiguous position.
+    expect(dayMonthOrderOfFormat("yyyy-MM-dd")).toBeNull();
+    expect(dayMonthOrderOfFormat("yyyy-MM-dd HH:mm:ss")).toBeNull();
+    expect(dayMonthOrderOfFormat("yyyy-MM-dd'T'HH:mm:ss")).toBeNull();
+    // Spelled-out months name themselves.
+    expect(dayMonthOrderOfFormat("dd-MMM-yyyy")).toBeNull();
+    expect(dayMonthOrderOfFormat("dd MMMM yyyy")).toBeNull();
+  });
+
+  it("covers every parser that ships", () => {
+    const ambiguous = DATE_PARSERS.filter((p) => dayMonthOrderOfFormat(p.format) !== null);
+
+    expect(ambiguous.map((p) => p.id).sort()).toEqual([
+      "dash-dmy",
+      "de",
+      "de-short",
+      "eu-slash",
+      "us",
+      "us-short",
+    ]);
+  });
+});
+
 describe("findDateColumnConflict", () => {
   it("flags a month-first parser on a column that proves day-first", () => {
     const conflict = findDateColumnConflict(["03/07/2026", "31/07/2026"], "us");
@@ -166,7 +201,33 @@ describe("findDateColumnConflict", () => {
 
   it("passes formats that cannot swap day and month", () => {
     expect(findDateColumnConflict(["2026-07-31"], "iso")).toBeNull();
+    expect(findDateColumnConflict(["2026-07-31 10:15:00"], "iso-datetime")).toBeNull();
     expect(findDateColumnConflict(["31-Jul-2026"], "text-short")).toBeNull();
+  });
+
+  it("flags a month-first column against the German default, with nothing to suggest", () => {
+    // "de" is the fallback format, and no MM.DD.YYYY parser ships, so the
+    // caller has to describe the mismatch rather than name a replacement.
+    const conflict = findDateColumnConflict(["07.31.2026", "07.03.2026"], "de");
+
+    expect(conflict?.evidence).toBe("month-first");
+    expect(conflict?.expected).toBe("day-first");
+    expect(conflict?.suggestedParserId).toBeNull();
+  });
+
+  it("names a value that contradicts the chosen order", () => {
+    const dayFirstParser = findDateColumnConflict(["03/07/2026", "07/31/2026"], "eu-slash");
+    expect(dayFirstParser?.offendingValue).toBe("07/31/2026");
+
+    const monthFirstParser = findDateColumnConflict(["07/03/2026", "31/07/2026"], "us");
+    expect(monthFirstParser?.offendingValue).toBe("31/07/2026");
+  });
+
+  it("names the contradicting value when the column proves both", () => {
+    const conflict = findDateColumnConflict(["31/07/2026", "07/31/2026"], "eu-slash");
+
+    expect(conflict?.evidence).toBe("conflict");
+    expect(conflict?.offendingValue).toBe("07/31/2026");
   });
 
   it("passes an unknown parser id rather than throwing", () => {
