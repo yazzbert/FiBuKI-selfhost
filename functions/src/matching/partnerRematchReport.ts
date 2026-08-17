@@ -105,7 +105,10 @@ export function buildPartnerIndex(context: PartnerMatchingContext): PartnerIndex
 }
 
 export interface CandidateView {
+  /** The id the assignment would store, after global-to-local resolution. */
   partnerId: string;
+  /** The id the matcher returned, which is what `partnerSuggestions` records. */
+  rawPartnerId: string;
   partnerName: string;
   partnerType: "global" | "user";
   confidence: number;
@@ -124,6 +127,14 @@ export interface RematchClassification {
   candidates: CandidateView[];
 }
 
+/**
+ * Note on the global-to-local resolution below: `loadPartnerMatchingContext`
+ * drops any global preset that already has a local copy from the candidate pool,
+ * so today the lookup cannot fire and a returned global is always one the write
+ * path would localise fresh. It stays as a guard, because that pool rule lives
+ * in a different function and a change there must not silently turn a
+ * localisation into a reported partner change.
+ */
 function toCandidateView(
   match: MatchResult,
   index: PartnerIndex
@@ -135,6 +146,7 @@ function toCandidateView(
 
   return {
     partnerId: localised ?? match.partnerId,
+    rawPartnerId: match.partnerId,
     partnerName: match.partnerName,
     partnerType: match.partnerType,
     confidence: match.confidence,
@@ -340,35 +352,77 @@ export function readAssignedAt(automationHistory: unknown): string | null {
   return latest;
 }
 
-export async function buildPartnerRematchReport(
-  userId: string,
-  options: PartnerRematchReportOptions = {}
-): Promise<PartnerRematchReport> {
-  const matchedBy =
-    options.matchedBy && options.matchedBy.length > 0
-      ? options.matchedBy
-      : DEFAULT_MATCHED_BY;
-  const matchedByFilter = new Set(matchedBy);
-  const limit = Math.min(
-    Math.max(1, options.limit ?? DEFAULT_ROW_LIMIT),
-    MAX_ROW_LIMIT
-  );
-  const minConfidence = options.minConfidence ?? null;
-  const maxConfidence = options.maxConfidence ?? null;
-  const assignedBefore = options.assignedBefore ?? null;
-  const includeAgreements = options.includeAgreements ?? false;
+/** Everything the matcher needs, loaded once per run. */
+export interface RematchContext {
+  partnerContext: PartnerMatchingContext;
+  index: PartnerIndex;
+}
 
+export async function loadRematchContext(userId: string): Promise<RematchContext> {
   const partnerContext = await loadPartnerMatchingContext(userId);
-  const index = buildPartnerIndex(partnerContext);
+  return { partnerContext, index: buildPartnerIndex(partnerContext) };
+}
 
-  const counts = emptyCounts();
-  const rows: RematchRow[] = [];
-  let scanned = 0;
-  let assigned = 0;
-  let evaluated = 0;
-  let disagreements = 0;
-  let truncated = false;
-  let scanLimitReached = false;
+export interface AssignmentFilters {
+  minConfidence: number | null;
+  maxConfidence: number | null;
+  assignedBefore: string | null;
+  matchedBy: string[];
+}
+
+export interface AssignedEvaluation {
+  txDoc: FirebaseFirestore.QueryDocumentSnapshot;
+  txData: FirebaseFirestore.DocumentData;
+  stored: StoredAssignment;
+  transaction: TransactionData;
+  assignedAt: string | null;
+  classification: RematchClassification;
+}
+
+export interface AssignedScanSummary {
+  /** Transactions read. */
+  scanned: number;
+  /** Transactions carrying a partner assignment. */
+  assigned: number;
+  /** Assigned, but `partnerMatchedBy` is not one of the requested values. */
+  skippedByMatchedBy: number;
+  /** Assigned with no `partnerMatchedBy` at all (legacy rows). Counted, never assumed. */
+  assignedWithoutMatchedBy: number;
+  /** Passed `matchedBy` but dropped by a confidence or date filter. */
+  skippedByFilters: number;
+  /** Assignments actually re-run through the matcher. */
+  evaluated: number;
+  /** True when the scan hit its ceiling — the population is only partly covered. */
+  scanLimitReached: boolean;
+}
+
+/**
+ * Page through the user's transactions, re-run the matcher over every stored
+ * assignment that passes `filters`, and hand each result to `visit`.
+ *
+ * This is the seam the report and the apply path share on purpose: a human acts
+ * on the report and then runs the apply, so the two must select and judge the
+ * same population. Two copies of this loop would drift, and the drift would only
+ * show up as a surprise write.
+ */
+export async function evaluateAssignedTransactions(
+  userId: string,
+  filters: AssignmentFilters,
+  context: RematchContext,
+  visit: (evaluation: AssignedEvaluation) => void | Promise<void>
+): Promise<AssignedScanSummary> {
+  const { partnerContext, index } = context;
+  const matchedByFilter = new Set(filters.matchedBy);
+
+  const summary: AssignedScanSummary = {
+    scanned: 0,
+    assigned: 0,
+    skippedByMatchedBy: 0,
+    assignedWithoutMatchedBy: 0,
+    skippedByFilters: 0,
+    evaluated: 0,
+    scanLimitReached: false,
+  };
 
   let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
 
@@ -384,31 +438,40 @@ export async function buildPartnerRematchReport(
     if (snapshot.empty) break;
 
     for (const txDoc of snapshot.docs) {
-      scanned++;
+      summary.scanned++;
       const txData = txDoc.data();
       const storedPartnerId = txData.partnerId;
       if (!storedPartnerId || typeof storedPartnerId !== "string") continue;
-      assigned++;
+      summary.assigned++;
 
       const storedMatchedBy =
         typeof txData.partnerMatchedBy === "string" ? txData.partnerMatchedBy : null;
-      if (!storedMatchedBy || !matchedByFilter.has(storedMatchedBy)) continue;
+      if (!storedMatchedBy) summary.assignedWithoutMatchedBy++;
+      if (!storedMatchedBy || !matchedByFilter.has(storedMatchedBy)) {
+        summary.skippedByMatchedBy++;
+        continue;
+      }
 
       const storedConfidence =
         typeof txData.partnerMatchConfidence === "number"
           ? txData.partnerMatchConfidence
           : null;
-      if (minConfidence !== null &&
-          (storedConfidence === null || storedConfidence < minConfidence)) {
+      if (filters.minConfidence !== null &&
+          (storedConfidence === null || storedConfidence < filters.minConfidence)) {
+        summary.skippedByFilters++;
         continue;
       }
-      if (maxConfidence !== null &&
-          (storedConfidence === null || storedConfidence > maxConfidence)) {
+      if (filters.maxConfidence !== null &&
+          (storedConfidence === null || storedConfidence > filters.maxConfidence)) {
+        summary.skippedByFilters++;
         continue;
       }
 
       const assignedAt = readAssignedAt(txData.automationHistory);
-      if (assignedBefore !== null && assignedAt !== null && assignedAt >= assignedBefore) {
+      if (filters.assignedBefore !== null &&
+          assignedAt !== null &&
+          assignedAt >= filters.assignedBefore) {
+        summary.skippedByFilters++;
         continue;
       }
 
@@ -429,8 +492,8 @@ export async function buildPartnerRematchReport(
         reference: txData.reference || null,
       };
 
-      // Same veto the write path applies, so the report cannot claim a match
-      // the matcher would refuse to make.
+      // Same veto the write path applies, so neither the report nor the apply
+      // can claim a match the matcher would refuse to make.
       const matches = matchTransaction(
         transaction,
         partnerContext.userPartners,
@@ -440,65 +503,119 @@ export async function buildPartnerRematchReport(
         return !(removals && removals.has(txDoc.id));
       });
 
-      const classification = classifyRematch(stored, matches, index);
-      evaluated++;
-      counts[classification.verdict]++;
-
-      const disagrees = isDisagreement(classification.verdict);
-      if (disagrees) disagreements++;
-
-      if (!disagrees && !includeAgreements) continue;
-
-      if (rows.length >= limit) {
-        truncated = true;
-        continue;
-      }
-
-      rows.push({
-        transactionId: txDoc.id,
-        verdict: classification.verdict,
-        date: toIso(txData.date)?.slice(0, 10) ?? null,
-        amount: typeof txData.amount === "number" ? txData.amount : null,
-        transactionName: transaction.name,
-        transactionPartnerText: transaction.partner,
-        storedPartnerId,
-        storedPartnerName: partnerContext.partnerNameMap.get(storedPartnerId) ?? null,
-        storedConfidence,
-        storedMatchedBy,
+      summary.evaluated++;
+      await visit({
+        txDoc,
+        txData,
+        stored,
+        transaction,
         assignedAt,
-        storedPartnerConfidenceNow: scoreStoredPartner(transaction, stored, index),
-        wouldAssignPartnerId: classification.wouldAssignPartnerId,
-        topCandidate: classification.topCandidate,
-        candidates: classification.candidates,
+        classification: classifyRematch(stored, matches, index),
       });
     }
 
     if (snapshot.size < PAGE_SIZE) break;
-    if (scanned >= MAX_SCAN) {
-      scanLimitReached = true;
+    if (summary.scanned >= MAX_SCAN) {
+      summary.scanLimitReached = true;
       break;
     }
     cursor = snapshot.docs[snapshot.docs.length - 1];
   }
 
+  return summary;
+}
+
+/** Row view of one evaluation, shared by the report and the apply preview. */
+export function toRematchRow(
+  evaluation: AssignedEvaluation,
+  context: RematchContext
+): RematchRow {
+  const { txDoc, txData, stored, transaction, assignedAt, classification } = evaluation;
+
+  return {
+    transactionId: txDoc.id,
+    verdict: classification.verdict,
+    date: toIso(txData.date)?.slice(0, 10) ?? null,
+    amount: typeof txData.amount === "number" ? txData.amount : null,
+    transactionName: transaction.name,
+    transactionPartnerText: transaction.partner,
+    storedPartnerId: stored.partnerId,
+    storedPartnerName:
+      context.partnerContext.partnerNameMap.get(stored.partnerId) ?? null,
+    storedConfidence: stored.confidence,
+    storedMatchedBy: stored.matchedBy,
+    assignedAt,
+    storedPartnerConfidenceNow: scoreStoredPartner(transaction, stored, context.index),
+    wouldAssignPartnerId: classification.wouldAssignPartnerId,
+    topCandidate: classification.topCandidate,
+    candidates: classification.candidates,
+  };
+}
+
+export async function buildPartnerRematchReport(
+  userId: string,
+  options: PartnerRematchReportOptions = {}
+): Promise<PartnerRematchReport> {
+  const matchedBy =
+    options.matchedBy && options.matchedBy.length > 0
+      ? options.matchedBy
+      : DEFAULT_MATCHED_BY;
+  const limit = Math.min(
+    Math.max(1, options.limit ?? DEFAULT_ROW_LIMIT),
+    MAX_ROW_LIMIT
+  );
+  const filters: AssignmentFilters = {
+    minConfidence: options.minConfidence ?? null,
+    maxConfidence: options.maxConfidence ?? null,
+    assignedBefore: options.assignedBefore ?? null,
+    matchedBy,
+  };
+  const includeAgreements = options.includeAgreements ?? false;
+
+  const context = await loadRematchContext(userId);
+
+  const counts = emptyCounts();
+  const rows: RematchRow[] = [];
+  let disagreements = 0;
+  let truncated = false;
+
+  const summary = await evaluateAssignedTransactions(
+    userId,
+    filters,
+    context,
+    (evaluation) => {
+      counts[evaluation.classification.verdict]++;
+
+      const disagrees = isDisagreement(evaluation.classification.verdict);
+      if (disagrees) disagreements++;
+      if (!disagrees && !includeAgreements) return;
+
+      if (rows.length >= limit) {
+        truncated = true;
+        return;
+      }
+      rows.push(toRematchRow(evaluation, context));
+    }
+  );
+
   return {
     readOnly: true,
     autoApplyThreshold: AUTO_APPLY_THRESHOLD,
-    scanned,
-    assigned,
-    evaluated,
+    scanned: summary.scanned,
+    assigned: summary.assigned,
+    evaluated: summary.evaluated,
     counts,
     disagreements,
     truncated,
     rows,
     filters: {
-      minConfidence,
-      maxConfidence,
-      assignedBefore,
+      minConfidence: filters.minConfidence,
+      maxConfidence: filters.maxConfidence,
+      assignedBefore: filters.assignedBefore,
       matchedBy,
       includeAgreements,
       limit,
     },
-    ...(scanLimitReached ? { scanLimitReached: true as const } : {}),
+    ...(summary.scanLimitReached ? { scanLimitReached: true as const } : {}),
   };
 }
