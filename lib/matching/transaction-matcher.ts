@@ -223,6 +223,9 @@ function calculateAmountScore(
   }
 
   // Apply currency mismatch penalty: reduce amount score by 50%
+  // NOTE: the server scorer (functions/src/matching/transactionScoring.ts) is
+  // the source of truth and since fork #87 scores a mismatched pair on FX
+  // plausibility instead. This client copy is only used for labels/colours.
   if (currencyMismatch && score > 0) {
     score = Math.round(score * 0.5);
   }
