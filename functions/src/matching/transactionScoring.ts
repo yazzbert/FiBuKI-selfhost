@@ -7,6 +7,7 @@
  */
 
 import { Timestamp } from "firebase-admin/firestore";
+import { assessImpliedFx } from "../fx/fxPlausibility";
 
 // === Configuration ===
 
@@ -174,13 +175,25 @@ export function calculateAmountScore(
     return { score: 0, source: null, currencyMismatch: false };
   }
 
-  // Check for currency mismatch
-  // Normalize currencies for comparison (handle null/undefined/empty)
-  const normFileCurrency = (fileCurrency || "EUR").toUpperCase();
-  const normTxCurrency = (txCurrency || "EUR").toUpperCase();
-  const currencyMismatch = normFileCurrency !== normTxCurrency;
+  // Currency mismatch (fork #87): the raw numbers are in different units, so
+  // comparing them is meaningless — USD 24.00 vs EUR 20.86 is the SAME
+  // payment and used to score 0 (13% apart, outside the 10% band), while
+  // USD 10.00 vs EUR 10.00 is a different payment and used to score 20.
+  // Score the plausibility of the implied exchange rate instead. It is
+  // deliberately capped below a same-currency exact match (40) and never
+  // sets source amount_exact, so it cannot earn the hard-facts bonus:
+  // a foreign-currency file still needs partner or date corroboration.
+  const fx = assessImpliedFx(fileAmount, fileCurrency, txAmount, txCurrency);
+  if (fx.mismatch && fx.referenceRate !== null) {
+    if (fx.band === "tight") return { score: 30, source: "amount_close", currencyMismatch: true };
+    if (fx.band === "loose") return { score: 20, source: "amount_close", currencyMismatch: true };
+    return { score: 0, source: null, currencyMismatch: true };
+  }
+  // A mismatched pair with no anchor (unknown/garbled code — often a
+  // mis-tagged EUR document) keeps the pre-#87 behaviour: numeric ladder,
+  // halved. It still never reports amount_exact as a hard fact.
 
-  // Calculate base amount score
+  // Same currency: cent-exact, then tolerance ladder relative to the FILE amount
   let score = 0;
   let source: TransactionMatchSource | null = null;
 
@@ -203,14 +216,11 @@ export function calculateAmountScore(
     }
   }
 
-  // Apply currency mismatch penalty: reduce amount score by 50%
-  // This allows USD invoice to still match EUR transaction (with exchange rate variance)
-  // but prioritizes same-currency matches
-  if (currencyMismatch && score > 0) {
+  if (fx.mismatch && score > 0) {
     score = Math.round(score * 0.5);
   }
 
-  return { score, source, currencyMismatch };
+  return { score, source, currencyMismatch: fx.mismatch };
 }
 
 export interface BillingCycleHint {
@@ -354,9 +364,9 @@ export function scoreTransaction(
   let hardFactsScore = 0;
   const matchSources: TransactionMatchSource[] = [];
 
-  // 1. Amount scoring (0-40, reduced if currency mismatch)
+  // 1. Amount scoring (0-40; a currency-mismatched pair scores FX plausibility, max 30)
   // amountExact is only true for a cent-exact, same-currency match (score 40):
-  // a currency-mismatched exact amount is halved to 20 and does not qualify.
+  // a currency-mismatched pair never reports amount_exact and does not qualify.
   let amountExact = false;
   if (fileData.extractedAmount != null) {
     const result = calculateAmountScore(
