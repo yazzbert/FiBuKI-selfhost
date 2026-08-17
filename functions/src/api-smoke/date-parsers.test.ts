@@ -54,6 +54,13 @@ describe("analyzeDayMonthOrder", () => {
     expect(analyzeDayMonthOrder(["2026-07-31", "31 July 2026", "31-Jul-2026", ""])).toBe("none");
   });
 
+  it("ignores a value that is no date in either order", () => {
+    // 13/13/2026 would otherwise prove both orders at once and forge a
+    // conflict out of one garbage row.
+    expect(analyzeDayMonthOrder(["03/07/2026", "13/13/2026", "31/07/2026"])).toBe("day-first");
+    expect(analyzeDayMonthOrder(["13/13/2026"])).toBe("none");
+  });
+
   it("reads the whole column, not a leading slice", () => {
     const column = [...Array(200).fill("03/07/2026"), "31/07/2026"];
 
@@ -102,6 +109,32 @@ describe("detectDateFormat", () => {
   it("returns null for an empty column", () => {
     expect(detectDateFormat([])).toBeNull();
     expect(detectDateFormat(["", "  "])).toBeNull();
+  });
+
+  it("overrules a single leader the column contradicts", () => {
+    // Two-digit years: before eu-slash-short shipped, us-short was the only
+    // parser matching this shape, so it won unopposed and swapped every row.
+    const samples = ["15/03/26", "03/07/26", "05/06/26", "09/08/26"];
+
+    expect(analyzeDayMonthOrder(samples)).toBe("day-first");
+    expect(detectDateFormat(samples)).toBe("eu-slash-short");
+  });
+
+  it("refuses a contradicted leader that has no counterpart", () => {
+    // Dotted month-first (MM.DD.YYYY) is not a format that ships, so there is
+    // nothing to fall back to — naming "de" here would swap every readable row.
+    const samples = ["07.31.2026", "07.03.2026"];
+
+    expect(detectDateFormat(samples)).toBeNull();
+  });
+
+  it("keeps a lone ambiguous leader the column says nothing about", () => {
+    // Only "de" matches this shape, and nothing contradicts it.
+    expect(detectDateFormat(["03.07.2026", "05.06.2026"])).toBe("de");
+  });
+
+  it("refuses a short slash column that proves nothing", () => {
+    expect(detectDateFormat(["03/07/26", "05/06/26"])).toBeNull();
   });
 
   it("resolves the tie the same way whatever the row order", () => {
@@ -161,9 +194,17 @@ describe("dayMonthOrderOfFormat", () => {
       "de",
       "de-short",
       "eu-slash",
+      "eu-slash-short",
       "us",
       "us-short",
     ]);
+  });
+
+  it("gives every two-digit-year slash order a parser to swap to", () => {
+    // DD/MM/YY had no counterpart, so a proven day-first short column had
+    // nothing to resolve to and no format for the user to pick.
+    expect(DATE_PARSERS.find((p) => p.id === "eu-slash-short")?.format).toBe("dd/MM/yy");
+    expect(DATE_PARSERS.find((p) => p.id === "us-short")?.format).toBe("MM/dd/yy");
   });
 });
 

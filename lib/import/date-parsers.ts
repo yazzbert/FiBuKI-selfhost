@@ -59,6 +59,12 @@ export const DATE_PARSERS: DateParser[] = [
     pattern: /^\d{2}\/\d{2}\/\d{4}$/,
     format: "dd/MM/yyyy",
   },
+  {
+    id: "eu-slash-short",
+    name: "European Short (DD/MM/YY)",
+    pattern: /^\d{2}\/\d{2}\/\d{2}$/,
+    format: "dd/MM/yy",
+  },
   // Dash separated
   {
     id: "dash-dmy",
@@ -165,9 +171,16 @@ export function readDayMonthEvidence(values: string[]): {
 
     const first = Number(match[1]);
     const second = Number(match[2]);
+    const firstIsDay = first > 12 && first <= 31;
+    const secondIsDay = second > 12 && second <= 31;
 
-    if (first > 12 && first <= 31) provingDayFirst ??= trimmed;
-    if (second > 12 && second <= 31) provingMonthFirst ??= trimmed;
+    // A value where both components exceed 12 is no date in either order —
+    // a footer line, a garbage row. Counting it proves both orders at once
+    // and forges a conflict out of one bad row.
+    if (firstIsDay && secondIsDay) continue;
+
+    if (firstIsDay) provingDayFirst ??= trimmed;
+    if (secondIsDay) provingMonthFirst ??= trimmed;
   }
 
   const evidence: DayMonthEvidence =
@@ -251,18 +264,28 @@ export function detectDateFormat(samples: string[]): string | null {
   // Require at least 50% match rate
   if (leaders.length === 0 || bestScore < validSamples.length * 0.5) return null;
 
-  const ambiguous = leaders.filter((p) => dayMonthOrderOfFormat(p.format) !== null);
-  const orders = new Set(ambiguous.map((p) => dayMonthOrderOfFormat(p.format)));
+  const winner = leaders[0];
+  const winnerOrder = dayMonthOrderOfFormat(winner.format);
 
-  if (orders.size > 1) {
-    const evidence = analyzeDayMonthOrder(validSamples);
-    if (evidence === "none" || evidence === "conflict") return null;
+  // An unambiguous winner (ISO, spelled-out month) needs no evidence. So does
+  // one the column proves right. Everything else — a tie between the two
+  // orders, or a lone leader the column contradicts — is decided by the data,
+  // and left to the user when the data decides nothing. A leader whose order
+  // is contradicted but has no counterpart to swap to (DD/MM/YY had none
+  // before eu-slash-short) is unrepresentable: say nothing rather than guess.
+  if (!winnerOrder) return winner.id;
 
-    const resolved = ambiguous.find((p) => dayMonthOrderOfFormat(p.format) === evidence);
-    if (resolved) return resolved.id;
-  }
+  const evidence = analyzeDayMonthOrder(validSamples);
+  if (evidence === winnerOrder) return winner.id;
 
-  return leaders[0].id;
+  const tiedOnOtherOrder = leaders.some(
+    (p) => dayMonthOrderOfFormat(p.format) && dayMonthOrderOfFormat(p.format) !== winnerOrder
+  );
+  if (evidence === "none" && !tiedOnOtherOrder) return winner.id;
+  if (evidence === "none" || evidence === "conflict") return null;
+
+  const resolved = leaders.find((p) => dayMonthOrderOfFormat(p.format) === evidence);
+  return resolved?.id ?? oppositeOrderParser(winner)?.id ?? null;
 }
 
 /**

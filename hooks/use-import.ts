@@ -384,9 +384,7 @@ export function useImport(
     if (dateMapping && !dateMapping.format) {
       setState((s) => ({
         ...s,
-        error:
-          `Select the date format for column "${dateMapping.csvColumn}" before importing — ` +
-          `its day/month order cannot be read from the file.`,
+        error: `Select the date format for column "${dateMapping.csvColumn}" before importing.`,
         transientStep: null,
       }));
       return;
@@ -452,8 +450,8 @@ export function useImport(
               ? `The column${offending} reads as ` +
                 `${getDateParserName(conflict.suggestedParserId)}. Select that format and import again.`
               : `The column${offending} puts the ` +
-                `${conflict.evidence === "day-first" ? "day" : "month"} first. ` +
-                `Select a matching date format and import again.`;
+                `${conflict.evidence === "day-first" ? "day" : "month"} first, ` +
+                `which none of the available date formats matches.`;
 
         setState((s) => ({
           ...s,
