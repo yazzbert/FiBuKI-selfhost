@@ -14,6 +14,8 @@ import {
   ALIAS_AGREEMENT_BONUS,
   AUTO_APPLY_THRESHOLD,
   GLOBAL_APPROXIMATE_NAME_CAP,
+  MIN_PHONETIC_CODE_LENGTH,
+  MIN_PHONETIC_SPELLING_SIMILARITY,
   PHONETIC_MATCH_SIMILARITY,
   calculateCompanyNameSimilarity,
   colognePhonetic,
@@ -24,6 +26,8 @@ import {
   TransactionData,
 } from "../../utils/partner-matcher";
 import {
+  MIN_PHONETIC_CODE_LENGTH as CLIENT_MIN_PHONETIC_CODE_LENGTH,
+  MIN_PHONETIC_SPELLING_SIMILARITY as CLIENT_MIN_PHONETIC_SPELLING_SIMILARITY,
   calculateCompanyNameSimilarity as clientSimilarity,
 } from "../../../../lib/matching/fuzzy-match";
 
@@ -89,6 +93,11 @@ describe("Cologne phonetic guard (fork #71 defect 1)", () => {
     expect(colognePhonetic("Bahnhof")).toBe("163");
     expect(colognePhonetic("Panov")).toBe("163");
     expect(calculateCompanyNameSimilarity("Bahnhof", "Panov")).toBeLessThan(60);
+  });
+
+  it("the client-side mirror uses the same guard constants (drift check)", () => {
+    expect(CLIENT_MIN_PHONETIC_CODE_LENGTH).toBe(MIN_PHONETIC_CODE_LENGTH);
+    expect(CLIENT_MIN_PHONETIC_SPELLING_SIMILARITY).toBe(MIN_PHONETIC_SPELLING_SIMILARITY);
   });
 
   it("the client-side mirror applies the same guard", () => {
