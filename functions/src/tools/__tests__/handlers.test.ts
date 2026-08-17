@@ -171,6 +171,99 @@ describe("Tool Registry Handlers", () => {
     });
   });
 
+  describe("listTransactions - date window (fork #65)", () => {
+    // Dates are stored as UTC midnight of the Vienna calendar day, so the
+    // window is a pure-UTC comparison. Rows written by the bank sync paths
+    // (finapi/banking) carry the booking timestamp as-is rather than a
+    // normalised midnight, which is where a Vienna-offset boundary misfiles
+    // them by a whole period.
+    const seedQuarterEdges = () => {
+      store.setDoc("transactions", "q1-last-midnight", createTestTransaction({
+        userId, name: "Q1 last day", date: new Date("2026-03-31T00:00:00Z"),
+      }));
+      store.setDoc("transactions", "q1-last-late", createTestTransaction({
+        userId, name: "Q1 last day late", date: new Date("2026-03-31T23:30:00Z"),
+      }));
+      store.setDoc("transactions", "q2-first", createTestTransaction({
+        userId, name: "Q2 first day", date: new Date("2026-04-01T00:00:00Z"),
+      }));
+      store.setDoc("transactions", "q2-mid", createTestTransaction({
+        userId, name: "Q2 middle", date: new Date("2026-05-15T00:00:00Z"),
+      }));
+      store.setDoc("transactions", "q2-last-late", createTestTransaction({
+        userId, name: "Q2 last day late", date: new Date("2026-06-30T23:30:00Z"),
+      }));
+      store.setDoc("transactions", "q3-first", createTestTransaction({
+        userId, name: "Q3 first day", date: new Date("2026-07-01T00:00:00Z"),
+      }));
+    };
+
+    const names = (result: { transactions: { name?: unknown }[] }) =>
+      result.transactions.map((t) => t.name).sort();
+
+    it("returns exactly the quarter, both edges included", async () => {
+      seedQuarterEdges();
+
+      const result = await handlers.listTransactions(userId, {
+        dateFrom: "2026-04-01",
+        dateTo: "2026-06-30",
+      });
+
+      expect(names(result)).toEqual([
+        "Q2 first day",
+        "Q2 last day late",
+        "Q2 middle",
+      ]);
+    });
+
+    it("does not pull in the last hours of the previous period", async () => {
+      seedQuarterEdges();
+
+      const result = await handlers.listTransactions(userId, { dateFrom: "2026-04-01" });
+
+      expect(names(result)).not.toContain("Q1 last day late");
+      expect(names(result)).not.toContain("Q1 last day");
+    });
+
+    it("does not drop the last hours of the end day", async () => {
+      seedQuarterEdges();
+
+      const result = await handlers.listTransactions(userId, { dateTo: "2026-06-30" });
+
+      expect(names(result)).toContain("Q2 last day late");
+      expect(names(result)).not.toContain("Q3 first day");
+    });
+
+    it("holds in summer, when Vienna is +02:00 rather than +01:00", async () => {
+      store.setDoc("transactions", "jul-1", createTestTransaction({
+        userId, name: "July first", date: new Date("2026-07-01T00:00:00Z"),
+      }));
+      store.setDoc("transactions", "jun-30-late", createTestTransaction({
+        userId, name: "June last late", date: new Date("2026-06-30T23:30:00Z"),
+      }));
+
+      const result = await handlers.listTransactions(userId, {
+        dateFrom: "2026-07-01",
+        dateTo: "2026-09-30",
+      });
+
+      expect(names(result)).toEqual(["July first"]);
+    });
+
+    it("ignores a malformed boundary instead of filtering on garbage", async () => {
+      seedQuarterEdges();
+
+      const result = await handlers.listTransactions(userId, {
+        dateFrom: "01/04/2026",
+        dateTo: "2026-06-30",
+      });
+
+      // Unparseable from-boundary drops out; the valid end still applies.
+      expect(names(result)).not.toContain("Q3 first day");
+      expect(names(result)).toContain("Q1 last day");
+    });
+  });
+
   describe("getTransaction", () => {
     it("should return transaction by ID", async () => {
       store.setDoc("transactions", "tx-1", createTestTransaction({ userId, name: "Test TX" }));

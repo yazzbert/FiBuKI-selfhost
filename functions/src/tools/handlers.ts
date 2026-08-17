@@ -13,6 +13,7 @@
 
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { buildDownloadUrl } from "../utils/buildDownloadUrl";
+import { dayStartUtc, dayEndExclusiveUtc } from "../uva/dateWindow";
 import { buildMarkNotInvoiceUpdates, buildUnmarkNotInvoiceUpdates } from "../files/notInvoiceOps";
 import { getStorage } from "firebase-admin/storage";
 import { randomUUID } from "crypto";
@@ -209,19 +210,20 @@ export async function listTransactions(userId: string, args: Record<string, unkn
   }
 
   // Date range pushed into the query so filters apply BEFORE the limit.
-  // Dates come in as YYYY-MM-DD (Europe/Vienna). Use local midnight for from,
-  // next-day midnight for to (inclusive end-of-day).
+  // Dates come in as YYYY-MM-DD Vienna calendar days and are stored as UTC
+  // midnight of that day, so the window is pure-UTC (fork #65 — a Vienna
+  // offset boundary misfiles bank-sync rows that carry a real booking time).
+  // An unparseable boundary is ignored rather than filtering on garbage.
   if (args.dateFrom) {
-    const fromDate = new Date(`${args.dateFrom as string}T00:00:00+01:00`);
-    if (!isNaN(fromDate.getTime())) {
+    const fromDate = dayStartUtc(args.dateFrom as string);
+    if (fromDate) {
       query = query.where("date", ">=", Timestamp.fromDate(fromDate));
     }
   }
   if (args.dateTo) {
-    const toDate = new Date(`${args.dateTo as string}T00:00:00+01:00`);
-    if (!isNaN(toDate.getTime())) {
-      toDate.setDate(toDate.getDate() + 1);
-      query = query.where("date", "<", Timestamp.fromDate(toDate));
+    const toExclusive = dayEndExclusiveUtc(args.dateTo as string);
+    if (toExclusive) {
+      query = query.where("date", "<", Timestamp.fromDate(toExclusive));
     }
   }
 

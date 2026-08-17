@@ -11,6 +11,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { createCallable, HttpsError } from "../utils/createCallable";
 import { calculateUva, RECONCILE_TOLERANCE_CENTS } from "../uva/calculateUva";
 import { periodBoundaries } from "../uva/rateSet";
+import { dayStartUtc, dayEndExclusiveUtc } from "../uva/dateWindow";
 import {
   buildUvaTransactions,
   type CategoryRecord,
@@ -57,10 +58,10 @@ export const calculateUvaCallable = createCallable<
     const bounds = periodBoundaries(period);
     // Dates are stored as UTC-midnight of the Vienna calendar day, so the
     // period window is a pure-UTC comparison (spec §7 — no host timezone).
-    const start = Timestamp.fromDate(new Date(`${bounds.start}T00:00:00Z`));
-    const endExclusive = Timestamp.fromDate(
-      new Date(new Date(`${bounds.end}T00:00:00Z`).getTime() + 24 * 3600 * 1000)
-    );
+    // periodBoundaries only ever emits real calendar days, so the helper
+    // cannot return null here.
+    const start = Timestamp.fromDate(dayStartUtc(bounds.start)!);
+    const endExclusive = Timestamp.fromDate(dayEndExclusiveUtc(bounds.end)!);
 
     const txSnapshot = await ctx.db
       .collection("transactions")
