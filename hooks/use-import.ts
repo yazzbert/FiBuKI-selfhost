@@ -8,7 +8,11 @@ import { callFunction } from "@/lib/firebase/callable";
 import { Transaction } from "@/types/transaction";
 import { FieldMapping, CSVAnalysis, AmountFormatConfig, ImportRecord } from "@/types/import";
 import { TransactionSource } from "@/types/source";
-import { parseDate } from "@/lib/import/date-parsers";
+import {
+  parseDate,
+  findDateColumnConflict,
+  getDateParserName,
+} from "@/lib/import/date-parsers";
 import { parseAmount, getAmountParserConfig } from "@/lib/import/amount-parsers";
 import {
   generateDedupeHash,
@@ -412,6 +416,33 @@ export function useImport(
       }
       const { rows: allRows } = parseCSV(text, state.analysis.options);
       rows = allRows;
+    }
+
+    // The whole date column is only in hand here — analysis parses 50 rows, and
+    // whether a slash column is DD/MM or MM/DD is settled by the first day
+    // above 12 anywhere in it. Importing against the opposite order files every
+    // ambiguous row under the wrong month, silently (#70), so stop instead.
+    if (dateMapping) {
+      const dateColumn = rows
+        .map((row) => row[dateMapping.csvColumn])
+        .filter((value): value is string => Boolean(value));
+      const conflict = findDateColumnConflict(dateColumn, dateFormat);
+
+      if (conflict) {
+        const suggestion = conflict.suggestedParserId
+          ? ` This column reads as ${getDateParserName(conflict.suggestedParserId)}.`
+          : " This column mixes both orders, so no single format fits it.";
+
+        setState((s) => ({
+          ...s,
+          error:
+            `The date column does not match the selected format ` +
+            `(${getDateParserName(dateFormat)}).${suggestion} ` +
+            `Pick the date format before importing.`,
+          transientStep: null,
+        }));
+        return;
+      }
     }
 
     // Build mapping lookup
