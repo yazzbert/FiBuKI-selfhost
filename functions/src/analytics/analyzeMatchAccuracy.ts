@@ -12,6 +12,7 @@
 
 import { Timestamp } from "firebase-admin/firestore";
 import { createCallable } from "../utils/createCallable";
+import { readDismissedTransactionIds } from "../matching/dismissedTransactions";
 
 interface AnalyzeMatchAccuracyRequest {
   /** If provided, only analyze this partner */
@@ -101,17 +102,10 @@ export const analyzeMatchAccuracyCallable = createCallable<
       .get();
 
     for (const doc of fileSnap.docs) {
-      const data = doc.data();
-      const dismissedIds = new Set<string>();
-
-      // Handle legacy format
-      for (const id of (data.dismissedTransactionIds || []) as string[]) {
-        dismissedIds.add(id);
-      }
-      // Handle new format
-      for (const d of (data.dismissedTransactions || []) as Array<{ transactionId: string }>) {
-        dismissedIds.add(d.transactionId);
-      }
+      // Both stored shapes, minus the rejections that were taken back: a
+      // reversed dismissal counted here would keep reporting as a rejection the
+      // user disagreed with (fork #95).
+      const dismissedIds = readDismissedTransactionIds(doc.data());
 
       if (dismissedIds.size > 0) {
         dismissedTxMap.set(doc.id, dismissedIds);

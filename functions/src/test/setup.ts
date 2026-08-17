@@ -87,6 +87,7 @@ export interface MockQuery {
   orderBy: (field: string, direction?: string) => MockQuery;
   startAfter: (snapshot: { id: string }) => MockQuery;
   limit: (n: number) => MockQuery;
+  select: (...fields: string[]) => MockQuery;
   get: () => Promise<MockQuerySnapshot>;
 }
 
@@ -172,7 +173,9 @@ export class InMemoryStore {
         };
 
         for (const filter of filters) {
-          const fieldValue = data[filter.field];
+          // __name__ is the document id, not a stored field — the only way to
+          // filter a batch of ids, which is how the analytics exports fan out.
+          const fieldValue = filter.field === "__name__" ? id : data[filter.field];
           switch (filter.op) {
             case "==":
               if (fieldValue !== filter.value) matches = false;
@@ -273,20 +276,26 @@ export function createMockFirestore(): MockFirestore {
   // the floor turns a pagination test into a test that cannot fail.
   // Simplification vs real Firestore: documents missing the ordered field are
   // sorted last instead of being excluded from the result.
+  //
+  // select() projects for the same reason: a mock that handed back every field
+  // regardless would let a handler read one it never selected and still pass
+  // here, then come back empty in production.
   const createQuery = (
     collection: string,
     filters: Array<{ field: string; op: string; value: unknown }> = [],
     order?: { field: string; direction: "asc" | "desc" },
     cursorId?: string,
-    limitN?: number
+    limitN?: number,
+    projection?: string[]
   ): MockQuery => ({
     where: (field: string, op: string, value: unknown) => {
-      return createQuery(collection, [...filters, { field, op, value }], order, cursorId, limitN);
+      return createQuery(collection, [...filters, { field, op, value }], order, cursorId, limitN, projection);
     },
     orderBy: (field: string, direction?: string) =>
-      createQuery(collection, filters, { field, direction: direction === "desc" ? "desc" : "asc" }, cursorId, limitN),
-    startAfter: (snapshot: { id: string }) => createQuery(collection, filters, order, snapshot?.id, limitN),
-    limit: (n: number) => createQuery(collection, filters, order, cursorId, n),
+      createQuery(collection, filters, { field, direction: direction === "desc" ? "desc" : "asc" }, cursorId, limitN, projection),
+    startAfter: (snapshot: { id: string }) => createQuery(collection, filters, order, snapshot?.id, limitN, projection),
+    limit: (n: number) => createQuery(collection, filters, order, cursorId, n, projection),
+    select: (...fields: string[]) => createQuery(collection, filters, order, cursorId, limitN, fields),
     get: async () => {
       let results = store.queryDocs(collection, filters);
 
@@ -317,13 +326,22 @@ export function createMockFirestore(): MockFirestore {
 
       if (limitN !== undefined) results = results.slice(0, limitN);
 
+      const project = (data: Record<string, unknown>): Record<string, unknown> => {
+        if (!projection) return data;
+        const picked: Record<string, unknown> = {};
+        for (const field of projection) {
+          if (field in data) picked[field] = data[field];
+        }
+        return picked;
+      };
+
       return {
         empty: results.length === 0,
         size: results.length,
         docs: results.map((r) => ({
           id: r.id,
           exists: true,
-          data: () => r.data,
+          data: () => project(r.data),
           ref: createDocRef(collection, r.id),
         })),
       };

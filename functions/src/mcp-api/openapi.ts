@@ -218,7 +218,7 @@ const OPENAPI_SPEC = {
     dismiss_transaction_suggestion:
       "Reject a proposed file-to-transaction pair (coincidental amount or date, an own-side document scored against an expense line). Removes the suggestion and records the rejection so re-scoring does not propose it again; do not use when the pair is correct but the transaction already holds a document. Args: fileId (string), transactionId (string), reason? (string, max 500 characters)",
     undismiss_transaction_suggestion:
-      "Undo a rejected file-to-transaction pair, making it eligible again. Nothing re-runs matching on its own — the pair reappears only when matching next runs for that file. Args: fileId (string), transactionId (string)",
+      "Clear a previous rejection of a file-to-transaction pair, making it eligible to be suggested again. Does not regenerate the suggestion — the pair reappears when matching next runs for that file, or can be scored on demand with score_file_transaction_match. The earlier rejection stays in the file's history. Args: fileId (string), transactionId (string)",
     auto_connect_file_suggestions:
       "Auto-connect files to transactions above confidence threshold. Args: fileId? (string), minConfidence? (number, 0-100, default 89)",
     list_no_receipt_categories: "List categories for transactions that don't need receipts (bank fees, payroll, etc.)",

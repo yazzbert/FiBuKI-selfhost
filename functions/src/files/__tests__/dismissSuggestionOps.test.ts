@@ -224,7 +224,7 @@ describe("checkDismissalReason", () => {
 });
 
 describe("buildUndismissSuggestionUpdates", () => {
-  it("clears both the legacy id and the rejection record", () => {
+  it("clears the legacy id and keeps the record, stamped", () => {
     const outcome = buildUndismissSuggestionUpdates(
       {
         dismissedTransactionIds: ["tx-0", "tx-1"],
@@ -237,11 +237,75 @@ describe("buildUndismissSuggestionUpdates", () => {
     );
 
     expect(outcome.wasDismissed).toBe(true);
+    // The id array is the enforcement list, so the id has to go.
     expect(outcome.updates.dismissedTransactionIds).toEqual(["tx-0"]);
+    // The record is the note, so it stays — with its confidence and reason
+    // intact, which is the whole reason for keeping it.
     expect(outcome.updates.dismissedTransactions).toEqual([
       expect.objectContaining({ transactionId: "tx-0" }),
+      expect.objectContaining({
+        transactionId: "tx-1",
+        confidence: 82,
+        reason: "oops",
+        undismissedAt: expect.anything(),
+      }),
     ]);
     expect(outcome.updates.updatedAt).toBe("SERVER_TIMESTAMP");
+  });
+
+  it("leaves other files' reversed records and unrelated pairs untouched", () => {
+    const alreadyReversed = {
+      transactionId: "tx-0",
+      dismissedAt: new Date("2026-01-01"),
+      confidence: 55,
+      reason: null,
+      undismissedAt: new Date("2026-02-01"),
+    };
+
+    const outcome = buildUndismissSuggestionUpdates(
+      {
+        dismissedTransactionIds: ["tx-1"],
+        dismissedTransactions: [
+          alreadyReversed,
+          { transactionId: "tx-1", dismissedAt: new Date(), confidence: 82, reason: null },
+        ],
+      },
+      "tx-1"
+    );
+
+    const records = outcome.updates.dismissedTransactions as Array<Record<string, unknown>>;
+    // An earlier undo keeps its own timestamp rather than being re-stamped.
+    expect(records[0]).toBe(alreadyReversed);
+  });
+
+  it("stamps only the active record when the pair was dismissed twice", () => {
+    const outcome = buildUndismissSuggestionUpdates(
+      {
+        dismissedTransactionIds: ["tx-1"],
+        dismissedTransactions: [
+          {
+            transactionId: "tx-1",
+            dismissedAt: new Date("2026-01-01"),
+            confidence: 70,
+            reason: "first",
+            undismissedAt: new Date("2026-02-01"),
+          },
+          {
+            transactionId: "tx-1",
+            dismissedAt: new Date("2026-03-01"),
+            confidence: 82,
+            reason: "second",
+          },
+        ],
+      },
+      "tx-1"
+    );
+
+    const records = outcome.updates.dismissedTransactions as Array<Record<string, unknown>>;
+    expect(records).toHaveLength(2);
+    expect(records[0].undismissedAt).toEqual(new Date("2026-02-01"));
+    expect(records[1].undismissedAt).toBeDefined();
+    expect(records[1].reason).toBe("second");
   });
 
   it("does not fabricate a suggestion — re-scoring is what proposes the pair again", () => {
@@ -259,12 +323,82 @@ describe("buildUndismissSuggestionUpdates", () => {
     expect(outcome.updates).not.toHaveProperty("transactionSuggestions");
   });
 
-  it("is idempotent on a pair that was never dismissed", () => {
+  it("writes nothing at all for a pair that was never dismissed", () => {
     const outcome = buildUndismissSuggestionUpdates({ dismissedTransactionIds: ["tx-0"] }, "tx-1");
 
     expect(outcome.wasDismissed).toBe(false);
-    expect(outcome.updates.dismissedTransactionIds).toEqual(["tx-0"]);
-    expect(outcome.updates.dismissedTransactions).toEqual([]);
+    // Not an empty-ish update carrying updatedAt — genuinely empty, so callers
+    // can skip the write entirely.
+    expect(outcome.updates).toEqual({});
+  });
+
+  it("writes nothing when the only record for the pair is already reversed", () => {
+    const outcome = buildUndismissSuggestionUpdates(
+      {
+        dismissedTransactionIds: [],
+        dismissedTransactions: [
+          {
+            transactionId: "tx-1",
+            dismissedAt: new Date(),
+            confidence: 82,
+            reason: null,
+            undismissedAt: new Date(),
+          },
+        ],
+      },
+      "tx-1"
+    );
+
+    expect(outcome.wasDismissed).toBe(false);
+    expect(outcome.updates).toEqual({});
+  });
+});
+
+describe("re-dismissing after an undo", () => {
+  it("appends a second record and puts the enforcement id back", () => {
+    const reversed = {
+      transactionId: "tx-1",
+      dismissedAt: new Date("2026-01-01"),
+      confidence: 70,
+      reason: "first",
+      undismissedAt: new Date("2026-02-01"),
+    };
+
+    const outcome = buildDismissSuggestionUpdates(
+      {
+        transactionSuggestions: [suggestion("tx-1", 82)],
+        dismissedTransactionIds: [],
+        dismissedTransactions: [reversed],
+      },
+      "tx-1",
+      "second"
+    );
+
+    // Three decisions about this pair, three things to see in the log — not one
+    // record silently standing in for all of them.
+    expect(outcome.updates.dismissedTransactions).toEqual([
+      reversed,
+      expect.objectContaining({ transactionId: "tx-1", confidence: 82, reason: "second" }),
+    ]);
+    expect(outcome.updates.dismissedTransactionIds).toEqual(["tx-1"]);
+    expect(outcome.alreadyDismissed).toBe(false);
+  });
+
+  it("still refuses to stack duplicates for a rejection that stands", () => {
+    const active = {
+      transactionId: "tx-1",
+      dismissedAt: new Date("2026-01-01"),
+      confidence: 70,
+      reason: "first",
+    };
+
+    const outcome = buildDismissSuggestionUpdates(
+      { dismissedTransactionIds: ["tx-1"], dismissedTransactions: [active] },
+      "tx-1"
+    );
+
+    expect(outcome.updates.dismissedTransactions).toEqual([active]);
+    expect(outcome.alreadyDismissed).toBe(true);
   });
 });
 
@@ -279,6 +413,45 @@ describe("isTransactionDismissedForFile", () => {
         {
           dismissedTransactions: [
             { transactionId: "tx-1", dismissedAt: new Date(), confidence: null, reason: null },
+          ],
+        },
+        "tx-1"
+      )
+    ).toBe(true);
+  });
+
+  it("ignores a record whose rejection was taken back", () => {
+    expect(
+      isTransactionDismissedForFile(
+        {
+          dismissedTransactions: [
+            {
+              transactionId: "tx-1",
+              dismissedAt: new Date(),
+              confidence: 82,
+              reason: null,
+              undismissedAt: new Date(),
+            },
+          ],
+        },
+        "tx-1"
+      )
+    ).toBe(false);
+  });
+
+  it("still counts the pair when a later rejection stands beside a reversed one", () => {
+    expect(
+      isTransactionDismissedForFile(
+        {
+          dismissedTransactions: [
+            {
+              transactionId: "tx-1",
+              dismissedAt: new Date("2026-01-01"),
+              confidence: 70,
+              reason: null,
+              undismissedAt: new Date("2026-02-01"),
+            },
+            { transactionId: "tx-1", dismissedAt: new Date("2026-03-01"), confidence: 82 },
           ],
         },
         "tx-1"

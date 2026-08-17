@@ -409,7 +409,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     "name": "undismiss_transaction_suggestion",
-    "description": "Undo a rejected file-to-transaction pair. Clears the rejection so the pair is eligible again; it does not restore the suggestion, and nothing re-runs matching on its own — the pair reappears only when matching next runs for that file (a partner change, a precision search, or the UI's refresh-matches action).",
+    "description": "Clear a previous rejection of a file-to-transaction pair, making it eligible to be suggested again. Does not itself regenerate the suggestion — the pair reappears when matching next runs for that file (a partner change, a precision search, or the UI's refresh-matches action), or can be scored on demand with score_file_transaction_match. The earlier rejection stays in the file's history.",
     "inputSchema": {
       "type": "object",
       "properties": {
