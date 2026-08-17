@@ -162,8 +162,11 @@ describe("classifyRematch", () => {
   });
 
   it("does not call a localisation a partner change", () => {
-    // The write path resolves a global top match to the local copy that already
-    // localises it, so comparing raw ids would report a false disagreement.
+    // Guard, not a live path: loadPartnerMatchingContext drops any global preset
+    // that already has a local copy from the candidate pool, so this shape
+    // cannot occur today. It is pinned because that pool rule lives in another
+    // function, and relaxing it there must not silently turn a localisation into
+    // a reported partner change.
     const index = buildPartnerIndex(
       context({
         userPartners: [partner({ id: "p-local", globalPartnerId: "g-1" })],

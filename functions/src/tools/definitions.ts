@@ -427,6 +427,61 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
+  {
+    name: "rematch_assigned_partners",
+    description:
+      "Re-run the current partner matcher over transactions that already have an AUTO-assigned " +
+      "partner, whole account, and write the corrected answer WITHOUT recording a false positive — " +
+      "unlike remove_partner_from_transaction, which blacklists the pair forever. Defaults to a dry " +
+      "run: pass dryRun=false to write. Reassigns where the matcher now picks a different partner, " +
+      "clears where it no longer reproduces the assignment, keeps where it agrees. Never touches " +
+      "manual, suggestion or ai assignments. Review with partner_rematch_report first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dryRun: {
+          type: "boolean",
+          description:
+            "Default true — plan only, nothing written. Pass false to apply the plan.",
+        },
+        clearUnconfirmed: {
+          type: "boolean",
+          description:
+            "Clear assignments the matcher no longer reproduces (default true). False leaves them " +
+            "in place and only rewrites where a different partner now auto-applies.",
+        },
+        minConfidence: {
+          type: "number",
+          description: "Only stored assignments with confidence >= this value",
+        },
+        maxConfidence: {
+          type: "number",
+          description: "Only stored assignments with confidence <= this value",
+        },
+        assignedBefore: {
+          type: "string",
+          description:
+            "ISO 8601 instant — only assignments recorded before it (e.g. the deploy time of a " +
+            "matcher fix). Transactions with no recorded assignment time are kept.",
+        },
+        maxWrites: {
+          type: "number",
+          description:
+            "Refuse to apply if the plan exceeds this many writes (default 1000). The run aborts " +
+            "before writing anything rather than applying half a plan.",
+        },
+        includeKept: {
+          type: "boolean",
+          description: "Include untouched (agreeing) transactions in rows (default false)",
+        },
+        limit: {
+          type: "number",
+          description: "Max rows to return (default 100, max 1000). Counts cover the whole plan.",
+        },
+      },
+    },
+  },
+
   // =========================================================================
   // Categories
   // =========================================================================
