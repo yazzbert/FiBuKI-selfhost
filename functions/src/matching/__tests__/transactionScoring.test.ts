@@ -258,10 +258,18 @@ describe("calculateAmountScore", () => {
     expect(result.source).toBe("amount_close");
   });
 
-  it("currency mismatch: a numerically equal amount is NOT an amount match", () => {
-    // USD 10.00 vs EUR 10.00 — the old code halved amount_exact to 20 here
+  it("currency mismatch: a numerically equal amount is NOT an exact match", () => {
+    // USD 10.00 vs EUR 10.00 — the old code reported amount_exact (halved to
+    // 20). 1:1 is inside the loose FX band (2022 parity), so it still scores
+    // 20, but as amount_close: it can never earn the hard-facts bonus.
     const result = calculateAmountScore(1000, 1000, "USD", "EUR");
     expect(result.currencyMismatch).toBe(true);
+    expect(result.score).toBe(20);
+    expect(result.source).toBe("amount_close");
+  });
+
+  it("currency mismatch: a ratio outside the loose band scores 0", () => {
+    const result = calculateAmountScore(1000, 1100, "USD", "EUR"); // 1.10 EUR/USD
     expect(result.score).toBe(0);
     expect(result.source).toBeNull();
   });
@@ -272,10 +280,17 @@ describe("calculateAmountScore", () => {
     expect(result.source).toBeNull();
   });
 
-  it("currency mismatch: unknown currency never scores", () => {
-    const result = calculateAmountScore(1000, 880, "XYZ", "EUR");
-    expect(result.currencyMismatch).toBe(true);
-    expect(result.score).toBe(0);
+  it("currency mismatch: unknown currency falls back to the halved numeric ladder", () => {
+    // no anchor for XYZ — often a garbled tag on a EUR document
+    expect(calculateAmountScore(1000, 880, "XYZ", "EUR").score).toBe(0);
+    const exact = calculateAmountScore(1000, 1000, "XYZ", "EUR");
+    expect(exact.currencyMismatch).toBe(true);
+    expect(exact.score).toBe(20);
+    expect(exact.source).toBe("amount_exact");
+  });
+
+  it("currency mismatch: a legacy '$' tag scores like USD", () => {
+    expect(calculateAmountScore(2400, 2086, "$", "EUR").score).toBe(30);
   });
 
   it("treats null/undefined currency as EUR", () => {

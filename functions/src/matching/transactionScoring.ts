@@ -184,11 +184,14 @@ export function calculateAmountScore(
   // sets source amount_exact, so it cannot earn the hard-facts bonus:
   // a foreign-currency file still needs partner or date corroboration.
   const fx = assessImpliedFx(fileAmount, fileCurrency, txAmount, txCurrency);
-  if (fx.mismatch) {
+  if (fx.mismatch && fx.referenceRate !== null) {
     if (fx.band === "tight") return { score: 30, source: "amount_close", currencyMismatch: true };
     if (fx.band === "loose") return { score: 20, source: "amount_close", currencyMismatch: true };
     return { score: 0, source: null, currencyMismatch: true };
   }
+  // A mismatched pair with no anchor (unknown/garbled code — often a
+  // mis-tagged EUR document) keeps the pre-#87 behaviour: numeric ladder,
+  // halved. It still never reports amount_exact as a hard fact.
 
   // Same currency: cent-exact, then tolerance ladder relative to the FILE amount
   let score = 0;
@@ -213,7 +216,11 @@ export function calculateAmountScore(
     }
   }
 
-  return { score, source, currencyMismatch: false };
+  if (fx.mismatch && score > 0) {
+    score = Math.round(score * 0.5);
+  }
+
+  return { score, source, currencyMismatch: fx.mismatch };
 }
 
 export interface BillingCycleHint {

@@ -21,7 +21,7 @@ import {
   ratesValidInPeriod,
   ratesValidOn,
 } from "./rateSet";
-import { assessImpliedFx } from "../fx/fxPlausibility";
+import { assessImpliedFx, isSameCurrency } from "../fx/fxPlausibility";
 import type {
   DerivationStep,
   KennzahlFigure,
@@ -126,6 +126,13 @@ export function calculateUva(input: UvaCalculationInput): UvaReportResult {
   for (const tx of transactions) {
     const isIncome = tx.amount > 0;
     const bank = Math.abs(tx.amount);
+
+    // The report is in EUR; a bank line in another currency cannot feed a
+    // Kennzahl in any lane (fork #87). Surface it rather than add raw cents.
+    if (!isSameCurrency(tx.currency, "EUR")) {
+      markUnresolved(tx, "foreign-currency", null);
+      continue;
+    }
 
     // --- D3: foreign regimes, each in its own bucket, never mixed --------
     if (tx.foreignRegime) {
@@ -286,12 +293,16 @@ function deriveRateGroups(
     // Foreign-currency documents (fork #87): the document figures are in
     // another unit than the bank line, so they must never be read as-is.
     // With exactly one file the bank line IS the payment: bank / totalGross
-    // is the effective rate actually paid (the payment-date rate that
-    // matters for an Ist-Besteuerer), and the whole document is rescaled
-    // by it. Anything else — several files, no total, an unknown currency,
-    // or an implied rate that is not a plausible FX rate (a partial payment
-    // in disguise) — is surfaced instead of guessed.
-    const foreign = files.filter((f) => assessImpliedFx(1, f.currency, 1, tx.currency).mismatch);
+    // is the effective rate actually paid on the payment date, and the whole
+    // document is rescaled by it. Known limitation: § 20 Abs 6 UStG points
+    // at the BMF monthly / ECB rate, and the card issuer's markup (1-3%) is
+    // inside the effective rate, so the claim runs slightly high; without an
+    // FX feed this is the best rate the data holds and the delta is
+    // bounded by the plausibility band. Anything else — several files, no
+    // total, an unknown currency, or an implied rate that is not a plausible
+    // FX rate (a partial payment in disguise) — is surfaced instead of
+    // guessed.
+    const foreign = files.filter((f) => !isSameCurrency(f.currency, tx.currency));
     if (foreign.length > 0) {
       const converted = files.length === 1 ? convertToBankCurrency(files[0], tx) : null;
       if (!converted) {

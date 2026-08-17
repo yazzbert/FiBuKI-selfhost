@@ -608,6 +608,19 @@ describe("foreign-currency documents (fork #87)", () => {
     expect(r.unresolved[0]).toMatchObject({ transactionId: "t-two", reason: "foreign-currency" });
   });
 
+  it("a bank line that is not in EUR cannot feed the EUR report in any lane", () => {
+    const r = run([
+      { id: "t-usd-acct", date: "2026-02-10", amount: -3600, currency: "USD", files: [usdFile] },
+      { id: "t-usd-income", date: "2026-02-11", amount: 5000, currency: "USD" },
+    ]);
+    expect(r.totalInputVat).toBe(0);
+    expect(r.totalOutputVat).toBe(0);
+    expect(r.unresolved.map((u) => [u.transactionId, u.reason])).toEqual([
+      ["t-usd-acct", "foreign-currency"],
+      ["t-usd-income", "foreign-currency"],
+    ]);
+  });
+
   it("does not convert an unknown currency", () => {
     const r = run([
       { id: "t-xyz", date: "2026-02-10", amount: -3132, files: [{ ...usdFile, currency: "XYZ" }] },

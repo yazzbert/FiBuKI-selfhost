@@ -42,9 +42,18 @@ describe("assessImpliedFx", () => {
     expect(assessImpliedFx(10000, "GBP", 9000, "EUR").band).toBeNull();
   });
 
-  it("USD 100 vs EUR 101 (1:1) is outside the loose band", () => {
-    // A 1:1 USD/EUR ratio is >12% off the reference — not a plausible payment
-    expect(assessImpliedFx(10000, "USD", 10100, "EUR").band).toBeNull();
+  it("USD 100 vs EUR 101 (2022 parity) is loose, USD 100 vs EUR 110 is out", () => {
+    // 1:1 USD/EUR is ~15% off the current-era anchor: real in 2022, so still
+    // loosely plausible; 1.10 EUR/USD (25% off) is not.
+    expect(assessImpliedFx(10000, "USD", 10100, "EUR").band).toBe("loose");
+    expect(assessImpliedFx(10000, "USD", 11000, "EUR").band).toBeNull();
+  });
+
+  it("maps legacy currency symbols to ISO codes", () => {
+    expect(normalizeCurrency("€")).toBe("EUR");
+    expect(normalizeCurrency("$")).toBe("USD");
+    expect(isSameCurrency("€", null)).toBe(true);
+    expect(assessImpliedFx(2400, "$", 2086, "EUR").band).toBe("tight");
   });
 
   it("partial payment ratio (USD 120 paid EUR 50) is not plausible FX", () => {

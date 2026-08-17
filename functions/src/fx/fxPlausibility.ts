@@ -11,9 +11,11 @@
  * The reference rates below are coarse anchors used ONLY to gate
  * plausibility. They never convert anything: the effective rate actually
  * paid is always derived from the real pair (bank amount / document
- * amount), which for an Ist-Besteuerer is the payment-date rate that
- * matters. Card FX markups (1-3%) and a year of market drift both fit
- * inside the tolerances, which is why they are wide.
+ * amount) on the payment date. Card FX markups (1-3%) and several years of
+ * market drift fit inside the tolerances, which is why they are wide; a
+ * genuinely historical outlier lands in the worklist, never in a figure.
+ * Unknown codes have no anchor and are never guessed here — the scorer
+ * falls back to its numeric ladder for those, the UVA surfaces them.
  */
 
 /** Approximate value of one unit of the currency in EUR (anchor, not a feed). */
@@ -35,8 +37,14 @@ export const FX_REFERENCE_TO_EUR: Record<string, number> = {
 
 /** Relative deviation from the reference that still counts as a tight FX match. */
 export const FX_TIGHT_TOLERANCE = 0.05;
-/** Relative deviation from the reference that still counts as plausible at all. */
-export const FX_LOOSE_TOLERANCE = 0.12;
+/**
+ * Relative deviation from the reference that still counts as plausible at
+ * all. Wide on purpose: the anchors are current-era, and USD sat at parity
+ * with EUR in 2022 (~16% off today's anchor). A pair that falls outside
+ * this band is not silently mis-scored — the matcher awards no amount
+ * points and the UVA lists it, so a wider band costs little.
+ */
+export const FX_LOOSE_TOLERANCE = 0.2;
 
 export type FxBand = "tight" | "loose";
 
@@ -53,9 +61,19 @@ export interface FxAssessment {
   band: FxBand | null;
 }
 
+/** Symbols the legacy extraction path can still emit instead of an ISO code. */
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  "€": "EUR",
+  $: "USD",
+  "£": "GBP",
+  "¥": "JPY",
+  "FR.": "CHF",
+};
+
 export function normalizeCurrency(c?: string | null): string {
   const t = (c ?? "").trim().toUpperCase();
-  return t || "EUR";
+  if (!t) return "EUR";
+  return CURRENCY_SYMBOLS[t] ?? t;
 }
 
 export function isSameCurrency(a?: string | null, b?: string | null): boolean {
