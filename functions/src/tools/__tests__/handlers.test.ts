@@ -250,17 +250,36 @@ describe("Tool Registry Handlers", () => {
       expect(names(result)).toEqual(["July first"]);
     });
 
-    it("ignores a malformed boundary instead of filtering on garbage", async () => {
+    it("rejects a malformed boundary instead of silently widening the window", async () => {
+      seedQuarterEdges();
+
+      // Dropping the filter would answer with the newest transactions of all
+      // time, which reads as "the period holds nothing older".
+      await expect(
+        handlers.listTransactions(userId, { dateFrom: "01/04/2026", dateTo: "2026-06-30" })
+      ).rejects.toThrow("dateFrom must be a calendar day");
+
+      await expect(
+        handlers.listTransactions(userId, { dateTo: "30.06.2026" })
+      ).rejects.toThrow("dateTo must be a calendar day");
+
+      await expect(
+        handlers.listTransactions(userId, { dateFrom: "2026-02-30" })
+      ).rejects.toThrow("dateFrom must be a calendar day");
+    });
+
+    it("reports each row under the day the window selected it by", async () => {
+      // The returned `date` and the filter have to read the timestamp the same
+      // way, or a June query answers with a row labelled July.
       seedQuarterEdges();
 
       const result = await handlers.listTransactions(userId, {
-        dateFrom: "01/04/2026",
+        dateFrom: "2026-04-01",
         dateTo: "2026-06-30",
       });
+      const lateRow = result.transactions.find((t) => t.name === "Q2 last day late");
 
-      // Unparseable from-boundary drops out; the valid end still applies.
-      expect(names(result)).not.toContain("Q3 first day");
-      expect(names(result)).toContain("Q1 last day");
+      expect(lateRow?.date).toBe("2026-06-30");
     });
   });
 

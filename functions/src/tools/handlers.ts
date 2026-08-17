@@ -24,16 +24,30 @@ import { KNOWN_AUSTRIAN_RATES } from "../uva/rateSet";
 import type { PlanId, PlanFeatures } from "../billing/config";
 
 /**
- * Convert a Firestore Timestamp to YYYY-MM-DD in Europe/Vienna timezone.
+ * Convert a Firestore Timestamp to the YYYY-MM-DD calendar day it stands for.
  * Bank transactions are date-only — returning full ISO timestamps causes
  * timezone confusion (e.g. Dec 1 CET → Nov 30 UTC).
+ *
+ * The stored convention is UTC midnight of the Vienna calendar day, so the
+ * day is read in UTC: that is the same convention the date-range filter and
+ * the UVA report use. Rendering in Europe/Vienna instead agrees for every row
+ * written to the convention, and disagrees with the window that selected the
+ * row for anything written with a real time of day (the bank sync paths), so
+ * a row could come back from a June query reporting a July date.
  */
-function toLocalDate(ts: Timestamp | { toDate?: () => Date } | string | null | undefined): string | null {
+function toLocalDate(
+  ts: Timestamp | Date | { toDate?: () => Date } | string | null | undefined
+): string | null {
   if (!ts) return null;
   if (typeof ts === "string") return ts;
-  const date = typeof (ts as Timestamp).toDate === "function" ? (ts as Timestamp).toDate() : null;
-  if (!date) return null;
-  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Vienna" }).format(date);
+  const date =
+    ts instanceof Date
+      ? ts
+      : typeof (ts as Timestamp).toDate === "function"
+        ? (ts as Timestamp).toDate()
+        : null;
+  if (!date || isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
 }
 
 export { TOOL_NAMES };
@@ -210,21 +224,26 @@ export async function listTransactions(userId: string, args: Record<string, unkn
   }
 
   // Date range pushed into the query so filters apply BEFORE the limit.
-  // Dates come in as YYYY-MM-DD Vienna calendar days and are stored as UTC
-  // midnight of that day, so the window is pure-UTC (fork #65 — a Vienna
-  // offset boundary misfiles bank-sync rows that carry a real booking time).
-  // An unparseable boundary is ignored rather than filtering on garbage.
+  // Dates come in as YYYY-MM-DD calendar days and are stored as UTC midnight
+  // of that day, so the window is pure-UTC (fork #65 — a Vienna offset
+  // boundary misfiles rows that carry a real booking time).
+  //
+  // A malformed boundary is rejected, not dropped: silently widening the
+  // window returns the newest transactions of all time, which reads to a
+  // caller as "the period is empty of anything older".
   if (args.dateFrom) {
     const fromDate = dayStartUtc(args.dateFrom as string);
-    if (fromDate) {
-      query = query.where("date", ">=", Timestamp.fromDate(fromDate));
+    if (!fromDate) {
+      throw new Error(`dateFrom must be a calendar day as YYYY-MM-DD, got "${args.dateFrom}"`);
     }
+    query = query.where("date", ">=", Timestamp.fromDate(fromDate));
   }
   if (args.dateTo) {
     const toExclusive = dayEndExclusiveUtc(args.dateTo as string);
-    if (toExclusive) {
-      query = query.where("date", "<", Timestamp.fromDate(toExclusive));
+    if (!toExclusive) {
+      throw new Error(`dateTo must be a calendar day as YYYY-MM-DD, got "${args.dateTo}"`);
     }
+    query = query.where("date", "<", Timestamp.fromDate(toExclusive));
   }
 
   query = query.orderBy("date", "desc");
@@ -1133,11 +1152,17 @@ export async function importTransactions(userId: string, args: Record<string, un
       if (isNaN(dateObj.getTime())) {
         throw new Error(`Invalid date: ${txData.date}`);
       }
+      // Store the convention the rest of the system reads: UTC midnight of the
+      // calendar day. A date carrying a time of day would otherwise sit an
+      // hour outside the period windows that select it.
+      const dateAtUtcMidnight = new Date(
+        Date.UTC(dateObj.getUTCFullYear(), dateObj.getUTCMonth(), dateObj.getUTCDate())
+      );
 
       const transactionDoc: Record<string, unknown> = {
         userId,
         sourceId: txData.sourceId,
-        date: AdminTimestamp.fromDate(dateObj),
+        date: AdminTimestamp.fromDate(dateAtUtcMidnight),
         amount: txData.amount,
         currency: txData.currency,
         name: txData.name,

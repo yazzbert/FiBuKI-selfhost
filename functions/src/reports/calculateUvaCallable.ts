@@ -58,10 +58,17 @@ export const calculateUvaCallable = createCallable<
     const bounds = periodBoundaries(period);
     // Dates are stored as UTC-midnight of the Vienna calendar day, so the
     // period window is a pure-UTC comparison (spec §7 — no host timezone).
-    // periodBoundaries only ever emits real calendar days, so the helper
-    // cannot return null here.
-    const start = Timestamp.fromDate(dayStartUtc(bounds.start)!);
-    const endExclusive = Timestamp.fromDate(dayEndExclusiveUtc(bounds.end)!);
+    const startDate = dayStartUtc(bounds.start);
+    const endExclusiveDate = dayEndExclusiveUtc(bounds.end);
+    if (!startDate || !endExclusiveDate) {
+      // An out-of-range period number (quarter 5, month 13) reaches this far:
+      // periodBoundaries does the month arithmetic without bounding it, and
+      // emits a day that does not exist. Answer invalid-argument rather than
+      // throwing a TypeError out of the window math.
+      throw new HttpsError("invalid-argument", "A valid period is required");
+    }
+    const start = Timestamp.fromDate(startDate);
+    const endExclusive = Timestamp.fromDate(endExclusiveDate);
 
     const txSnapshot = await ctx.db
       .collection("transactions")
