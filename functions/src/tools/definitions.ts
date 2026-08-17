@@ -239,6 +239,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "dismiss_transaction_suggestion",
+    description:
+      "Reject a proposed file-to-transaction pair. Removes the suggestion from the file's suggestion list and records the rejection so re-scoring does not propose it again. Use for a genuinely wrong pair (coincidental amount or date, an own-side document scored against an expense line). Do NOT use when the pair is correct but the transaction already holds a document. Reversible with undismiss_transaction_suggestion.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+        transactionId: { type: "string", description: "The transaction ID to reject" },
+        reason: {
+          type: "string",
+          description: "Why the pair is wrong — stored with the rejection, max 500 characters",
+        },
+      },
+      required: ["fileId", "transactionId"],
+    },
+  },
+  {
+    name: "undismiss_transaction_suggestion",
+    description:
+      "Undo a rejected file-to-transaction pair. Clears the rejection so the pair is eligible again; it does not restore the suggestion, and nothing re-runs matching on its own — the pair reappears only when matching next runs for that file (a partner change, a precision search, or the UI's refresh-matches action).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+        transactionId: { type: "string", description: "The transaction ID to un-reject" },
+      },
+      required: ["fileId", "transactionId"],
+    },
+  },
+  {
     name: "auto_connect_file_suggestions",
     description: "Auto-connect files to transactions above confidence threshold",
     requiredFeature: "aiMatching",
