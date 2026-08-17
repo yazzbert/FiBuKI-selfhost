@@ -506,11 +506,14 @@ describe("calculateAmountScore — tolerance asymmetry and boundaries", () => {
     expect(calculateAmountScore(111, 100).score).toBe(20);
   });
 
-  it("currency mismatch halves then rounds: 38→19, 30→15, 20→10, 40→20", () => {
-    expect(calculateAmountScore(100, 101, "USD", "EUR").score).toBe(19);
-    expect(calculateAmountScore(100, 105, "USD", "EUR").score).toBe(15);
-    expect(calculateAmountScore(100, 110, "USD", "EUR").score).toBe(10);
-    expect(calculateAmountScore(100, 100, "USD", "EUR").score).toBe(20);
+  // Fork #87: currency mismatch is no longer "same tolerance ladder, halved".
+  // Near-1:1 USD/EUR pairs are not plausible payments and score 0; the
+  // amount signal for a mismatched pair comes from FX plausibility instead.
+  it("currency mismatch: near-1:1 USD/EUR pairs score 0; plausible FX scores 30/20", () => {
+    expect(calculateAmountScore(100, 101, "USD", "EUR").score).toBe(0);
+    expect(calculateAmountScore(100, 100, "USD", "EUR").score).toBe(0);
+    expect(calculateAmountScore(100, 88, "USD", "EUR").score).toBe(30);
+    expect(calculateAmountScore(100, 95, "USD", "EUR").score).toBe(20);
   });
 
   it("currency comparison is case-insensitive", () => {
