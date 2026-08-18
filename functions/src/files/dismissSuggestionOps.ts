@@ -12,6 +12,7 @@
  */
 
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { isActiveDismissal } from "../matching/dismissedTransactions";
 
 /** Free text stored with a rejection. Longer than this is refused, not truncated. */
 export const MAX_DISMISSAL_REASON_LENGTH = 500;
@@ -33,6 +34,13 @@ export interface DismissedTransactionEntry {
   confidence?: number | null;
   /** Free text from the rejecting agent. Absent on every record written before fork #93. */
   reason?: string | null;
+  /**
+   * When this rejection was taken back (fork #95). Present means the record is
+   * history and no longer suppresses the pair — `isActiveDismissal` in
+   * matching/dismissedTransactions is the one place that reads it that way.
+   * Absent on every record that has not been undone.
+   */
+  undismissedAt?: unknown;
 }
 
 /**
@@ -58,6 +66,12 @@ export interface DismissSuggestionOutcome {
 }
 
 export interface UndismissSuggestionOutcome {
+  /**
+   * Empty when the pair was not dismissed. Undoing a rejection that was never
+   * made writes nothing at all rather than touching `updatedAt`, so a sweep
+   * clearing a speculative list does not stamp every file it looked at.
+   * Callers must skip the write on an empty object — Firestore refuses one.
+   */
   updates: Record<string, unknown>;
   wasDismissed: boolean;
 }
@@ -88,9 +102,13 @@ function dismissedRecords(fileData: DismissibleFileState): DismissedTransactionE
 }
 
 /**
- * True when this file has already rejected this transaction, in either the
+ * True when this file *currently* rejects this transaction, in either the
  * legacy id array or the record array. Both are read because documents written
  * before the record format exist and still carry only the ids.
+ *
+ * Reversed records do not count (fork #95). The legacy array needs no such
+ * check: undo removes the id from it outright, because a bare string has
+ * nowhere to carry the stamp.
  */
 export function isTransactionDismissedForFile(
   fileData: DismissibleFileState,
@@ -98,7 +116,17 @@ export function isTransactionDismissedForFile(
 ): boolean {
   return (
     dismissedIds(fileData).includes(transactionId) ||
-    dismissedRecords(fileData).some((d) => d.transactionId === transactionId)
+    hasActiveDismissalRecord(fileData, transactionId)
+  );
+}
+
+/** Whether an unreversed rejection record exists for this pair. */
+function hasActiveDismissalRecord(
+  fileData: DismissibleFileState,
+  transactionId: string
+): boolean {
+  return dismissedRecords(fileData).some(
+    (d) => d.transactionId === transactionId && isActiveDismissal(d)
   );
 }
 
@@ -114,6 +142,12 @@ export function isTransactionDismissedForFile(
  * still gains its record instead of being skipped on the strength of its
  * legacy id alone. The read and the write belong in one Firestore transaction:
  * whole-array writes lose a concurrent rejection otherwise.
+ *
+ * The record check is for an *active* record (fork #95). Rejecting a pair that
+ * was rejected and then un-rejected appends a second record rather than
+ * matching the reversed one and writing nothing: the array is the history of
+ * what was decided about this pair, and "rejected, taken back, rejected again"
+ * is three decisions, not one.
  */
 export function buildDismissSuggestionUpdates(
   fileData: DismissibleFileState,
@@ -126,12 +160,12 @@ export function buildDismissSuggestionUpdates(
   const ids = dismissedIds(fileData);
   const records = dismissedRecords(fileData);
   const hasId = ids.includes(transactionId);
-  const hasRecord = records.some((d) => d.transactionId === transactionId);
+  const hasActiveRecord = hasActiveDismissalRecord(fileData, transactionId);
 
   const updates: Record<string, unknown> = {
     transactionSuggestions: suggestions.filter((s) => s.transactionId !== transactionId),
     dismissedTransactionIds: hasId ? ids : [...ids, transactionId],
-    dismissedTransactions: hasRecord
+    dismissedTransactions: hasActiveRecord
       ? records
       : [
           ...records,
@@ -151,28 +185,53 @@ export function buildDismissSuggestionUpdates(
     // the suggestion list — the normal answer on a sweep re-run, and the reason
     // a re-run is a no-op rather than an error.
     dismissedConfidence: dismissed?.confidence ?? null,
-    alreadyDismissed: hasId || hasRecord,
+    alreadyDismissed: hasId || hasActiveRecord,
   };
 }
 
 /**
- * Undoing a rejection clears the blacklist entries and stops there. It does not
- * put the suggestion back: only `confidence` survived the dismissal, so a
- * restored entry would be missing the match sources that justify it. The pair
- * becomes proposable again the next time transaction matching runs.
+ * Undoing a rejection lifts the suppression and keeps the note.
+ *
+ * The transaction leaves `dismissedTransactionIds`, which is the list matching
+ * enforces against. Its `dismissedTransactions` record stays, stamped
+ * `undismissedAt`: a sweep reading the file afterwards can still see that this
+ * pair was rejected, at what confidence and for what reason, and then restored,
+ * so it can reach the same conclusion again on its own evidence. Deleting the
+ * record would hide the attempt and invite the same wrong pairing to be
+ * re-litigated from scratch.
+ *
+ * `transactionSuggestions` is deliberately untouched. Undo restores
+ * eligibility, it does not fabricate a suggestion — only `confidence` survived
+ * the dismissal, so a re-inserted entry would be missing the match sources that
+ * justify it. The pair reappears when transaction matching next runs.
+ *
+ * Undoing a pair that is not dismissed writes nothing.
  */
 export function buildUndismissSuggestionUpdates(
   fileData: DismissibleFileState,
   transactionId: string
 ): UndismissSuggestionOutcome {
+  const wasDismissed = isTransactionDismissedForFile(fileData, transactionId);
+
+  if (!wasDismissed) {
+    return { updates: {}, wasDismissed: false };
+  }
+
+  const undismissedAt = Timestamp.now();
+
   return {
     updates: {
       dismissedTransactionIds: dismissedIds(fileData).filter((id) => id !== transactionId),
-      dismissedTransactions: dismissedRecords(fileData).filter(
-        (d) => d.transactionId !== transactionId
+      // Stamp every active record for this pair — normally exactly one. Already
+      // reversed records keep their original stamp, so the log reads as the
+      // sequence of decisions it is.
+      dismissedTransactions: dismissedRecords(fileData).map((d) =>
+        d.transactionId === transactionId && isActiveDismissal(d)
+          ? { ...d, undismissedAt }
+          : d
       ),
       updatedAt: FieldValue.serverTimestamp(),
     },
-    wasDismissed: isTransactionDismissedForFile(fileData, transactionId),
+    wasDismissed: true,
   };
 }

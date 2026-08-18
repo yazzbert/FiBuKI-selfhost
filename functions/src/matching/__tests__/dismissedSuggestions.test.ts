@@ -105,7 +105,7 @@ vi.mock("../../billing/checkAIBudget", () => ({
 }));
 
 import { Timestamp } from "@google-cloud/firestore";
-import { readDismissedTransactionIds } from "../dismissedTransactions";
+import { isActiveDismissal, readDismissedTransactionIds } from "../dismissedTransactions";
 import { runTransactionMatching } from "../matchFileTransactions";
 
 const USER = "u1";
@@ -188,6 +188,52 @@ describe("readDismissedTransactionIds", () => {
     });
     expect([...ids].sort()).toEqual(["t1", "t2"]);
   });
+
+  it("skips a record whose rejection was taken back", () => {
+    const ids = readDismissedTransactionIds({
+      dismissedTransactions: [
+        {
+          transactionId: "t3",
+          dismissedAt: Timestamp.fromDate(DATE),
+          confidence: 91,
+          undismissedAt: Timestamp.fromDate(DATE),
+        },
+      ],
+    });
+    expect(ids.size).toBe(0);
+  });
+
+  it("still suppresses when a standing rejection sits beside a reversed one", () => {
+    const ids = readDismissedTransactionIds({
+      dismissedTransactions: [
+        {
+          transactionId: "t3",
+          dismissedAt: Timestamp.fromDate(DATE),
+          undismissedAt: Timestamp.fromDate(DATE),
+        },
+        { transactionId: "t3", dismissedAt: Timestamp.fromDate(DATE) },
+      ],
+    });
+    expect([...ids]).toEqual(["t3"]);
+  });
+});
+
+describe("isActiveDismissal", () => {
+  it("treats an unstamped record as still rejecting", () => {
+    expect(isActiveDismissal({ transactionId: "t1" })).toBe(true);
+    expect(isActiveDismissal({ transactionId: "t1", undismissedAt: null })).toBe(true);
+  });
+
+  it("treats a stamped record as history", () => {
+    expect(isActiveDismissal({ transactionId: "t1", undismissedAt: Timestamp.fromDate(DATE) })).toBe(
+      false
+    );
+  });
+
+  it("does not throw on the malformed entries the readers tolerate", () => {
+    expect(isActiveDismissal(null)).toBe(true);
+    expect(isActiveDismissal("t9")).toBe(true);
+  });
 });
 
 describe("runTransactionMatching: dismissal survives a re-score", () => {
@@ -216,6 +262,57 @@ describe("runTransactionMatching: dismissal survives a re-score", () => {
       file({
         dismissedTransactions: [
           { transactionId: "t-dismissed", dismissedAt: Timestamp.fromDate(DATE), confidence: 88 },
+        ],
+      })
+    );
+
+    expect(suggestionsWritten()).toEqual([]);
+  });
+
+  it("proposes the pair again once the rejection has been taken back", async () => {
+    h.state.transactions = [tx("t-dismissed")];
+
+    // Exactly the document shape undo leaves behind: off the enforcement list,
+    // still on the record with a stamp. This is the acceptance criterion for
+    // fork #95 — undo's promise is "eligible to be suggested again", and this
+    // is the only place it can be proved.
+    await runTransactionMatching(
+      "f1",
+      file({
+        dismissedTransactionIds: [],
+        dismissedTransactions: [
+          {
+            transactionId: "t-dismissed",
+            dismissedAt: Timestamp.fromDate(DATE),
+            confidence: 88,
+            undismissedAt: Timestamp.fromDate(DATE),
+          },
+        ],
+      })
+    );
+
+    expect(suggestionsWritten().map((s) => s.transactionId)).toEqual(["t-dismissed"]);
+  });
+
+  it("keeps suppressing after undo when the pair was rejected a second time", async () => {
+    h.state.transactions = [tx("t-dismissed")];
+
+    await runTransactionMatching(
+      "f1",
+      file({
+        dismissedTransactionIds: ["t-dismissed"],
+        dismissedTransactions: [
+          {
+            transactionId: "t-dismissed",
+            dismissedAt: Timestamp.fromDate(DATE),
+            confidence: 88,
+            undismissedAt: Timestamp.fromDate(DATE),
+          },
+          {
+            transactionId: "t-dismissed",
+            dismissedAt: Timestamp.fromDate(DATE),
+            confidence: 88,
+          },
         ],
       })
     );

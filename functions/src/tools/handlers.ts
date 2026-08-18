@@ -702,7 +702,11 @@ async function applyDismissalUpdate<T extends { updates: Record<string, unknown>
     }
 
     const built = build(fileSnap.data() as DismissibleFileState, transactionId);
-    tx.update(fileRef, built.updates);
+    // An undo of a pair that was never dismissed builds nothing, and Firestore
+    // refuses an empty update — so there is no write at all, not even updatedAt.
+    if (Object.keys(built.updates).length > 0) {
+      tx.update(fileRef, built.updates);
+    }
     return built;
   });
 
@@ -741,9 +745,12 @@ export async function dismissTransactionSuggestion(userId: string, args: Record<
 }
 
 /**
- * Undo a rejection. Clears the blacklist so transaction matching may propose
- * the pair again; it does not put the suggestion back, because the match
- * sources that justified it were not kept.
+ * Undo a rejection — the tool-surface twin of the undismissTransactionSuggestion
+ * callable, writing the identical field set via the shared builder.
+ *
+ * Clears the blacklist so transaction matching may propose the pair again; it
+ * does not put the suggestion back, because the match sources that justified it
+ * were not kept. The rejection itself stays on the file as history.
  */
 export async function undismissTransactionSuggestion(
   userId: string,

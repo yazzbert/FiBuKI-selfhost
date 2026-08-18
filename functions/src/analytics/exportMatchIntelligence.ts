@@ -13,6 +13,7 @@
 
 import { Timestamp } from "firebase-admin/firestore";
 import { createCallable } from "../utils/createCallable";
+import { isActiveDismissal } from "../matching/dismissedTransactions";
 
 interface ExportMatchIntelligenceRequest {
   /** Filter to a specific partner (optional) */
@@ -204,6 +205,12 @@ export const exportMatchIntelligenceCallable = createCallable<
     }
 
     // 6. Build dismissal list
+    //
+    // Only rejections that still stand. A dismissal the user took back is kept
+    // on the file as history (fork #95) and must not be exported as training
+    // signal, or the matcher keeps learning from a decision that was reversed.
+    // The legacy pass below needs no such filter: undo removes the id from that
+    // array outright, so a reversed pair cannot re-enter through it.
     const dismissals: DismissalRecord[] = [];
     for (const [fileId, fileData] of fileMap) {
       // New format
@@ -212,6 +219,7 @@ export const exportMatchIntelligenceCallable = createCallable<
         dismissedAt?: Timestamp;
         confidence?: number;
       }>) {
+        if (!isActiveDismissal(d)) continue;
         dismissals.push({
           fileId,
           transactionId: d.transactionId,
