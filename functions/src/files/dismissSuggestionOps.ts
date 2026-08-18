@@ -12,7 +12,10 @@
  */
 
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import { isActiveDismissal } from "../matching/dismissedTransactions";
+import {
+  isActiveDismissal,
+  isTransactionDismissed,
+} from "../matching/dismissedTransactions";
 
 /** Free text stored with a rejection. Longer than this is refused, not truncated. */
 export const MAX_DISMISSAL_REASON_LENGTH = 500;
@@ -103,21 +106,22 @@ function dismissedRecords(fileData: DismissibleFileState): DismissedTransactionE
 
 /**
  * True when this file *currently* rejects this transaction, in either the
- * legacy id array or the record array. Both are read because documents written
- * before the record format exist and still carry only the ids.
+ * legacy id array or the record array.
  *
- * Reversed records do not count (fork #95). The legacy array needs no such
- * check: undo removes the id from it outright, because a bare string has
- * nowhere to carry the stamp.
+ * A thin typed alias over `isTransactionDismissed` in
+ * matching/dismissedTransactions, which owns this question for every reader —
+ * matching, both analytics exports and, since fork #101, the agent tools. The
+ * two used to be separate implementations of the same rule over the same two
+ * fields, which is one implementation too many for a rule that decides whether
+ * a rejection holds. The alias survives only for the typed `DismissibleFileState`
+ * signature the write builders in this module already work in; the reader takes
+ * `unknown` because most of its callers hold a raw Firestore document.
  */
 export function isTransactionDismissedForFile(
   fileData: DismissibleFileState,
   transactionId: string
 ): boolean {
-  return (
-    dismissedIds(fileData).includes(transactionId) ||
-    hasActiveDismissalRecord(fileData, transactionId)
-  );
+  return isTransactionDismissed(fileData, transactionId);
 }
 
 /** Whether an unreversed rejection record exists for this pair. */

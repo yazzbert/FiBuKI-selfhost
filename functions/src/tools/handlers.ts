@@ -19,6 +19,7 @@ import {
   buildDismissSuggestionUpdates,
   buildUndismissSuggestionUpdates,
   checkDismissalReason,
+  isTransactionDismissedForFile,
   type DismissibleFileState,
 } from "../files/dismissSuggestionOps";
 import { getStorage } from "firebase-admin/storage";
@@ -518,6 +519,26 @@ export async function connectFileToTransaction(userId: string, args: Record<stri
 
   if (txDoc.data()?.quotaExceeded) {
     throw new Error("Cannot connect files to over-quota transactions via API");
+  }
+
+  // A rejected pair does not reconnect (fork #101). This handler backs both
+  // connect_file_to_transaction and the best-suggestion loop in
+  // auto_connect_file_suggestions, so the check belongs here rather than at
+  // either caller.
+  //
+  // Unlike the chat tool, there is no override argument on the MCP surface: an
+  // external caller that means it can lift the rejection first with
+  // undismiss_transaction_suggestion, which leaves a record of having done so.
+  if (
+    isTransactionDismissedForFile(
+      fileDoc.data() as DismissibleFileState,
+      transactionId as string
+    )
+  ) {
+    throw new Error(
+      "PAIR_REJECTED: this file was rejected for this transaction. " +
+        "Use undismiss_transaction_suggestion first if connecting it is genuinely intended."
+    );
   }
 
   const batch = db.batch();

@@ -206,7 +206,7 @@ const OPENAPI_SPEC = {
       "List uploaded files/receipts. Returns { files, nextCursor, count } — count is this page, not a total. Args: hasConnections? (boolean), hasSuggestions? (boolean), limit? (number, max 500), cursor? (string, nextCursor from the previous page)",
     get_file: "Get file details including suggestions. Args: fileId (string)",
     connect_file_to_transaction:
-      "Connect a file to a transaction (marks transaction complete). Args: fileId (string), transactionId (string)",
+      "Connect a file to a transaction (marks transaction complete). A pair previously rejected with dismiss_transaction_suggestion is refused with PAIR_REJECTED; lift it with undismiss_transaction_suggestion first if the connection is genuinely intended. Args: fileId (string), transactionId (string)",
     disconnect_file_from_transaction:
       "Disconnect a file from a transaction. Args: fileId (string), transactionId (string)",
     list_transactions_needing_files:
