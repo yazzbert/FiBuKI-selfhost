@@ -306,7 +306,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     "name": "connect_file_to_transaction",
-    "description": "Connect a file (receipt) to a transaction, marking it complete",
+    "description": "Connect a file (receipt) to a transaction, marking it complete. A pair that was previously rejected is refused with PAIR_REJECTED; lift the rejection with undismiss_transaction_suggestion first if the connection is genuinely intended.",
     "inputSchema": {
       "type": "object",
       "properties": {

@@ -716,6 +716,113 @@ describe("Tool Registry Handlers", () => {
     });
   });
 
+  // Fork #101. The gate lives in this handler rather than at its callers
+  // because auto_connect_file_suggestions reaches the same write through it.
+  describe("connectFileToTransaction — dismissal gate (fork #101)", () => {
+    it("refuses a pair the file has rejected", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({ userId, dismissedTransactionIds: ["tx-1"] })
+      );
+      store.setDoc("transactions", "tx-1", createTestTransaction({ userId, fileIds: [] }));
+
+      await expect(
+        handlers.connectFileToTransaction(userId, { fileId: "f-1", transactionId: "tx-1" })
+      ).rejects.toThrow("PAIR_REJECTED");
+
+      // The refusal must leave no half-written state behind.
+      const file = store.getDoc("files", "f-1");
+      const tx = store.getDoc("transactions", "tx-1");
+      expect(file?.transactionIds ?? []).not.toContain("tx-1");
+      expect(tx?.fileIds ?? []).not.toContain("f-1");
+      expect(
+        store.queryDocs("fileConnections", [{ field: "fileId", op: "==", value: "f-1" }])
+      ).toHaveLength(0);
+    });
+
+    it("refuses on the record shape too, not only the legacy id array", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          dismissedTransactions: [{ transactionId: "tx-1", dismissedAt: new Date() }],
+        })
+      );
+      store.setDoc("transactions", "tx-1", createTestTransaction({ userId }));
+
+      await expect(
+        handlers.connectFileToTransaction(userId, { fileId: "f-1", transactionId: "tx-1" })
+      ).rejects.toThrow("PAIR_REJECTED");
+    });
+
+    it("connects again once the rejection is taken back", async () => {
+      // What undismiss leaves behind: the id gone from the enforcement array,
+      // the record kept as history and stamped. The pair must be connectable.
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          dismissedTransactionIds: [],
+          dismissedTransactions: [
+            { transactionId: "tx-1", dismissedAt: new Date(), undismissedAt: new Date() },
+          ],
+        })
+      );
+      store.setDoc("transactions", "tx-1", createTestTransaction({ userId, fileIds: [] }));
+
+      const result = await handlers.connectFileToTransaction(userId, {
+        fileId: "f-1",
+        transactionId: "tx-1",
+      });
+
+      expect(result.success).toBe(true);
+      expect(store.getDoc("files", "f-1")?.transactionIds).toContain("tx-1");
+    });
+
+    it("leaves an unrelated dismissal alone", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({ userId, dismissedTransactionIds: ["tx-other"] })
+      );
+      store.setDoc("transactions", "tx-1", createTestTransaction({ userId, fileIds: [] }));
+
+      const result = await handlers.connectFileToTransaction(userId, {
+        fileId: "f-1",
+        transactionId: "tx-1",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("stops autoConnectFileSuggestions from reconnecting a rejected pair", async () => {
+      // The suggestion is stale: dismissal normally strips it, but a file
+      // written before the record format, or re-scored by a path that predates
+      // the filter, can still carry one. The handler is the backstop.
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          transactionIds: [],
+          transactionMatchComplete: true,
+          dismissedTransactionIds: ["tx-1"],
+          transactionSuggestions: [{ transactionId: "tx-1", confidence: 99 }],
+        })
+      );
+      store.setDoc("transactions", "tx-1", createTestTransaction({ userId, fileIds: [] }));
+
+      const result = await handlers.autoConnectFileSuggestions(userId, { minConfidence: 89 });
+
+      expect(result.connected).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(store.getDoc("files", "f-1")?.transactionIds ?? []).not.toContain("tx-1");
+    });
+  });
+
   describe("disconnectFileFromTransaction", () => {
     it("should disconnect file from transaction", async () => {
       store.setDoc("files", "f-1", createTestFile({ userId, transactionIds: ["tx-1"] }));
