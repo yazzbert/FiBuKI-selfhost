@@ -18,6 +18,11 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      # Needs no dependencies, so it runs before the install and fails fast.
+      # A build arg compose passes but web.Dockerfile does not declare is dropped
+      # silently, and Next inlines undefined into the client bundle (#54).
+      - name: Web build args reach the Dockerfile
+        run: node scripts/check-web-build-args.js
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run lint
