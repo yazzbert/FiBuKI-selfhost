@@ -15,7 +15,8 @@
     "test:chat-url": "node --test tests/chat-url-state.test.mjs",
     "setup": "bash scripts/setup.sh",
     "generate:mcp-automations": "node scripts/generate-mcp-automations.js",
-    "generate:tool-definitions": "node scripts/generate-tool-definitions.js"
+    "generate:tool-definitions": "node scripts/generate-tool-definitions.js",
+    "check:web-build-args": "node scripts/check-web-build-args.js"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.85",
