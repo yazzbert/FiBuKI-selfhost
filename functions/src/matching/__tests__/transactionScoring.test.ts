@@ -242,10 +242,55 @@ describe("calculateAmountScore", () => {
     expect(result.score).toBe(40);
   });
 
-  it("applies 50% penalty for currency mismatch", () => {
-    const result = calculateAmountScore(1000, 1000, "USD", "EUR");
-    expect(result.score).toBe(20); // 40 * 0.5
+  // Fork #87: a currency-mismatched pair is scored on FX plausibility, not on
+  // the raw numbers — USD 24.00 and EUR 20.86 never agree numerically.
+  it("currency mismatch: a plausible FX ratio scores 30 as amount_close", () => {
+    const result = calculateAmountScore(2400, 2086, "USD", "EUR"); // 0.869 EUR/USD
     expect(result.currencyMismatch).toBe(true);
+    expect(result.score).toBe(30);
+    expect(result.source).toBe("amount_close");
+  });
+
+  it("currency mismatch: a loosely plausible ratio scores 20", () => {
+    const result = calculateAmountScore(10000, 9500, "USD", "EUR"); // 0.95, ~8% off anchor
+    expect(result.currencyMismatch).toBe(true);
+    expect(result.score).toBe(20);
+    expect(result.source).toBe("amount_close");
+  });
+
+  it("currency mismatch: a numerically equal amount is NOT an exact match", () => {
+    // USD 10.00 vs EUR 10.00 — the old code reported amount_exact (halved to
+    // 20). 1:1 is inside the loose FX band (2022 parity), so it still scores
+    // 20, but as amount_close: it can never earn the hard-facts bonus.
+    const result = calculateAmountScore(1000, 1000, "USD", "EUR");
+    expect(result.currencyMismatch).toBe(true);
+    expect(result.score).toBe(20);
+    expect(result.source).toBe("amount_close");
+  });
+
+  it("currency mismatch: a ratio outside the loose band scores 0", () => {
+    const result = calculateAmountScore(1000, 1100, "USD", "EUR"); // 1.10 EUR/USD
+    expect(result.score).toBe(0);
+    expect(result.source).toBeNull();
+  });
+
+  it("currency mismatch: an implausible ratio scores 0", () => {
+    const result = calculateAmountScore(12000, 5000, "USD", "EUR"); // partial payment shape
+    expect(result.score).toBe(0);
+    expect(result.source).toBeNull();
+  });
+
+  it("currency mismatch: unknown currency falls back to the halved numeric ladder", () => {
+    // no anchor for XYZ — often a garbled tag on a EUR document
+    expect(calculateAmountScore(1000, 880, "XYZ", "EUR").score).toBe(0);
+    const exact = calculateAmountScore(1000, 1000, "XYZ", "EUR");
+    expect(exact.currencyMismatch).toBe(true);
+    expect(exact.score).toBe(20);
+    expect(exact.source).toBe("amount_exact");
+  });
+
+  it("currency mismatch: a legacy '$' tag scores like USD", () => {
+    expect(calculateAmountScore(2400, 2086, "$", "EUR").score).toBe(30);
   });
 
   it("treats null/undefined currency as EUR", () => {
@@ -373,6 +418,7 @@ describe("scoreTransaction", () => {
     expect(result.breakdown).toHaveProperty("iban");
     expect(result.breakdown).toHaveProperty("reference");
     expect(result.breakdown).toHaveProperty("hint");
+    expect(result.breakdown).toHaveProperty("hardFacts");
   });
 
   it("includes preview data", () => {
@@ -451,6 +497,171 @@ describe("scoreTransaction", () => {
       });
 
       expect(resultWith.confidence).toBeGreaterThan(resultWithout.confidence);
+    });
+  });
+
+  // Fork #78: exact amount + exact date used to cap at 65 (< 85), so
+  // auto-connect depended on partner identity rather than the hard facts.
+  describe("hard-facts combination bonus (fork #78)", () => {
+    // No partner signal on either side: only amount + date can score.
+    const noPartnerFile: FileMatchingData = {
+      ...baseFileData,
+      partnerId: null,
+      extractedPartner: null,
+    };
+    const noPartnerTx: TransactionData = {
+      ...baseTxData,
+      partnerId: undefined,
+      partner: undefined,
+      name: "AMAZON* NI42Y4HY4",
+    };
+
+    it("exact amount + same day clears the auto-match threshold on its own", () => {
+      const result = scoreTransaction(noPartnerFile, noPartnerTx);
+      // 40 (amount) + 25 (date) + 20 (bonus) = 85
+      expect(result.breakdown.hardFacts).toBe(SCORING_CONFIG.HARD_FACTS_BONUS_SAME_DAY);
+      expect(result.confidence).toBe(85);
+      expect(result.confidence).toBeGreaterThanOrEqual(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+      expect(result.matchSources).not.toContain("partner");
+    });
+
+    it("exact amount within 3 days is a strong suggestion but not an auto-match", () => {
+      const result = scoreTransaction(
+        { ...noPartnerFile, extractedDate: ts("2024-06-14") },
+        noPartnerTx
+      );
+      // 40 + 22 + 15 = 77
+      expect(result.breakdown.hardFacts).toBe(SCORING_CONFIG.HARD_FACTS_BONUS_CLOSE);
+      expect(result.confidence).toBe(77);
+      expect(result.confidence).toBeLessThan(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+    });
+
+    it("exact amount within 3 days plus a weak partner text match auto-matches", () => {
+      // The live case from #78: Amazon Business EU vs "AMAZON* ..." scored 74
+      // (40 + 22 + 12) and was left for manual review.
+      const result = scoreTransaction(
+        {
+          ...noPartnerFile,
+          extractedDate: ts("2024-06-14"),
+          extractedPartner: "Amazon Business EU",
+        },
+        noPartnerTx
+      );
+      expect(result.breakdown.partner).toBe(12);
+      // 40 + 22 + 12 + 15 = 89
+      expect(result.confidence).toBe(89);
+      expect(result.confidence).toBeGreaterThanOrEqual(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+    });
+
+    it("no bonus when the amount is only close (within 1%)", () => {
+      const result = scoreTransaction(
+        { ...noPartnerFile, extractedAmount: 10050 },
+        noPartnerTx
+      );
+      // 38 + 25 = 63
+      expect(result.breakdown.hardFacts).toBe(0);
+      expect(result.confidence).toBe(63);
+    });
+
+    it("no bonus when the amount is a plausible FX match in another currency", () => {
+      // USD 113.64 ≈ EUR 100.00 at 0.88: FX-plausible (30) but never "exact"
+      const result = scoreTransaction(
+        { ...noPartnerFile, extractedAmount: 11364, extractedCurrency: "USD" },
+        noPartnerTx
+      );
+      // 30 + 25 = 55
+      expect(result.matchSources).toContain("amount_close");
+      expect(result.matchSources).not.toContain("amount_exact");
+      expect(result.breakdown.hardFacts).toBe(0);
+      expect(result.confidence).toBe(55);
+    });
+
+    it("no bonus when the date is more than 3 days off", () => {
+      const result = scoreTransaction(
+        { ...noPartnerFile, extractedDate: ts("2024-06-10") },
+        noPartnerTx
+      );
+      // 40 + 15 = 55
+      expect(result.breakdown.hardFacts).toBe(0);
+      expect(result.confidence).toBe(55);
+    });
+
+    it("bonus is decided on the raw date score, before the partner date boost", () => {
+      // Partner ID match (25) boosts date 25 -> 37; the bonus must still be the
+      // same-day one, and the total caps at 100.
+      const result = scoreTransaction(baseFileData, baseTxData);
+      expect(result.breakdown.date).toBe(37);
+      expect(result.breakdown.hardFacts).toBe(SCORING_CONFIG.HARD_FACTS_BONUS_SAME_DAY);
+      expect(result.confidence).toBe(100);
+    });
+
+    it("a learned billing-cycle delay counts as an exact date", () => {
+      // Invoice Jun 1, debit Jun 15, learned delay 14 +/- 3 -> date 25 -> bonus 20
+      const result = scoreTransaction(
+        { ...noPartnerFile, extractedDate: ts("2024-06-01") },
+        noPartnerTx,
+        undefined,
+        { billingCycle: { invoiceToTransactionDelay: 14, delayVariance: 3 } }
+      );
+      expect(result.breakdown.hardFacts).toBe(SCORING_CONFIG.HARD_FACTS_BONUS_SAME_DAY);
+      expect(result.confidence).toBe(85);
+    });
+
+    it("bonus is not scaled by per-partner weights", () => {
+      // amountWeight 0.5 halves the amount to 20; the bonus still applies but
+      // 20 + 25 + 20 = 65 stays below the threshold.
+      const result = scoreTransaction(noPartnerFile, noPartnerTx, undefined, {
+        weights: { amountWeight: 0.5, dateWeight: 1, partnerWeight: 1 },
+      });
+      expect(result.breakdown.hardFacts).toBe(SCORING_CONFIG.HARD_FACTS_BONUS_SAME_DAY);
+      expect(result.confidence).toBe(65);
+    });
+  });
+
+  describe("foreign-currency subscriptions (fork #87)", () => {
+    // Live pair: paperless-ap-1108.pdf OpenAI USD 24.00 2026-04-02 vs
+    // "OPENAI *CHATGPT SUBSCR" EUR 20.86 2026-04-03. Scored 58
+    // (date_close 33 + partner 25) with zero amount points before #87.
+    const usdFile: FileMatchingData = {
+      extractedAmount: 2400,
+      extractedCurrency: "USD",
+      extractedDate: ts("2026-04-02"),
+      extractedPartner: "OpenAI",
+      partnerId: "p-openai",
+    };
+    const eurTx: TransactionData = {
+      id: "tx-openai",
+      amount: -2086,
+      currency: "EUR",
+      date: ts("2026-04-03"),
+      name: "OPENAI *CHATGPT SUBSCR",
+      partnerId: "p-openai",
+    };
+
+    it("plausible FX + partner + next-day date auto-matches", () => {
+      const result = scoreTransaction(usdFile, eurTx);
+      // 30 (fx amount) + 33 (22 boosted by partner) + 25 (partner id) = 88
+      expect(result.breakdown.amount).toBe(30);
+      expect(result.confidence).toBe(88);
+      expect(result.confidence).toBeGreaterThanOrEqual(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+      expect(result.matchSources).toContain("amount_close");
+    });
+
+    it("plausible FX + date alone stays a suggestion, never an auto-match", () => {
+      const result = scoreTransaction(
+        { ...usdFile, extractedPartner: null, partnerId: null },
+        { ...eurTx, partnerId: undefined, name: "CARD PAYMENT" }
+      );
+      // 30 + 22 = 52
+      expect(result.confidence).toBe(52);
+      expect(result.confidence).toBeLessThan(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+      expect(result.breakdown.hardFacts).toBe(0);
+    });
+
+    it("same partner but implausible FX ratio scores like before (no amount points)", () => {
+      const result = scoreTransaction(usdFile, { ...eurTx, amount: -6000 });
+      expect(result.breakdown.amount).toBe(0);
+      expect(result.confidence).toBe(58);
     });
   });
 

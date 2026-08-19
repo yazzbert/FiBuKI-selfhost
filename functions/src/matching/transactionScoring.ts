@@ -7,12 +7,29 @@
  */
 
 import { Timestamp } from "firebase-admin/firestore";
+import { assessImpliedFx, isSameCurrency } from "../fx/fxPlausibility";
+import {
+  readBankOriginalAmount,
+  type BankOriginalAmount,
+} from "../fx/bankOriginalAmount";
 
 // === Configuration ===
 
 export const SCORING_CONFIG = {
   /** Minimum confidence for auto-matching (creates connection) */
   AUTO_MATCH_THRESHOLD: 85,
+  /**
+   * Bonus when the two hard financial facts agree on their own: a cent-exact
+   * amount (same currency) AND the same day. 40 + 25 + 20 = 85, so this pair
+   * clears AUTO_MATCH_THRESHOLD without needing partner corroboration (#78).
+   */
+  HARD_FACTS_BONUS_SAME_DAY: 20,
+  /**
+   * Bonus for a cent-exact amount within 3 days. 40 + 22 + 15 = 77: a strong
+   * suggestion, but auto-connect still needs one more signal (any partner
+   * text match >= 12 pushes it over 85).
+   */
+  HARD_FACTS_BONUS_CLOSE: 15,
   /** Minimum confidence to show as suggestion */
   SUGGESTION_THRESHOLD: 50,
   /** Days to search before/after file date */
@@ -42,6 +59,8 @@ export interface ScoreBreakdown {
   iban: number;
   reference: number;
   hint: number;
+  /** Combination bonus for exact amount + exact/close date (see HARD_FACTS_BONUS_*) */
+  hardFacts: number;
 }
 
 export interface TransactionPreview {
@@ -79,6 +98,12 @@ export interface TransactionData {
   amount: number;
   date: Timestamp;
   currency?: string;
+  /**
+   * The preserved import row. Read only for the bank-stated original amount
+   * (#112) — see readBankOriginalAmount. Optional because the precision-search
+   * and remap paths build a TransactionData without it.
+   */
+  _original?: { rawRow?: Record<string, string> | null } | null;
   name?: string;
   partner?: string;
   partnerName?: string;
@@ -147,11 +172,35 @@ export function namesMatch(
 
 // === Scoring Functions ===
 
+/**
+ * The cent-exact-then-tolerance ladder for two amounts already known to be in
+ * the same currency. Tolerance is relative to the FILE amount, which is why it
+ * is asymmetric — see the characterization tests.
+ *
+ * Extracted (#112) so the bank-original path and the same-currency path score
+ * identically instead of growing a second, drifting copy.
+ */
+function scoreSameCurrencyLadder(
+  absFile: number,
+  absOther: number
+): { score: number; source: TransactionMatchSource | null } {
+  if (absFile === absOther) return { score: 40, source: "amount_exact" };
+
+  const difference = Math.abs(absFile - absOther);
+  const tolerance = absFile;
+
+  if (difference <= tolerance * 0.01) return { score: 38, source: "amount_close" };
+  if (difference <= tolerance * 0.05) return { score: 30, source: "amount_close" };
+  if (difference <= tolerance * 0.1) return { score: 20, source: "amount_close" };
+  return { score: 0, source: null };
+}
+
 export function calculateAmountScore(
   fileAmount: number,
   txAmount: number,
   fileCurrency?: string | null,
-  txCurrency?: string | null
+  txCurrency?: string | null,
+  txOriginal?: BankOriginalAmount | null
 ): { score: number; source: TransactionMatchSource | null; currencyMismatch: boolean } {
   const absFile = Math.abs(fileAmount);
   const absTx = Math.abs(txAmount);
@@ -160,43 +209,57 @@ export function calculateAmountScore(
     return { score: 0, source: null, currencyMismatch: false };
   }
 
-  // Check for currency mismatch
-  // Normalize currencies for comparison (handle null/undefined/empty)
-  const normFileCurrency = (fileCurrency || "EUR").toUpperCase();
-  const normTxCurrency = (txCurrency || "EUR").toUpperCase();
-  const currencyMismatch = normFileCurrency !== normTxCurrency;
-
-  // Calculate base amount score
-  let score = 0;
-  let source: TransactionMatchSource | null = null;
-
-  if (absFile === absTx) {
-    score = 40;
-    source = "amount_exact";
-  } else {
-    const difference = Math.abs(absFile - absTx);
-    const tolerance = absFile;
-
-    if (difference <= tolerance * 0.01) {
-      score = 38;
-      source = "amount_close";
-    } else if (difference <= tolerance * 0.05) {
-      score = 30;
-      source = "amount_close";
-    } else if (difference <= tolerance * 0.1) {
-      score = 20;
-      source = "amount_close";
+  // Ground truth beats plausibility (#112). When the document is in one
+  // currency and the bank line in another, the bank usually still states what
+  // it charged BEFORE settling — "Original Amount 24, Original Currency USD"
+  // against a EUR 20.77 row. That figure is in the document's own currency, so
+  // the two can be compared directly: no rate, no tolerance, no FX band.
+  //
+  // Scored on the same-currency ladder and reported with currencyMismatch
+  // false, because in the currency that matters this is NOT a mismatched pair
+  // — it is a cent-exact one, and it should earn the hard-facts bonus (#78)
+  // exactly as the equivalent domestic payment does. Only the settlement
+  // differs, and the settlement is not what identifies a payment.
+  if (txOriginal && !isSameCurrency(fileCurrency, txCurrency)) {
+    if (isSameCurrency(fileCurrency, txOriginal.currency)) {
+      const ladder = scoreSameCurrencyLadder(absFile, Math.abs(txOriginal.amount));
+      if (ladder.source !== null) {
+        return { ...ladder, currencyMismatch: false };
+      }
+      // The bank stated an original in the document's currency and the two
+      // still disagree by more than 10%. That is a real disagreement about
+      // real numbers, not an FX artefact, so fall through to nothing rather
+      // than letting the rate-plausibility path award points for it.
+      return { score: 0, source: null, currencyMismatch: false };
     }
   }
 
-  // Apply currency mismatch penalty: reduce amount score by 50%
-  // This allows USD invoice to still match EUR transaction (with exchange rate variance)
-  // but prioritizes same-currency matches
-  if (currencyMismatch && score > 0) {
+  // Currency mismatch (fork #87): the raw numbers are in different units, so
+  // comparing them is meaningless — USD 24.00 vs EUR 20.86 is the SAME
+  // payment and used to score 0 (13% apart, outside the 10% band), while
+  // USD 10.00 vs EUR 10.00 is a different payment and used to score 20.
+  // Score the plausibility of the implied exchange rate instead. It is
+  // deliberately capped below a same-currency exact match (40) and never
+  // sets source amount_exact, so it cannot earn the hard-facts bonus:
+  // a foreign-currency file still needs partner or date corroboration.
+  const fx = assessImpliedFx(fileAmount, fileCurrency, txAmount, txCurrency);
+  if (fx.mismatch && fx.referenceRate !== null) {
+    if (fx.band === "tight") return { score: 30, source: "amount_close", currencyMismatch: true };
+    if (fx.band === "loose") return { score: 20, source: "amount_close", currencyMismatch: true };
+    return { score: 0, source: null, currencyMismatch: true };
+  }
+  // A mismatched pair with no anchor (unknown/garbled code — often a
+  // mis-tagged EUR document) keeps the pre-#87 behaviour: numeric ladder,
+  // halved. It still never reports amount_exact as a hard fact.
+
+  // Same currency: cent-exact, then tolerance ladder relative to the FILE amount
+  let { score, source } = scoreSameCurrencyLadder(absFile, absTx);
+
+  if (fx.mismatch && score > 0) {
     score = Math.round(score * 0.5);
   }
 
-  return { score, source, currencyMismatch };
+  return { score, source, currencyMismatch: fx.mismatch };
 }
 
 export interface BillingCycleHint {
@@ -337,21 +400,30 @@ export function scoreTransaction(
   let ibanScore = 0;
   let referenceScore = 0;
   let hintScore = 0;
+  let hardFactsScore = 0;
   const matchSources: TransactionMatchSource[] = [];
 
-  // 1. Amount scoring (0-40, reduced if currency mismatch)
+  // 1. Amount scoring (0-40; a currency-mismatched pair scores FX plausibility, max 30)
+  // amountExact is only true for a cent-exact match in a shared currency
+  // (score 40). A currency-mismatched pair reaches that only through the bank's
+  // own stated original amount (#112), which is a real same-currency
+  // comparison; an FX-plausibility score never reports amount_exact.
+  let amountExact = false;
   if (fileData.extractedAmount != null) {
     const result = calculateAmountScore(
       fileData.extractedAmount,
       txData.amount,
       fileData.extractedCurrency,
-      txData.currency
+      txData.currency,
+      readBankOriginalAmount(txData._original?.rawRow)
     );
     amountScore = result.score;
+    amountExact = result.source === "amount_exact" && !result.currencyMismatch;
     if (result.source) matchSources.push(result.source);
   }
 
   // 2. Date scoring (0-25, boosted when partner matches)
+  let rawDateScore = 0;
   if (fileData.extractedDate) {
     const result = calculateDateScore(
       fileData.extractedDate.toDate(),
@@ -359,7 +431,21 @@ export function scoreTransaction(
       options?.billingCycle
     );
     dateScore = result.score;
+    rawDateScore = result.score;
     if (result.source) matchSources.push(result.source);
+  }
+
+  // 2b. Hard-facts combination bonus (#78)
+  // Exact amount + exact date used to cap at 65 (< AUTO_MATCH_THRESHOLD 85), so
+  // auto-connect was gated on partner identity rather than on the two facts that
+  // actually identify a payment. Uses the RAW date score, before the partner
+  // boost in 3b, so the bonus does not depend on partner signals.
+  if (amountExact) {
+    if (rawDateScore >= 25) {
+      hardFactsScore = SCORING_CONFIG.HARD_FACTS_BONUS_SAME_DAY;
+    } else if (rawDateScore >= 22) {
+      hardFactsScore = SCORING_CONFIG.HARD_FACTS_BONUS_CLOSE;
+    }
   }
 
   // 3. Partner scoring (0-25 for ID match, 0-15 for text match)
@@ -430,7 +516,13 @@ export function scoreTransaction(
   const weightedPartner = w ? partnerScore * w.partnerWeight : partnerScore;
 
   const rawConfidence =
-    weightedAmount + weightedDate + weightedPartner + ibanScore + referenceScore + hintScore;
+    weightedAmount +
+    weightedDate +
+    weightedPartner +
+    ibanScore +
+    referenceScore +
+    hintScore +
+    hardFactsScore;
   // Cap at 100 (multiple strong signals shouldn't exceed 100%)
   const confidence = Math.min(100, Math.round(rawConfidence));
 
@@ -445,6 +537,7 @@ export function scoreTransaction(
       iban: ibanScore,
       reference: referenceScore,
       hint: hintScore,
+      hardFacts: hardFactsScore,
     },
     preview: {
       date: txData.date,
@@ -467,5 +560,6 @@ export function formatScoreBreakdown(breakdown: ScoreBreakdown): string {
   if (breakdown.iban > 0) parts.push(`iban:${breakdown.iban}`);
   if (breakdown.reference > 0) parts.push(`ref:${breakdown.reference}`);
   if (breakdown.hint > 0) parts.push(`hint:${breakdown.hint}`);
+  if (breakdown.hardFacts > 0) parts.push(`facts:${breakdown.hardFacts}`);
   return parts.join(" + ");
 }
