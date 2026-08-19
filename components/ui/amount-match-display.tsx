@@ -117,6 +117,10 @@ export function AmountMatchDisplay({
   // Convert all secondary amounts to display currency and sum them
   let convertedTotal = 0;
   let conversionRate: number | null = null;
+  // The month the rate came from. The table is monthly and a missing month
+  // borrows from up to three earlier, so this is not always the payment month
+  // — showing it is the only way a substitution is visible to the user.
+  let conversionRateDate: string | null = null;
   let conversionFailed = false;
   let wasConverted = false;
 
@@ -134,6 +138,7 @@ export function AmountMatchDisplay({
       if (conversion) {
         convertedTotal += conversion.amount;
         conversionRate = conversion.rate;
+        conversionRateDate = conversion.rateDate;
         wasConverted = true;
       } else {
         conversionFailed = true;
@@ -259,6 +264,7 @@ export function AmountMatchDisplay({
           {conversionRate !== null && (
             <p className="text-xs text-muted-foreground">
               Rate: 1 {secondaryCurrencies[0]} = {conversionRate.toFixed(4)} {displayCurrency}
+              {conversionRateDate && conversionRateDate !== "n/a" && ` (${conversionRateDate})`}
             </p>
           )}
         </TooltipContent>
