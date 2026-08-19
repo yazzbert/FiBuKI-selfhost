@@ -101,13 +101,23 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "update_transaction",
-    description: "Update a transaction's description or completion status",
+    description: "Update a transaction's description, completion status, or manual VAT-rate override (the override feeds the UVA calculation when no receipt resolves the rate)",
     inputSchema: {
       type: "object",
       properties: {
         transactionId: { type: "string", description: "The transaction ID" },
         description: { type: "string", description: "Description for tax purposes" },
         isComplete: { type: "boolean", description: "Mark as complete/incomplete" },
+        vatRate: {
+          type: ["number", "null"],
+          description:
+            "Manual VAT rate override for UVA derivation: one of 0, 4.9, 10, 13, 19, 20. Pass null to clear. The calculation still validates the rate against the transaction's period.",
+        },
+        isReverseCharge: {
+          type: ["boolean", "null"],
+          description:
+            "Reverse-charge classification for UVA derivation: true forces the §19 service regime (KZ 057/066), false vetoes the automatic foreign-supplier heuristic, null clears and lets the heuristic decide.",
+        },
       },
       required: ["transactionId"],
     },
@@ -199,6 +209,24 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         transactionId: { type: "string", description: "The transaction ID" },
       },
       required: ["fileId", "transactionId"],
+    },
+  },
+  {
+    name: "retry_file_extraction",
+    description:
+      "Re-run extraction on a file. Use when a file extracted without erroring but produced nothing usable — no line items, no VAT amount, a wrong total — which is the case the UI's retry button did not cover. Extraction runs synchronously and can take up to a minute. Re-extracting resets partner and transaction matching for the file so both re-run against the new data; a manual partner assignment is kept. A file that already extracted cleanly needs force: true.",
+    requiredFeature: "aiExtraction",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+        force: {
+          type: "boolean",
+          description:
+            "Re-extract a file whose extraction completed without error. Required for that case, ignored otherwise.",
+        },
+      },
+      required: ["fileId"],
     },
   },
   {

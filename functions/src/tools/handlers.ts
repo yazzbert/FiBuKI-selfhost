@@ -13,11 +13,17 @@
 
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { buildDownloadUrl } from "../utils/buildDownloadUrl";
+import { defineSecret } from "firebase-functions/params";
+import {
+  RetryExtractionError,
+  retryExtractionForFile,
+} from "../extraction/retryExtractionOps";
 import { getStorage } from "firebase-admin/storage";
 import { randomUUID } from "crypto";
 import { TOOL_DEFINITIONS, TOOL_NAMES } from "./definitions";
 import type { ToolName } from "./definitions";
 import { PLANS } from "../billing/config";
+import { KNOWN_AUSTRIAN_RATES } from "../uva/rateSet";
 import type { PlanId, PlanFeatures } from "../billing/config";
 
 /**
@@ -37,6 +43,13 @@ export { TOOL_NAMES };
 export type { ToolName };
 
 const db = getFirestore();
+
+/**
+ * Extraction is the one tool on this surface that spends an AI call directly,
+ * so the two functions that dispatch tools — mcpApi and mcpSse — declare this
+ * secret. On self-host the params shim reads it from the environment.
+ */
+const anthropicApiKey = defineSecret("ANTHROPIC_API_KEY");
 
 /**
  * Check if a tool requires a feature the user's plan doesn't have.
@@ -108,6 +121,8 @@ export async function handleTool(
       return uploadFile(userId, args);
     case "score_file_transaction_match":
       return scoreFileTransactionMatch(userId, args);
+    case "retry_file_extraction":
+      return retryFileExtractionTool(userId, args);
 
     // Identity entities (the user's personal/company entities used as invoice
     // sender). Returns id + name + vatId + ibans + address per entity.
@@ -285,8 +300,26 @@ export async function getTransaction(userId: string, transactionId: string) {
 }
 
 export async function updateTransaction(userId: string, args: Record<string, unknown>) {
-  const { transactionId, description, isComplete } = args;
+  const { transactionId, description, isComplete, vatRate, isReverseCharge } = args;
   if (!transactionId) throw new Error("transactionId is required");
+
+  // Manual override lane (fork #64, spec §3 step 3): the UVA calculation
+  // validates the rate against the transaction's period; this only rejects
+  // values that are never an Austrian rate (19 = Jungholz/Mittelberg).
+  if (vatRate !== undefined && vatRate !== null) {
+    if (typeof vatRate !== "number" || !KNOWN_AUSTRIAN_RATES.includes(vatRate)) {
+      throw new Error(
+        `vatRate must be one of ${KNOWN_AUSTRIAN_RATES.join(", ")} (or null to clear the override)`
+      );
+    }
+  }
+  if (
+    isReverseCharge !== undefined &&
+    isReverseCharge !== null &&
+    typeof isReverseCharge !== "boolean"
+  ) {
+    throw new Error("isReverseCharge must be true, false, or null to clear");
+  }
 
   const docRef = db.collection("transactions").doc(transactionId as string);
   const doc = await docRef.get();
@@ -297,6 +330,8 @@ export async function updateTransaction(userId: string, args: Record<string, unk
   const updates: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
   if (description !== undefined) updates.description = description;
   if (isComplete !== undefined) updates.isComplete = isComplete;
+  if (vatRate !== undefined) updates.vatRate = vatRate;
+  if (isReverseCharge !== undefined) updates.isReverseCharge = isReverseCharge;
 
   await docRef.update(updates);
   return { success: true, transactionId };
@@ -455,6 +490,49 @@ export async function disconnectFileFromTransaction(userId: string, args: Record
 
   await batch.commit();
   return { success: true, fileId, transactionId };
+}
+
+/**
+ * Re-run extraction on one file from the MCP surface.
+ *
+ * The eligibility rule, the reset and the ownership check live in
+ * extraction/retryExtractionOps, shared with the retryFileExtraction callable
+ * the UI drives — a file re-extracted by an agent and one re-extracted by a
+ * click have to land in the same state.
+ *
+ * Extraction runs inline here rather than being queued: the only trigger that
+ * re-runs it fires on undelete, so there is nothing to hand the work to. That
+ * is why mcpApi and mcpSse declare ANTHROPIC_API_KEY.
+ *
+ * The refusal codes are surfaced as message prefixes, matching the
+ * PAIR_REJECTED convention the connect handler uses: an agent working a list
+ * needs to tell a stale id from a file that simply does not need re-extracting.
+ */
+export async function retryFileExtractionTool(userId: string, args: Record<string, unknown>) {
+  const fileId = args.fileId as string;
+  if (!fileId) {
+    throw new Error("fileId is required");
+  }
+
+  try {
+    const result = await retryExtractionForFile(db, {
+      fileId,
+      userId,
+      force: args.force === true,
+      anthropicApiKey: anthropicApiKey.value(),
+    });
+
+    console.log(`[retryFileExtraction] Re-extracted file ${fileId}`, { userId, via: "tools" });
+
+    // runExtraction already reports success and duration; fileId is what the
+    // agent needs to tie the result back to the file it asked about.
+    return { ...result, fileId };
+  } catch (error) {
+    if (error instanceof RetryExtractionError) {
+      throw new Error(`${error.code}: ${error.message}`);
+    }
+    throw error;
+  }
 }
 
 export async function autoConnectFileSuggestions(userId: string, args: Record<string, unknown>) {

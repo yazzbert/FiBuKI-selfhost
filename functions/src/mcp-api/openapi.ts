@@ -54,6 +54,7 @@ const OPENAPI_SPEC = {
                       "connect_file_to_transaction",
                       "disconnect_file_from_transaction",
                       "list_transactions_needing_files",
+                      "retry_file_extraction",
                       "auto_connect_file_suggestions",
                       "list_no_receipt_categories",
                       "assign_no_receipt_category",
@@ -207,6 +208,8 @@ const OPENAPI_SPEC = {
       "Disconnect a file from a transaction. Args: fileId (string), transactionId (string)",
     list_transactions_needing_files:
       "Find transactions without receipts. Args: minAmount? (number, in cents), limit? (number)",
+    retry_file_extraction:
+      "Re-run extraction on a file that extracted without erroring but produced nothing usable (no line items, no VAT amount). Runs synchronously, up to a minute. Resets partner and transaction matching for the file; a manual partner assignment is kept. Args: fileId (string), force? (boolean, required for a file that already extracted cleanly)",
     auto_connect_file_suggestions:
       "Auto-connect files to transactions above confidence threshold. Args: fileId? (string), minConfidence? (number, 0-100, default 89)",
     list_no_receipt_categories: "List categories for transactions that don't need receipts (bank fees, payroll, etc.)",
