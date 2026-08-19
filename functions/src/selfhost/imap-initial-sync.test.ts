@@ -182,10 +182,17 @@ describe("startImapInitialSync", () => {
       email: "stefan@example.com",
     });
 
-    const snap = await db
-      .collection("notifications")
-      .where("userId", "==", USER)
-      .get();
-    expect(snap.docs.map((d) => d.data().type)).toContain("mail_service_connected");
+    // The subcollection the UI reads, not the top-level one (#55).
+    const snap = await db.collection(`users/${USER}/notifications`).get();
+    const notification = snap.docs
+      .map((d) => d.data())
+      .find((n) => n.type === "mail_service_connected");
+    expect(notification).toBeDefined();
+    // Unread is expressed as a null readAt, the shape every reader queries on.
+    expect(notification?.readAt).toBeNull();
+
+    // Nothing lands in the top-level collection any more.
+    const orphans = await db.collection("notifications").get();
+    expect(orphans.docs).toHaveLength(0);
   });
 });
