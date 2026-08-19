@@ -327,3 +327,112 @@ describe("rule-based column matching (#70 end to end)", () => {
     expect(mappings.find((m) => m.csvColumn === "Buchungstag")?.format).toBe("eu-slash");
   });
 });
+
+/**
+ * A date column that carries a time, and one that writes single-digit day and
+ * month components.
+ *
+ * Every pattern in the table demanded exactly two digits per component and no
+ * slash format carried a time at all, so a Revolut export ("2/1/26 3:18") hit
+ * zero parsers: every row of the import preview read "Invalid" with nothing
+ * naming the cause. date-fns rejects trailing text it was not told to expect,
+ * so the time had to be read off before the date could be parsed at all.
+ */
+describe("dates that carry a time", () => {
+  // One Revolut "Completed Date" column, verbatim.
+  const revolut = [
+    "2/1/26 3:18",
+    "1/25/26 6:12",
+    "9/2/26 10:02",
+    "2/14/26 6:40",
+    "2/14/26 6:41",
+    "2/4/26 6:13",
+    "7/5/26 5:58",
+    "5/13/26 3:13",
+    "5/14/26 11:31",
+    "5/16/26 10:10",
+    "5/25/26 5:53",
+    "5/27/26 2:54",
+    "3/8/26 6:11",
+    "4/1/26 5:48",
+    "4/19/26 5:32",
+    "4/20/26 5:45",
+    "4/20/26 5:45",
+    "5/15/26 11:39",
+  ];
+
+  it("parses a slash date with a trailing time", () => {
+    expect(parseDate("2/1/26 3:18", "us-short")?.toISOString()).toBe("2026-02-01T00:00:00.000Z");
+    expect(parseDate("31/07/2026 10:15:00", "eu-slash")?.toISOString()).toBe(
+      "2026-07-31T00:00:00.000Z"
+    );
+  });
+
+  it("parses a 12-hour time with a meridiem", () => {
+    expect(parseDate("31/07/2026 11:30 PM", "eu-slash")?.toISOString()).toBe(
+      "2026-07-31T00:00:00.000Z"
+    );
+  });
+
+  it("parses single-digit day and month components", () => {
+    expect(parseDate("1/2/2026", "eu-slash")?.toISOString()).toBe("2026-02-01T00:00:00.000Z");
+    expect(parseDate("1.2.2026", "de")?.toISOString()).toBe("2026-02-01T00:00:00.000Z");
+    expect(parseDate("1-Jul-2026", "text-short")?.toISOString()).toBe("2026-07-01T00:00:00.000Z");
+    expect(parseDate("1 July 2026", "text-long")?.toISOString()).toBe("2026-07-01T00:00:00.000Z");
+  });
+
+  it("detects a column written with single-digit components", () => {
+    // The patterns demanded exactly two digits, so a column that drops the
+    // leading zero scored below the 50% threshold and detection gave up on a
+    // column it can read perfectly well.
+    expect(looksLikeDateColumn(["1/2/2026", "3/4/2026"])).toBe(true);
+    expect(detectDateFormat(["1/2/2026", "3/4/2026", "31/7/2026"])).toBe("eu-slash");
+    expect(detectDateFormat(["1/2/2026", "3/4/2026", "7/31/2026"])).toBe("us");
+    expect(detectDateFormat(["1.2.2026", "31.7.2026"])).toBe("de");
+  });
+
+  it("reads the day/month evidence past the time", () => {
+    // Anchored on the end of the value, the evidence regex saw no date at all
+    // in a timestamped column and reported "none" — which is exactly the state
+    // that lets detection fall back to array position and swap day and month.
+    expect(analyzeDayMonthOrder(["07/31/2026 10:15"])).toBe("month-first");
+    expect(analyzeDayMonthOrder(["31/07/2026 10:15"])).toBe("day-first");
+    expect(analyzeDayMonthOrder(revolut)).toBe("month-first");
+  });
+
+  it("still flags a day/month conflict on a timestamped column", () => {
+    const conflict = findDateColumnConflict(["03/07/2026 10:15", "07/31/2026 10:15"], "eu-slash");
+
+    expect(conflict?.evidence).toBe("month-first");
+    expect(conflict?.suggestedParserId).toBe("us");
+    expect(conflict?.offendingValue).toBe("07/31/2026");
+  });
+
+  it("detects the format of a whole Revolut column", () => {
+    expect(looksLikeDateColumn(revolut)).toBe(true);
+    expect(detectDateFormat(revolut)).toBe("us-short");
+  });
+
+  it("parses every row of that column, none Invalid", () => {
+    const parsed = revolut.map((value) => parseDate(value, "us-short"));
+
+    expect(parsed.filter((d) => d === null)).toEqual([]);
+    expect(parsed[0]?.toISOString()).toBe("2026-02-01T00:00:00.000Z");
+    expect(parsed[7]?.toISOString()).toBe("2026-05-13T00:00:00.000Z");
+  });
+
+  it("leaves the ISO datetime parsers owning their own shapes", () => {
+    // Reading a time off makes "2026-07-31 10:15:00" match `iso` as well, and
+    // a tie is resolved by table order — the more specific parser comes first.
+    expect(detectDateFormat(["2026-07-31 10:15:00"])).toBe("iso-datetime");
+    expect(detectDateFormat(["2026-07-31T10:15:00"])).toBe("iso-datetime-t");
+    expect(parseDate("2026-07-31 10:15:00", "iso-datetime")?.toISOString()).toBe(
+      "2026-07-31T00:00:00.000Z"
+    );
+  });
+
+  it("does not mistake a bare time or a number for a date", () => {
+    expect(looksLikeDateColumn(["10:15", "11:30"])).toBe(false);
+    expect(parseDate("10:15", "us-short")).toBeNull();
+  });
+});
