@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
+import { toDateSafe } from "@/lib/utils";
 
 const db = getAdminDb();
 const INTEGRATIONS_COLLECTION = "emailIntegrations";
@@ -96,7 +97,7 @@ export async function POST(request: NextRequest) {
     let cleanedUp = 0;
     for (const doc of staleQuery.docs) {
       const data = doc.data();
-      const startedAt = data.startedAt?.toDate() || data.createdAt?.toDate();
+      const startedAt = toDateSafe(data.startedAt) || toDateSafe(data.createdAt);
       if (startedAt && startedAt < staleThreshold) {
         await doc.ref.update({
           status: "failed",
@@ -252,13 +253,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       integration: {
         email: integration.email,
-        lastSyncAt: integration.lastSyncAt?.toDate().toISOString() || null,
+        lastSyncAt: toDateSafe(integration.lastSyncAt)?.toISOString() || null,
         lastSyncStatus: integration.lastSyncStatus || null,
         lastSyncError: integration.lastSyncError || null,
         lastSyncFileCount: integration.lastSyncFileCount || 0,
         initialSyncComplete: integration.initialSyncComplete || false,
         initialSyncStartedAt:
-          integration.initialSyncStartedAt?.toDate().toISOString() || null,
+          toDateSafe(integration.initialSyncStartedAt)?.toISOString() || null,
       },
       activeSyncs,
       recentCompleted: recentCompleted || null,
@@ -319,8 +320,8 @@ async function getSyncDateRanges(
   to.setDate(to.getDate() + 7);
 
   // Check what's already synced (field is syncedDateRange.from/to, written by gmailSyncQueue.ts)
-  const syncedFrom = integration.syncedDateRange?.from?.toDate();
-  const syncedTo = integration.syncedDateRange?.to?.toDate();
+  const syncedFrom = toDateSafe(integration.syncedDateRange?.from);
+  const syncedTo = toDateSafe(integration.syncedDateRange?.to);
 
   if (!syncedFrom || !syncedTo) {
     // Nothing synced yet

@@ -42,7 +42,7 @@ import {
   useIntegrationFileStats,
   useActiveSyncForIntegration,
 } from "@/hooks/use-integration-details";
-import { cn } from "@/lib/utils";
+import { cn, toDateSafe } from "@/lib/utils";
 
 interface IntegrationDetailPageProps {
   params: Promise<{ id: string }>;
@@ -171,14 +171,14 @@ export default function IntegrationDetailPage({ params }: IntegrationDetailPageP
   const needsReauth = integration.needsReauth;
   const isExpired = needsReauth; // Only treat as expired when refresh token is truly invalid
   const isPaused = integration.isPaused;
-  const lastSyncAt = integration.lastSyncAt?.toDate();
+  const lastSyncAt = toDateSafe(integration.lastSyncAt);
   const lastSyncStatus = integration.lastSyncStatus;
   const lastSyncFileCount = integration.lastSyncFileCount;
   const initialSyncComplete = integration.initialSyncComplete;
-  const initialSyncStartedAt = integration.initialSyncStartedAt?.toDate();
+  const initialSyncStartedAt = toDateSafe(integration.initialSyncStartedAt);
   const syncedRange = integration.syncedDateRange;
-  const syncedFrom = syncedRange?.from?.toDate();
-  const syncedTo = syncedRange?.to?.toDate();
+  const syncedFrom = toDateSafe(syncedRange?.from);
+  const syncedTo = toDateSafe(syncedRange?.to);
 
   const isSyncingNow =
     !isPaused && (activeSync.isActive || syncKnownInProgress || (!initialSyncComplete && initialSyncStartedAt));
