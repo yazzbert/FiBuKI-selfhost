@@ -30,62 +30,89 @@ export const DATE_PARSERS: DateParser[] = [
   {
     id: "de",
     name: "German (DD.MM.YYYY)",
-    pattern: /^\d{2}\.\d{2}\.\d{4}$/,
+    pattern: /^\d{1,2}\.\d{1,2}\.\d{4}$/,
     format: "dd.MM.yyyy",
   },
   {
     id: "de-short",
     name: "German Short (DD.MM.YY)",
-    pattern: /^\d{2}\.\d{2}\.\d{2}$/,
+    pattern: /^\d{1,2}\.\d{1,2}\.\d{2}$/,
     format: "dd.MM.yy",
   },
   // US formats
   {
     id: "us",
     name: "US (MM/DD/YYYY)",
-    pattern: /^\d{2}\/\d{2}\/\d{4}$/,
+    pattern: /^\d{1,2}\/\d{1,2}\/\d{4}$/,
     format: "MM/dd/yyyy",
   },
   {
     id: "us-short",
     name: "US Short (MM/DD/YY)",
-    pattern: /^\d{2}\/\d{2}\/\d{2}$/,
+    pattern: /^\d{1,2}\/\d{1,2}\/\d{2}$/,
     format: "MM/dd/yy",
   },
   // European with slashes
   {
     id: "eu-slash",
     name: "European (DD/MM/YYYY)",
-    pattern: /^\d{2}\/\d{2}\/\d{4}$/,
+    pattern: /^\d{1,2}\/\d{1,2}\/\d{4}$/,
     format: "dd/MM/yyyy",
   },
   {
     id: "eu-slash-short",
     name: "European Short (DD/MM/YY)",
-    pattern: /^\d{2}\/\d{2}\/\d{2}$/,
+    pattern: /^\d{1,2}\/\d{1,2}\/\d{2}$/,
     format: "dd/MM/yy",
   },
   // Dash separated
   {
     id: "dash-dmy",
     name: "Dashed (DD-MM-YYYY)",
-    pattern: /^\d{2}-\d{2}-\d{4}$/,
+    pattern: /^\d{1,2}-\d{1,2}-\d{4}$/,
     format: "dd-MM-yyyy",
   },
   // Text month formats
   {
     id: "text-short",
     name: "Text Month Short (DD-MMM-YYYY)",
-    pattern: /^\d{2}-[A-Za-z]{3}-\d{4}$/,
+    pattern: /^\d{1,2}-[A-Za-z]{3}-\d{4}$/,
     format: "dd-MMM-yyyy",
   },
   {
     id: "text-long",
     name: "Text Month Long (DD MMMM YYYY)",
-    pattern: /^\d{2}\s+[A-Za-z]+\s+\d{4}$/,
+    pattern: /^\d{1,2}\s+[A-Za-z]+\s+\d{4}$/,
     format: "dd MMMM yyyy",
   },
 ];
+
+/**
+ * A trailing time-of-day. Banks append one to a date column routinely
+ * (Revolut writes "2/1/26 3:18"), and every parser here reduces its value to a
+ * calendar day, so the time is read only to be thrown away.
+ */
+const TRAILING_TIME = /[\sT]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?\s*(?:[AaPp]\.?[Mm]\.?)?$/;
+
+/** The value with a trailing time-of-day removed, unchanged when it has none. */
+function withoutTrailingTime(value: string): string {
+  return value.replace(TRAILING_TIME, "").trim();
+}
+
+/**
+ * How a value can be read, most literal first: as written, then with a trailing
+ * time removed. A parser that spells the time out itself (the ISO datetime
+ * formats) matches the first reading; a date-only parser facing a timestamped
+ * column matches the second. date-fns rejects a value with trailing text it was
+ * not told to expect, so without the second reading every row of a timestamped
+ * column fails to parse.
+ */
+function dateReadings(value: string): string[] {
+  const trimmed = value.trim();
+  const dateOnly = withoutTrailingTime(trimmed);
+
+  return dateOnly === trimmed ? [trimmed] : [trimmed, dateOnly];
+}
 
 /**
  * Parse a date string using a specific parser
@@ -94,19 +121,21 @@ export function parseDate(value: string, parserId: string): Date | null {
   const parser = DATE_PARSERS.find((p) => p.id === parserId);
   if (!parser) return null;
 
-  const trimmed = value.trim();
-  const parsed = parse(trimmed, parser.format, new Date());
+  for (const reading of dateReadings(value)) {
+    const parsed = parse(reading, parser.format, new Date());
+    if (!isValid(parsed)) continue;
 
-  if (!isValid(parsed)) return null;
+    // Sanity check: year should be reasonable (1990-2100)
+    const year = parsed.getFullYear();
+    if (year < 1990 || year > 2100) continue;
 
-  // Sanity check: year should be reasonable (1990-2100)
-  const year = parsed.getFullYear();
-  if (year < 1990 || year > 2100) return null;
+    // Normalize to UTC midnight — date-fns parse() creates dates in the browser's
+    // local timezone, so extract the local date components (which are correct) and
+    // reconstruct as UTC to avoid off-by-one errors in non-UTC timezones.
+    return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()));
+  }
 
-  // Normalize to UTC midnight — date-fns parse() creates dates in the browser's
-  // local timezone, so extract the local date components (which are correct) and
-  // reconstruct as UTC to avoid off-by-one errors in non-UTC timezones.
-  return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()));
+  return null;
 }
 
 /** Which component a numeric parser reads first. */
@@ -165,7 +194,9 @@ export function readDayMonthEvidence(values: string[]): {
   let provingMonthFirst: string | null = null;
 
   for (const value of values) {
-    const trimmed = value?.trim() ?? "";
+    // Past the time, or a timestamped column proves nothing and detection
+    // falls back to array position — the swap #70 exists to stop.
+    const trimmed = withoutTrailingTime(value?.trim() ?? "");
     const match = NUMERIC_DAY_MONTH.exec(trimmed);
     if (!match) continue;
 
@@ -214,19 +245,23 @@ function oppositeOrderParser(parser: DateParser): DateParser | null {
   );
 }
 
+/** Whether a parser reads one reading of a value as a plausible date. */
+function readsAsDate(parser: DateParser, reading: string): boolean {
+  if (!parser.pattern.test(reading)) return false;
+
+  const parsed = parse(reading, parser.format, new Date());
+  if (!isValid(parsed)) return false;
+
+  const year = parsed.getFullYear();
+  return year >= 1990 && year <= 2100;
+}
+
 /** How many of the values a parser reads as a plausible date. */
 function scoreParser(parser: DateParser, values: string[]): number {
   let score = 0;
 
   for (const value of values) {
-    const trimmed = value.trim();
-    if (!parser.pattern.test(trimmed)) continue;
-
-    const parsed = parse(trimmed, parser.format, new Date());
-    if (!isValid(parsed)) continue;
-
-    const year = parsed.getFullYear();
-    if (year >= 1990 && year <= 2100) score++;
+    if (dateReadings(value).some((reading) => readsAsDate(parser, reading))) score++;
   }
 
   return score;
