@@ -13,6 +13,7 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { createCallable } from "../utils/createCallable";
 import { readDismissedTransactionIds } from "../matching/dismissedTransactions";
+import { readRejectedFileIds } from "../matching/rejectedFiles";
 
 interface AnalyzeMatchAccuracyRequest {
   /** If provided, only analyze this partner */
@@ -75,17 +76,8 @@ export const analyzeMatchAccuracyCallable = createCallable<
       .get();
 
     for (const doc of txSnap.docs) {
-      const data = doc.data();
-      const rejectedIds = new Set<string>();
-
-      // Handle legacy format
-      for (const id of (data.rejectedFileIds || []) as string[]) {
-        rejectedIds.add(id);
-      }
-      // Handle new format
-      for (const r of (data.rejectedFiles || []) as Array<{ fileId: string }>) {
-        rejectedIds.add(r.fileId);
-      }
+      // Both stored shapes, minus rejections the user took back (fork #102).
+      const rejectedIds = readRejectedFileIds(doc.data());
 
       if (rejectedIds.size > 0) {
         rejectedFileMap.set(doc.id, rejectedIds);

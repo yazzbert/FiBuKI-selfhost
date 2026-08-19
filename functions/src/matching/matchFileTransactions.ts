@@ -33,6 +33,7 @@ import {
   ScoringOptions,
 } from "./transactionScoring";
 import { readDismissedTransactionIds } from "./dismissedTransactions";
+import { isFileRejected } from "./rejectedFiles";
 import { AutomationMeta } from "../automation/types";
 import { checkAIBudget } from "../billing/checkAIBudget";
 import { isPassiveMode } from "../utils/checkAutomationMode";
@@ -506,8 +507,9 @@ export async function runTransactionMatching(
   const dismissedIds = readDismissedTransactionIds(fileData);
   let dismissedCount = 0;
 
-  // Filter out transactions that have rejected this file
-  // Handles both legacy rejectedFileIds (string[]) and new rejectedFiles (object[])
+  // Filter out transactions that have rejected this file. Both stored shapes,
+  // and a rejection the user took back no longer counts — matching/rejectedFiles
+  // owns that rule for every reader (fork #102).
   const eligibleTransactions = transactions.filter((doc) => {
     if (connectedIds.has(doc.id)) return false;
     if (dismissedIds.has(doc.id)) {
@@ -517,12 +519,7 @@ export async function runTransactionMatching(
     const txData = doc.data();
     // Skip over-quota transactions (soft limit)
     if (txData.quotaExceeded) return false;
-    const rejectedFileIds: string[] = txData.rejectedFileIds || [];
-    const rejectedFiles: Array<{ fileId: string }> = txData.rejectedFiles || [];
-    const isRejected =
-      rejectedFileIds.includes(fileId) ||
-      rejectedFiles.some((r) => r.fileId === fileId);
-    if (isRejected) {
+    if (isFileRejected(txData, fileId)) {
       rejectedCount++;
       return false;
     }

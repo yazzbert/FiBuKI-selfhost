@@ -14,6 +14,7 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { createCallable } from "../utils/createCallable";
 import { isActiveDismissal } from "../matching/dismissedTransactions";
+import { isActiveRejection, readRejectedFileIds } from "../matching/rejectedFiles";
 
 interface ExportMatchIntelligenceRequest {
   /** Filter to a specific partner (optional) */
@@ -175,32 +176,30 @@ export const exportMatchIntelligenceCallable = createCallable<
     const rejections: RejectionRecord[] = [];
 
     for (const [txId, txData] of txMap) {
-      // New format
-      for (const r of (txData.rejectedFiles || []) as Array<{
+      // Only rejections that still stand, for the same reason the dismissal
+      // pass below filters: a rejection the user took back is kept on the
+      // transaction as history (fork #102) and must not be exported as training
+      // signal. matching/rejectedFiles decides that across both stored shapes;
+      // the record is then looked up for its timestamp and confidence, which
+      // the legacy id array does not carry.
+      const records = (txData.rejectedFiles || []) as Array<{
         fileId: string;
         rejectedAt?: Timestamp;
         matchConfidence?: number;
-      }>) {
-        rejectedPairs.add(`${r.fileId}:${txId}`);
+        unrejectedAt?: unknown;
+      }>;
+
+      for (const fileId of readRejectedFileIds(txData)) {
+        rejectedPairs.add(`${fileId}:${txId}`);
+        const record = records.find((r) => r.fileId === fileId && isActiveRejection(r));
         rejections.push({
           transactionId: txId,
-          fileId: r.fileId,
-          rejectedAt: r.rejectedAt ? (r.rejectedAt as Timestamp).toDate().toISOString() : null,
-          matchConfidence: r.matchConfidence ?? null,
+          fileId,
+          rejectedAt: record?.rejectedAt
+            ? (record.rejectedAt as Timestamp).toDate().toISOString()
+            : null,
+          matchConfidence: record?.matchConfidence ?? null,
         });
-      }
-      // Legacy format
-      for (const fId of (txData.rejectedFileIds || []) as string[]) {
-        const key = `${fId}:${txId}`;
-        if (!rejectedPairs.has(key)) {
-          rejectedPairs.add(key);
-          rejections.push({
-            transactionId: txId,
-            fileId: fId,
-            rejectedAt: null,
-            matchConfidence: null,
-          });
-        }
       }
     }
 
