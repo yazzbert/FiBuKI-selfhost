@@ -1331,8 +1331,7 @@ export async function rematchAssignedPartnersTool(
 
   return rematchAssignedPartners(userId, {
     dryRun: args.dryRun === undefined ? true : (args.dryRun as boolean),
-    clearUnconfirmed:
-      args.clearUnconfirmed === undefined ? true : (args.clearUnconfirmed as boolean),
+    clearUnconfirmed: args.clearUnconfirmed === true,
     minConfidence: rematchNumberArg(args.minConfidence, "minConfidence"),
     maxConfidence: rematchNumberArg(args.maxConfidence, "maxConfidence"),
     assignedBefore: rematchAssignedBeforeArg(args.assignedBefore),

@@ -85,7 +85,12 @@ export interface RematchAssignedPartnersOptions {
    * whole-account rewrite is not something to trip into.
    */
   dryRun?: boolean;
-  /** Clear assignments the matcher no longer reproduces. Default true. */
+  /**
+   * Clear assignments the matcher no longer reproduces. Default **false**.
+   * Failing to reproduce an assignment is not evidence that it is wrong, and
+   * clearing dwarfs the corrections: on this account it turns 18 provable
+   * reassignments into 159 writes.
+   */
   clearUnconfirmed?: boolean;
   minConfidence?: number;
   maxConfidence?: number;
@@ -268,7 +273,7 @@ export async function rematchAssignedPartners(
   options: RematchAssignedPartnersOptions = {}
 ): Promise<RematchAssignedPartnersResult> {
   const dryRun = options.dryRun !== false;
-  const clearUnconfirmed = options.clearUnconfirmed !== false;
+  const clearUnconfirmed = options.clearUnconfirmed === true;
   const maxWrites = Math.max(1, options.maxWrites ?? DEFAULT_MAX_WRITES);
   const limit = Math.min(
     Math.max(1, options.limit ?? DEFAULT_ROW_LIMIT),

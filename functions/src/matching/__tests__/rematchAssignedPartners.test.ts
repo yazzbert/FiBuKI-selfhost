@@ -161,7 +161,7 @@ describe("rematchAssignedPartners", () => {
   it("writes nothing by default", async () => {
     stubScan([evaluation("tx1", { verdict: "below_threshold" })]);
 
-    const result = await rematchAssignedPartners("u1");
+    const result = await rematchAssignedPartners("u1", { clearUnconfirmed: true });
 
     expect(result.dryRun).toBe(true);
     expect(result.applied).toBe(false);
@@ -171,10 +171,26 @@ describe("rematchAssignedPartners", () => {
     expect(result.actions.clear).toBe(1);
   });
 
-  it("clears an assignment the matcher no longer reproduces, without a false positive", async () => {
+  it("leaves an unconfirmed assignment alone unless clearing is asked for", async () => {
     stubScan([evaluation("tx1", { verdict: "below_threshold" })]);
 
     const result = await rematchAssignedPartners("u1", { dryRun: false });
+
+    expect(result.applied).toBe(false);
+    expect(result.transactionsWritten).toBe(0);
+    expect(result.actions.clear).toBe(0);
+    expect(result.actions.skip_clear_disabled).toBe(1);
+    expect(result.filters.clearUnconfirmed).toBe(false);
+    expect(applyPartnerMatchUpdates).not.toHaveBeenCalled();
+  });
+
+  it("clears an assignment the matcher no longer reproduces, without a false positive", async () => {
+    stubScan([evaluation("tx1", { verdict: "below_threshold" })]);
+
+    const result = await rematchAssignedPartners("u1", {
+      dryRun: false,
+      clearUnconfirmed: true,
+    });
 
     expect(result.applied).toBe(true);
     expect(result.transactionsWritten).toBe(1);
@@ -192,7 +208,7 @@ describe("rematchAssignedPartners", () => {
   it("records the removal as an automation outcome, not a user decision", async () => {
     stubScan([evaluation("tx1", { verdict: "no_candidates" })]);
 
-    await rematchAssignedPartners("u1", { dryRun: false });
+    await rematchAssignedPartners("u1", { dryRun: false, clearUnconfirmed: true });
 
     const [operations] = applyPartnerMatchUpdates.mock.calls[0] as [
       { updates: { automationHistory: { __arrayUnion: Record<string, unknown>[] } } }[]
@@ -225,7 +241,7 @@ describe("rematchAssignedPartners", () => {
       evaluation("tx2", { verdict: "no_candidates", candidates: [] }),
     ]);
 
-    await rematchAssignedPartners("u1", { dryRun: false });
+    await rematchAssignedPartners("u1", { dryRun: false, clearUnconfirmed: true });
 
     const [operations] = applyPartnerMatchUpdates.mock.calls[0] as [
       { updates: Record<string, unknown> }[]
@@ -308,7 +324,11 @@ describe("rematchAssignedPartners", () => {
     ]);
 
     await expect(
-      rematchAssignedPartners("u1", { dryRun: false, maxWrites: 1 })
+      rematchAssignedPartners("u1", {
+        dryRun: false,
+        maxWrites: 1,
+        clearUnconfirmed: true,
+      })
     ).rejects.toThrow(/above the maxWrites cap/);
 
     expect(applyPartnerMatchUpdates).not.toHaveBeenCalled();
