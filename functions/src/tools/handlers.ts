@@ -16,6 +16,11 @@ import { buildDownloadUrl } from "../utils/buildDownloadUrl";
 import { dayStartUtc, dayEndExclusiveUtc } from "../uva/dateWindow";
 import { buildMarkNotInvoiceUpdates, buildUnmarkNotInvoiceUpdates } from "../files/notInvoiceOps";
 import {
+  buildExtractionCorrection,
+  ExtractionCorrectionError,
+  FileExtractionCorrection,
+} from "../files/extractionCorrectionOps";
+import {
   buildDismissSuggestionUpdates,
   buildUndismissSuggestionUpdates,
   checkDismissalReason,
@@ -152,6 +157,8 @@ export async function handleTool(
       return dismissTransactionSuggestion(userId, args);
     case "undismiss_transaction_suggestion":
       return undismissTransactionSuggestion(userId, args);
+    case "update_file_extraction":
+      return updateFileExtraction(userId, args);
     case "retry_file_extraction":
       return retryFileExtractionTool(userId, args);
 
@@ -629,6 +636,68 @@ export async function disconnectFileFromTransaction(userId: string, args: Record
  * an agent working from a list does not, and a flagged-but-connected file is a
  * transaction whose receipt has silently become a non-receipt.
  */
+/**
+ * Correct a file's extracted record by hand (fork #147).
+ *
+ * The shape rules live in `buildExtractionCorrection` so they can be tested
+ * without a database; this owns ownership, the write, and the reply.
+ */
+export async function updateFileExtraction(userId: string, args: Record<string, unknown>) {
+  const fileId = args.fileId as string;
+  if (!fileId) {
+    throw new Error("fileId is required");
+  }
+
+  const fileRef = db.collection("files").doc(fileId);
+  const fileSnap = await fileRef.get();
+
+  if (!fileSnap.exists || fileSnap.data()?.userId !== userId) {
+    throw new Error("File not found");
+  }
+
+  // Read the keys off `args` rather than spreading it: a caller passing an
+  // unknown key must not reach the update, and "absent" has to stay distinct
+  // from "null" all the way down.
+  const fields: FileExtractionCorrection = {};
+  for (const key of ["amount", "vatAmount", "vatPercent", "date", "lineItems"] as const) {
+    if (args[key] !== undefined) {
+      (fields as Record<string, unknown>)[key] = args[key];
+    }
+  }
+
+  let built;
+  try {
+    built = buildExtractionCorrection(fields);
+  } catch (error) {
+    if (error instanceof ExtractionCorrectionError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
+
+  await fileRef.update(built.updates);
+
+  const after = (await fileRef.get()).data() ?? {};
+  console.log(`[updateFileExtraction] Corrected file ${fileId}`, {
+    userId,
+    changed: built.changed,
+  });
+
+  return {
+    success: true,
+    fileId,
+    changed: built.changed,
+    file: {
+      fileName: after.fileName ?? null,
+      extractedAmount: after.extractedAmount ?? null,
+      extractedVatAmount: after.extractedVatAmount ?? null,
+      extractedVatPercent: after.extractedVatPercent ?? null,
+      lineItemsUnreconciled: after.lineItemsUnreconciled ?? false,
+      extractedRateGroups: after.extractedRateGroups ?? null,
+    },
+  };
+}
+
 export async function markFileAsNotInvoice(userId: string, args: Record<string, unknown>) {
   const fileId = args.fileId as string;
   if (!fileId) {

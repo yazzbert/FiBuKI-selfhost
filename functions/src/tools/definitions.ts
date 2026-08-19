@@ -270,6 +270,46 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "update_file_extraction",
+    description:
+      "Correct a file's extracted record by hand. Use when re-extraction cannot get there because the right value needs judgement the document does not state unambiguously — a Schlussrechnung printing both the full amount and the part already invoiced, VAT that is correctly read but not claimable, a one-cent OCR slip inside the reconciliation tolerance. Only the fields you pass are touched; pass null to clear one. The corrected total is NOT re-derived from the line items, so an amount that deliberately differs from them survives. Correcting anything VAT-bearing makes you the authority on the file: the reconciliation flags, the printed rate-group block and the re-extraction downgrade markers are all cleared, because each would otherwise outrank what you just set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "The file ID" },
+        amount: {
+          type: ["number", "null"],
+          description: "Document total in cents. Negative is legal (a credit note).",
+        },
+        vatAmount: { type: ["number", "null"], description: "Document VAT in cents" },
+        vatPercent: {
+          type: ["number", "null"],
+          description:
+            "Document VAT rate, 0-100. Zero is a real correction — use it for a document whose VAT must not be claimed — and is not the same as null, which clears the rate.",
+        },
+        date: { type: ["string", "null"], description: "Document date as YYYY-MM-DD" },
+        lineItems: {
+          type: ["array", "null"],
+          description:
+            "Replace the itemisation wholesale. Each item: description, amount (cents, GROSS — the amount includes its own VAT), vatPercent, vatAmount (cents), and optionally quantity and unitPrice.",
+          items: {
+            type: "object",
+            properties: {
+              description: { type: "string" },
+              amount: { type: "number" },
+              vatPercent: { type: ["number", "null"] },
+              vatAmount: { type: "number" },
+              quantity: { type: ["number", "null"] },
+              unitPrice: { type: ["number", "null"] },
+            },
+            required: ["amount"],
+          },
+        },
+      },
+      required: ["fileId"],
+    },
+  },
+  {
     name: "retry_file_extraction",
     description:
       "Re-run extraction on a file. Use when a file extracted without erroring but produced nothing usable — no line items, no VAT amount, a wrong total — which is the case the UI's retry button did not cover. Extraction runs synchronously and can take up to a minute. Re-extracting resets partner and transaction matching for the file so both re-run against the new data; a manual partner assignment is kept. A file that already extracted cleanly needs force: true.",
