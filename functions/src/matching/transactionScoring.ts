@@ -7,7 +7,11 @@
  */
 
 import { Timestamp } from "firebase-admin/firestore";
-import { assessImpliedFx } from "../fx/fxPlausibility";
+import { assessImpliedFx, isSameCurrency } from "../fx/fxPlausibility";
+import {
+  readBankOriginalAmount,
+  type BankOriginalAmount,
+} from "../fx/bankOriginalAmount";
 
 // === Configuration ===
 
@@ -94,6 +98,12 @@ export interface TransactionData {
   amount: number;
   date: Timestamp;
   currency?: string;
+  /**
+   * The preserved import row. Read only for the bank-stated original amount
+   * (#112) — see readBankOriginalAmount. Optional because the precision-search
+   * and remap paths build a TransactionData without it.
+   */
+  _original?: { rawRow?: Record<string, string> | null } | null;
   name?: string;
   partner?: string;
   partnerName?: string;
@@ -162,17 +172,66 @@ export function namesMatch(
 
 // === Scoring Functions ===
 
+/**
+ * The cent-exact-then-tolerance ladder for two amounts already known to be in
+ * the same currency. Tolerance is relative to the FILE amount, which is why it
+ * is asymmetric — see the characterization tests.
+ *
+ * Extracted (#112) so the bank-original path and the same-currency path score
+ * identically instead of growing a second, drifting copy.
+ */
+function scoreSameCurrencyLadder(
+  absFile: number,
+  absOther: number
+): { score: number; source: TransactionMatchSource | null } {
+  if (absFile === absOther) return { score: 40, source: "amount_exact" };
+
+  const difference = Math.abs(absFile - absOther);
+  const tolerance = absFile;
+
+  if (difference <= tolerance * 0.01) return { score: 38, source: "amount_close" };
+  if (difference <= tolerance * 0.05) return { score: 30, source: "amount_close" };
+  if (difference <= tolerance * 0.1) return { score: 20, source: "amount_close" };
+  return { score: 0, source: null };
+}
+
 export function calculateAmountScore(
   fileAmount: number,
   txAmount: number,
   fileCurrency?: string | null,
-  txCurrency?: string | null
+  txCurrency?: string | null,
+  txOriginal?: BankOriginalAmount | null
 ): { score: number; source: TransactionMatchSource | null; currencyMismatch: boolean } {
   const absFile = Math.abs(fileAmount);
   const absTx = Math.abs(txAmount);
 
   if (absFile === 0 || absTx === 0) {
     return { score: 0, source: null, currencyMismatch: false };
+  }
+
+  // Ground truth beats plausibility (#112). When the document is in one
+  // currency and the bank line in another, the bank usually still states what
+  // it charged BEFORE settling — "Original Amount 24, Original Currency USD"
+  // against a EUR 20.77 row. That figure is in the document's own currency, so
+  // the two can be compared directly: no rate, no tolerance, no FX band.
+  //
+  // Scored on the same-currency ladder and reported with currencyMismatch
+  // false, because in the currency that matters this is NOT a mismatched pair
+  // — it is a cent-exact one, and it should earn the hard-facts bonus (#78)
+  // exactly as the equivalent domestic payment does. Only the settlement
+  // differs, and the settlement is not what identifies a payment.
+  if (txOriginal && !isSameCurrency(fileCurrency, txCurrency)) {
+    if (isSameCurrency(fileCurrency, txOriginal.currency)) {
+      const ladder = scoreSameCurrencyLadder(absFile, Math.abs(txOriginal.amount));
+      if (ladder.source !== null) {
+        return { ...ladder, currencyMismatch: false };
+      }
+      // The bank stated an original in the document's currency and the two
+      // still disagree by more than 10%. That is a real disagreement about
+      // real numbers, not an FX artefact, so fall through to nothing rather
+      // than letting the rate-plausibility path award points for it.
+      return { score: 0, source: null, currencyMismatch: false };
+    }
   }
 
   // Currency mismatch (fork #87): the raw numbers are in different units, so
@@ -194,27 +253,7 @@ export function calculateAmountScore(
   // halved. It still never reports amount_exact as a hard fact.
 
   // Same currency: cent-exact, then tolerance ladder relative to the FILE amount
-  let score = 0;
-  let source: TransactionMatchSource | null = null;
-
-  if (absFile === absTx) {
-    score = 40;
-    source = "amount_exact";
-  } else {
-    const difference = Math.abs(absFile - absTx);
-    const tolerance = absFile;
-
-    if (difference <= tolerance * 0.01) {
-      score = 38;
-      source = "amount_close";
-    } else if (difference <= tolerance * 0.05) {
-      score = 30;
-      source = "amount_close";
-    } else if (difference <= tolerance * 0.1) {
-      score = 20;
-      source = "amount_close";
-    }
-  }
+  let { score, source } = scoreSameCurrencyLadder(absFile, absTx);
 
   if (fx.mismatch && score > 0) {
     score = Math.round(score * 0.5);
@@ -365,15 +404,18 @@ export function scoreTransaction(
   const matchSources: TransactionMatchSource[] = [];
 
   // 1. Amount scoring (0-40; a currency-mismatched pair scores FX plausibility, max 30)
-  // amountExact is only true for a cent-exact, same-currency match (score 40):
-  // a currency-mismatched pair never reports amount_exact and does not qualify.
+  // amountExact is only true for a cent-exact match in a shared currency
+  // (score 40). A currency-mismatched pair reaches that only through the bank's
+  // own stated original amount (#112), which is a real same-currency
+  // comparison; an FX-plausibility score never reports amount_exact.
   let amountExact = false;
   if (fileData.extractedAmount != null) {
     const result = calculateAmountScore(
       fileData.extractedAmount,
       txData.amount,
       fileData.extractedCurrency,
-      txData.currency
+      txData.currency,
+      readBankOriginalAmount(txData._original?.rawRow)
     );
     amountScore = result.score;
     amountExact = result.source === "amount_exact" && !result.currencyMismatch;
