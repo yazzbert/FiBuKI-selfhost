@@ -482,9 +482,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       "Re-run the current partner matcher over transactions that already have an AUTO-assigned " +
       "partner, whole account, and write the corrected answer WITHOUT recording a false positive — " +
       "unlike remove_partner_from_transaction, which blacklists the pair forever. Defaults to a dry " +
-      "run: pass dryRun=false to write. Reassigns where the matcher now picks a different partner, " +
-      "clears where it no longer reproduces the assignment, keeps where it agrees. Never touches " +
-      "manual, suggestion or ai assignments. Review with partner_rematch_report first.",
+      "run: pass dryRun=false to write. Reassigns where the matcher now picks a different partner and " +
+      "keeps where it agrees; an assignment it no longer reproduces is reported but left alone unless " +
+      "clearUnconfirmed=true. Never touches manual, suggestion or ai assignments. Review with " +
+      "partner_rematch_report first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -496,8 +497,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         clearUnconfirmed: {
           type: "boolean",
           description:
-            "Clear assignments the matcher no longer reproduces (default true). False leaves them " +
-            "in place and only rewrites where a different partner now auto-applies.",
+            "Default false — an assignment the matcher no longer reproduces is reported as " +
+            "skip_clear_disabled and left in place, so the run applies only the reassignments it can " +
+            "prove. Pass true to also clear those, which is a much larger write set.",
         },
         minConfidence: {
           type: "number",
