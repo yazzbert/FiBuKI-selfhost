@@ -861,6 +861,83 @@ describe("Tool Registry Handlers", () => {
     });
   });
 
+  describe("updateFileExtraction", () => {
+    it("corrects only what was passed and makes the human the authority", async () => {
+      // IV-26-1170: a Schlussrechnung due 3180.00 whose items describe the
+      // full 6360.00 scope, flagged and carrying a printed rate-group block.
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          extractedAmount: 636000,
+          extractedVatAmount: 106000,
+          extractedVatPercent: 20,
+          extractedPartner: "ELDI Handels GmbH",
+          lineItemsUnreconciled: true,
+          extractedRateGroups: [{ rate: 20, net: 530000, vat: 106000, gross: 636000 }],
+        })
+      );
+
+      const result = await handlers.updateFileExtraction(userId, {
+        fileId: "f-1",
+        amount: 318000,
+        vatAmount: 53000,
+      });
+
+      expect(result).toMatchObject({ success: true, fileId: "f-1", changed: ["amount", "vatAmount"] });
+
+      const file = store.getDoc("files", "f-1");
+      expect(file?.extractedAmount).toBe(318000);
+      expect(file?.extractedVatAmount).toBe(53000);
+      // Untouched by this correction.
+      expect(file?.extractedVatPercent).toBe(20);
+      expect(file?.extractedPartner).toBe("ELDI Handels GmbH");
+      // The artefacts that would outrank the correction are gone.
+      expect(file?.lineItemsUnreconciled).toBe(false);
+      expect(file?.extractedRateGroups).toBeNull();
+      expect(file?.vatSourceDowngraded).toBe(false);
+    });
+
+    it("writes a zero rate rather than reading it as unset", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId, extractedVatPercent: 20, extractedVatAmount: 4533 }));
+
+      await handlers.updateFileExtraction(userId, { fileId: "f-1", vatPercent: 0, vatAmount: 0 });
+
+      const file = store.getDoc("files", "f-1");
+      expect(file?.extractedVatPercent).toBe(0);
+      expect(file?.extractedVatAmount).toBe(0);
+    });
+
+    it("refuses a file the caller does not own", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId: "someone-else" }));
+
+      await expect(
+        handlers.updateFileExtraction(userId, { fileId: "f-1", amount: 1 })
+      ).rejects.toThrow("File not found");
+    });
+
+    it("refuses a correction that corrects nothing", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId }));
+
+      await expect(handlers.updateFileExtraction(userId, { fileId: "f-1" })).rejects.toThrow(
+        /Nothing to correct/
+      );
+    });
+
+    it("ignores a key the schema does not name", async () => {
+      store.setDoc("files", "f-1", createTestFile({ userId, extractedPartner: "ELDI Handels GmbH" }));
+
+      await handlers.updateFileExtraction(userId, {
+        fileId: "f-1",
+        amount: 318000,
+        extractedPartner: "Somebody Else",
+      });
+
+      expect(store.getDoc("files", "f-1")?.extractedPartner).toBe("ELDI Handels GmbH");
+    });
+  });
+
   describe("markFileAsNotInvoice / unmarkFileAsNotInvoice", () => {
     it("should flag the file, clear extracted data and empty the suggestion queue", async () => {
       store.setDoc(
