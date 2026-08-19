@@ -18,6 +18,7 @@ import { getFirestore, Timestamp, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import * as crypto from "crypto";
 import { analyzeEmailForInvoice } from "./geminiSearchHelper";
+import { isFileRejected } from "../matching/rejectedFiles";
 import { generateQueriesWithGemini } from "./generateQueriesWithGemini";
 import { QueryGenerationPartner } from "./generateSearchQueries";
 import { convertHtmlToPdf } from "./htmlToPdf";
@@ -287,10 +288,14 @@ function isEmailDateInRange(emailDate: Date, transactionDate: Date, daysRange: n
 }
 
 /**
- * Check if a file was rejected by the transaction (user manually removed it)
+ * Check if a file was rejected by the transaction (user manually removed it).
+ *
+ * Reads both stored shapes through matching/rejectedFiles: this used to consult
+ * the legacy id array alone, so a rejection recorded only as a `rejectedFiles`
+ * record was invisible here and the pair was re-queued (fork #102).
  */
 function isFileRejectedByTransaction(fileId: string, transaction: Transaction): boolean {
-  return (transaction.rejectedFileIds || []).includes(fileId);
+  return isFileRejected(transaction, fileId);
 }
 
 /**

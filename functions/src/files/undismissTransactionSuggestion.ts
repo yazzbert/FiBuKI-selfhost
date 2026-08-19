@@ -7,7 +7,7 @@
  * click and an undo by an agent land in the same state.
  *
  * Note that unrejectFileFromTransaction is a different mechanism entirely: it
- * clears `rejectedFileIds` on the transaction document, whereas dismissal lives
+ * clears the rejection fields on the transaction document, whereas dismissal lives
  * in `dismissedTransactionIds` / `dismissedTransactions` on the file. Neither
  * undoes the other.
  */
