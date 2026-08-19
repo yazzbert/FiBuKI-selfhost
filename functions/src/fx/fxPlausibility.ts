@@ -18,6 +18,8 @@
  * falls back to its numeric ladder for those, the UVA surfaces them.
  */
 
+import { normalizeCurrencyForDisplay } from "./currencyNormalization";
+
 /** Approximate value of one unit of the currency in EUR (anchor, not a feed). */
 export const FX_REFERENCE_TO_EUR: Record<string, number> = {
   EUR: 1,
@@ -61,19 +63,15 @@ export interface FxAssessment {
   band: FxBand | null;
 }
 
-/** Symbols the legacy extraction path can still emit instead of an ISO code. */
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  "€": "EUR",
-  $: "USD",
-  "£": "GBP",
-  "¥": "JPY",
-  "FR.": "CHF",
-};
-
+/**
+ * A missing currency is read as EUR here, and only here: an amount with no
+ * currency on an Austrian instance is overwhelmingly EUR, and the alternative
+ * would be to declare every such pair unanchored. An unrecognised code is NOT
+ * read as EUR — normalizeCurrencyForDisplay preserves it, which is what lets an
+ * unanchored pair be surfaced rather than silently treated as same-currency.
+ */
 export function normalizeCurrency(c?: string | null): string {
-  const t = (c ?? "").trim().toUpperCase();
-  if (!t) return "EUR";
-  return CURRENCY_SYMBOLS[t] ?? t;
+  return normalizeCurrencyForDisplay(c);
 }
 
 export function isSameCurrency(a?: string | null, b?: string | null): boolean {
