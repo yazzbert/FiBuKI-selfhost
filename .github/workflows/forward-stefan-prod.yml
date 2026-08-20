@@ -32,6 +32,9 @@ jobs:
           git fetch origin
           git merge --no-edit upstream/main
           for b in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/feat/); do
-            git merge --no-edit "$b"
+            if ! git merge --no-edit "$b"; then
+              git merge --abort
+              echo "::warning::skipped $b - conflicts; already carried on stefan-prod or needs manual merge"
+            fi
           done
           git push origin stefan-prod
