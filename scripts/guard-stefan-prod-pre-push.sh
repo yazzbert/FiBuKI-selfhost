@@ -29,7 +29,8 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
   # "authored on stefan-prod" - merging those in is exactly what the branch
   # is for. Only commits reachable from nowhere else are judged.
   exclude=$(git for-each-ref --format='%(objectname)' \
-    refs/remotes/fork/feat/ refs/heads/feat/ refs/remotes/origin/main)
+    refs/remotes/fork/feat/ refs/heads/feat/ refs/remotes/origin/main \
+    refs/remotes/fork/main)
 
   bad=0
   # shellcheck disable=SC2086
