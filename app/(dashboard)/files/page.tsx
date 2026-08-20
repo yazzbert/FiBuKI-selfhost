@@ -102,7 +102,7 @@ function FilesContent() {
   // Get search value from URL
   const searchValue = searchParams.get("search") || "";
 
-  const { files, allFilesCount, loading, remove, restore, markAsNotInvoice, unmarkAsNotInvoice } = useFiles({
+  const { files, allFilesCount, invoiceCount, loading, remove, restore, markAsNotInvoice, unmarkAsNotInvoice } = useFiles({
     search: searchValue,
     ...filters,
   });
@@ -863,6 +863,7 @@ function FilesContent() {
             ref={tableRef}
             files={files}
             allFilesCount={allFilesCount}
+            invoiceCount={invoiceCount}
             loading={loading}
             onSelectFile={handleSelectFile}
             selectedFileId={primarySelectedId}
