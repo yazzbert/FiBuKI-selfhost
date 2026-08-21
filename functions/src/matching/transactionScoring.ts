@@ -13,6 +13,7 @@ import {
   type BankOriginalAmount,
 } from "../fx/bankOriginalAmount";
 import type { DocumentType, DocumentationState } from "../documents/types";
+import { selectEffectiveCycleForAmount, ResolvedEffectiveCycle } from "./billingCycle";
 
 // === Configuration ===
 
@@ -309,8 +310,6 @@ export interface BillingCycleHint {
   delayVariance?: number;
   /** Days between charges of this recurrence — enables the period-penalty below. */
   frequencyDays?: number;
-  /** Tolerance in days around a whole-period boundary; falls back to delayVariance. */
-  dayVariance?: number;
 }
 
 export function calculateDateScore(
@@ -342,10 +341,17 @@ export function calculateDateScore(
     // band by raw delay proximity alone. This is the INCW9PTA bug: a
     // same-amount receipt from a neighbouring period must lose here, not
     // fall through to a proximity check that can't tell periods apart.
+    //
+    // Tolerance is `variance` itself (the same delay noise that governs the
+    // near/close bands below), clamped to at most half a period. Without the
+    // clamp, a loose variance relative to a short frequency would make this
+    // check true for almost any delayDiff past the period midpoint — not
+    // just delays that actually land near a period boundary — swallowing
+    // same-period-but-late matches into a false rejection.
     if (billingCycle.frequencyDays) {
       const periodsAway = Math.round(delayDiff / billingCycle.frequencyDays);
       if (periodsAway >= 1) {
-        const periodVariance = billingCycle.dayVariance ?? variance;
+        const periodVariance = Math.min(variance, Math.floor(billingCycle.frequencyDays / 2));
         const distanceFromPeriod = Math.abs(
           delayDiff - periodsAway * billingCycle.frequencyDays
         );
@@ -509,6 +515,90 @@ export interface ScoringOptions {
   };
   /** Billing cycle data for improved date scoring */
   billingCycle?: BillingCycleHint;
+}
+
+/**
+ * Resolve the billing-cycle band + weights for one candidate transaction into
+ * a `ScoringOptions`. Shared by every caller that scores a partner's
+ * transactions against its `billingCycle.effective` bands (live matching,
+ * bulk re-scoring) so band selection and hint assembly can't drift between
+ * them.
+ */
+export function buildScoringOptions(
+  effective: ResolvedEffectiveCycle[],
+  weights: ScoringOptions["weights"] | undefined,
+  amount: number
+): ScoringOptions | undefined {
+  const band = selectEffectiveCycleForAmount(effective, amount);
+  if (!band && !weights) return undefined;
+
+  const options: ScoringOptions = {};
+  if (band) {
+    options.billingCycle = {
+      invoiceToTransactionDelay: band.invoiceToTransactionDelay,
+      delayVariance: band.delayVariance,
+      frequencyDays: band.frequencyDays,
+    };
+  }
+  if (weights) options.weights = weights;
+  return options;
+}
+
+/** Map a transaction Firestore doc's data into the shape `scoreTransaction` expects. */
+export function toTransactionData(
+  id: string,
+  data: FirebaseFirestore.DocumentData
+): TransactionData {
+  return {
+    id,
+    amount: data.amount,
+    date: data.date,
+    currency: data.currency,
+    // Carries the bank-stated original amount for #112.
+    _original: data._original,
+    name: data.name,
+    partner: data.partner,
+    partnerName: data.partnerName,
+    partnerId: data.partnerId,
+    partnerIban: data.partnerIban,
+    reference: data.reference,
+    // #104: what the target already holds decides whether this file is a
+    // duplicate to suppress or the invoice that upgrades the line.
+    documentationState: data.documentationState,
+  };
+}
+
+/** Map a file Firestore doc's data into the shape `scoreTransaction` expects. */
+export function toFileMatchingData(data: FirebaseFirestore.DocumentData): FileMatchingData {
+  return {
+    extractedAmount: data.extractedAmount,
+    extractedCurrency: data.extractedCurrency,
+    extractedDate: data.extractedDate,
+    extractedPartner: data.extractedPartner,
+    extractedIban: data.extractedIban,
+    extractedText: data.extractedText,
+    partnerId: data.partnerId,
+    precisionSearchHint: data.precisionSearchHint,
+    documentType: data.documentType,
+  };
+}
+
+/** Partner name + aliases, as `calculatePartnerScore` wants them. */
+export function derivePartnerAliases(partnerData: FirebaseFirestore.DocumentData): string[] {
+  return [partnerData.name, ...(partnerData.aliases || [])].filter(Boolean);
+}
+
+/** A partner's learned per-factor weight multipliers, if any. */
+export function deriveScoringWeights(
+  partnerData: FirebaseFirestore.DocumentData
+): ScoringOptions["weights"] | undefined {
+  const sw = partnerData.scoringWeights;
+  if (!sw) return undefined;
+  return {
+    amountWeight: sw.amountWeight,
+    dateWeight: sw.dateWeight,
+    partnerWeight: sw.partnerWeight,
+  };
 }
 
 /**
