@@ -1,17 +1,29 @@
 /**
  * Learn billing cycle from partner's transaction date intervals.
  *
- * Algorithm:
- * 1. Query all transactions for a partner (limit 100, ordered by date)
- * 2. Compute inter-transaction intervals (days between consecutive transactions)
- * 3. Find the mode interval (most common, within +/- 5 day tolerance)
- * 4. If mode has 3+ occurrences and covers >50% of intervals → detected cycle
- * 5. Compute typical day-of-month from transaction dates
- * 6. If partner has files with extractedDate, compute invoice-to-transaction delay
+ * This callable is the Firestore I/O around the derivation only: it reads the
+ * partner's transactions (by `partnerId` — never `bankPartnerId`, a card
+ * descriptor's partner must not pollute the supplier's cycle) and the extracted
+ * dates of the files connected to them, hands both to the pure
+ * `deriveBillingCycle`, and folds the result into what the partner already
+ * carries. The algorithm itself lives in `billingCycleDerivation.ts`, so the
+ * post-connect trigger, the nightly schedule and the MCP surface derive the
+ * same cycle.
+ *
+ * A declared cycle is never overwritten here — see `mergeBillingCycle`.
  */
 
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import { createCallable, HttpsError } from "../utils/createCallable";
+import {
+  BILLING_CYCLE_CONFIG,
+  BillingCycleInvoiceDate,
+  BillingCycleTransaction,
+  deriveBillingCycle,
+  mergeBillingCycle,
+  normalizeBillingCycle,
+  toStoredBillingCycle,
+} from "./billingCycleDerivation";
 
 const db = getFirestore();
 
@@ -21,15 +33,8 @@ interface LearnBillingCycleRequest {
 
 interface LearnBillingCycleResponse {
   success: boolean;
-  billingCycle: {
-    frequencyDays: number;
-    frequencyConfidence: number;
-    typicalDayOfMonth?: number;
-    dayVariance?: number;
-    invoiceToTransactionDelay?: number;
-    delayVariance?: number;
-    sampleSize: number;
-  } | null;
+  /** Stored shape: the legacy flat mirror plus learned / declared / effective. */
+  billingCycle: Record<string, unknown> | null;
 }
 
 export const learnBillingCycleCallable = createCallable<
@@ -57,104 +62,52 @@ export const learnBillingCycleCallable = createCallable<
       .where("userId", "==", ctx.userId)
       .where("partnerId", "==", partnerId)
       .orderBy("date", "asc")
-      .limit(100)
+      .limit(BILLING_CYCLE_CONFIG.MAX_TRANSACTIONS)
       .get();
 
-    if (txSnapshot.size < 3) {
+    if (txSnapshot.size < BILLING_CYCLE_CONFIG.MIN_TRANSACTIONS) {
       console.log(`[BillingCycle] Not enough transactions for partner ${partnerId}: ${txSnapshot.size}`);
       return { success: true, billingCycle: null };
     }
 
-    // Compute dates and intervals
-    const txDates: Date[] = txSnapshot.docs.map((doc) => doc.data().date.toDate());
-    const intervals: number[] = [];
+    const transactions: BillingCycleTransaction[] = txSnapshot.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        date: data.date.toDate(),
+        amount: typeof data.amount === "number" ? data.amount : undefined,
+        currency: typeof data.currency === "string" ? data.currency : undefined,
+      };
+    });
 
-    for (let i = 1; i < txDates.length; i++) {
-      const daysDiff = Math.round(
-        (txDates[i].getTime() - txDates[i - 1].getTime()) / (1000 * 60 * 60 * 24)
+    let connectedInvoiceDates: BillingCycleInvoiceDate[] = [];
+    try {
+      connectedInvoiceDates = await fetchConnectedInvoiceDates(
+        ctx.userId,
+        partnerId,
+        txSnapshot.docs
       );
-      if (daysDiff > 0) {
-        intervals.push(daysDiff);
-      }
+    } catch (err) {
+      console.warn("[BillingCycle] Failed to read connected invoice dates:", err);
     }
 
-    if (intervals.length < 2) {
-      return { success: true, billingCycle: null };
-    }
+    const now = new Date();
+    const derived = deriveBillingCycle({ transactions, connectedInvoiceDates, now });
 
-    // Find mode interval with +/- 5 day tolerance
-    const result = findModeInterval(intervals, 5);
-    if (!result) {
+    if (derived.length === 0) {
       console.log(`[BillingCycle] No consistent interval found for partner ${partnerId}`);
       return { success: true, billingCycle: null };
     }
 
-    const { modeInterval, count, matchingIntervals } = result;
-
-    // Require mode to have 3+ occurrences and cover >50% of intervals
-    if (count < 3 || count / intervals.length < 0.5) {
-      console.log(
-        `[BillingCycle] Interval ${modeInterval}d not consistent enough: ` +
-        `${count}/${intervals.length} (${Math.round(count / intervals.length * 100)}%)`
-      );
+    const merged = mergeBillingCycle(
+      normalizeBillingCycle(partnerSnap.data()!.billingCycle),
+      derived
+    );
+    if (!merged) {
       return { success: true, billingCycle: null };
     }
 
-    // Compute frequency confidence based on consistency
-    const consistencyRatio = count / intervals.length;
-    const avgDeviation =
-      matchingIntervals.reduce((sum, i) => sum + Math.abs(i - modeInterval), 0) /
-      matchingIntervals.length;
-    const frequencyConfidence = Math.min(
-      100,
-      Math.round(consistencyRatio * 80 + Math.max(0, 20 - avgDeviation * 2))
-    );
-
-    // Compute typical day-of-month
-    const daysOfMonth = txDates.map((d) => d.getDate());
-    const typicalDayOfMonth = computeMode(daysOfMonth);
-
-    // Compute day variance (standard deviation of days-of-month)
-    const dayMean = daysOfMonth.reduce((s, d) => s + d, 0) / daysOfMonth.length;
-    const dayVariance = Math.round(
-      Math.sqrt(
-        daysOfMonth.reduce((s, d) => s + (d - dayMean) ** 2, 0) / daysOfMonth.length
-      )
-    );
-
-    // Compute invoice-to-transaction delay from file connections
-    let invoiceToTransactionDelay: number | undefined;
-    let delayVariance: number | undefined;
-
-    try {
-      const delays = await computeInvoiceDelays(ctx.userId, partnerId, txSnapshot.docs);
-      if (delays.length >= 3) {
-        invoiceToTransactionDelay = Math.round(
-          delays.reduce((s, d) => s + d, 0) / delays.length
-        );
-        delayVariance = Math.round(
-          Math.sqrt(
-            delays.reduce((s, d) => s + (d - invoiceToTransactionDelay!) ** 2, 0) / delays.length
-          )
-        );
-      }
-    } catch (err) {
-      console.warn("[BillingCycle] Failed to compute invoice delays:", err);
-    }
-
-    const billingCycle = {
-      frequencyDays: modeInterval,
-      frequencyConfidence,
-      typicalDayOfMonth,
-      dayVariance,
-      // Omitted entirely when unlearned (<3 delays): Firestore rejects
-      // undefined values, and ignoreUndefinedProperties is never enabled.
-      ...(invoiceToTransactionDelay !== undefined
-        ? { invoiceToTransactionDelay, delayVariance }
-        : {}),
-      sampleSize: txSnapshot.size,
-      updatedAt: Timestamp.now(),
-    };
+    const billingCycle = toStoredBillingCycle(merged, (d) => Timestamp.fromDate(d), now);
 
     // Store on partner
     await partnerRef.update({
@@ -162,10 +115,12 @@ export const learnBillingCycleCallable = createCallable<
       updatedAt: Timestamp.now(),
     });
 
+    const primary = derived[0];
     console.log(
-      `[BillingCycle] Partner ${partnerId}: ${modeInterval}d cycle, ` +
-      `${frequencyConfidence}% confidence, day=${typicalDayOfMonth}, ` +
-      `delay=${invoiceToTransactionDelay ?? "N/A"}d, sample=${txSnapshot.size}`
+      `[BillingCycle] Partner ${partnerId}: ${primary.frequencyDays}d cycle, ` +
+      `${primary.frequencyConfidence}% confidence, day=${primary.typicalDayOfMonth}, ` +
+      `delay=${primary.invoiceToTransactionDelay ?? "N/A"}d, sample=${primary.sampleSize}, ` +
+      `bands=${merged.recurrences.length}`
     );
 
     return { success: true, billingCycle };
@@ -173,87 +128,17 @@ export const learnBillingCycleCallable = createCallable<
 );
 
 /**
- * Find the most common interval within tolerance.
+ * Read the extracted date of every file connected to one of the partner's
+ * transactions. Only files that carry the partner themselves count — the same
+ * rule the delay computation had before it moved into the pure function.
  */
-function findModeInterval(
-  intervals: number[],
-  tolerance: number
-): { modeInterval: number; count: number; matchingIntervals: number[] } | null {
-  if (intervals.length === 0) return null;
-
-  // Group intervals by buckets (using tolerance)
-  let bestMode = 0;
-  let bestCount = 0;
-  let bestMatching: number[] = [];
-
-  // Test each interval as a potential center
-  const sorted = [...intervals].sort((a, b) => a - b);
-  const tested = new Set<number>();
-
-  for (const center of sorted) {
-    // Round to nearest 5 to avoid testing too many centers
-    const rounded = Math.round(center / 5) * 5 || center;
-    if (tested.has(rounded)) continue;
-    tested.add(rounded);
-
-    const matching = intervals.filter(
-      (i) => Math.abs(i - rounded) <= tolerance
-    );
-
-    if (matching.length > bestCount) {
-      bestCount = matching.length;
-      bestMode = rounded;
-      bestMatching = matching;
-    }
-  }
-
-  // Also test common billing periods
-  for (const period of [7, 14, 30, 60, 90, 180, 365]) {
-    const matching = intervals.filter(
-      (i) => Math.abs(i - period) <= tolerance
-    );
-    if (matching.length >= bestCount) {
-      bestCount = matching.length;
-      bestMode = period;
-      bestMatching = matching;
-    }
-  }
-
-  if (bestCount === 0) return null;
-
-  return { modeInterval: bestMode, count: bestCount, matchingIntervals: bestMatching };
-}
-
-/**
- * Compute the mode (most frequent value) of a number array.
- */
-function computeMode(values: number[]): number {
-  const freq = new Map<number, number>();
-  for (const v of values) {
-    freq.set(v, (freq.get(v) || 0) + 1);
-  }
-  let mode = values[0];
-  let maxFreq = 0;
-  for (const [val, count] of freq) {
-    if (count > maxFreq) {
-      maxFreq = count;
-      mode = val;
-    }
-  }
-  return mode;
-}
-
-/**
- * Compute invoice-to-transaction delays by matching file dates to transaction dates.
- */
-async function computeInvoiceDelays(
+async function fetchConnectedInvoiceDates(
   userId: string,
   partnerId: string,
   txDocs: FirebaseFirestore.QueryDocumentSnapshot[]
-): Promise<number[]> {
-  // Get file connections for these transactions
+): Promise<BillingCycleInvoiceDate[]> {
   const txIds = txDocs.map((d) => d.id);
-  const delays: number[] = [];
+  const invoiceDates: BillingCycleInvoiceDate[] = [];
 
   // Process in batches of 30 (Firestore 'in' limit)
   for (let i = 0; i < txIds.length; i += 30) {
@@ -284,19 +169,16 @@ async function computeInvoiceDelays(
         const conn = connections.docs.find((c) => c.data().fileId === fileDoc.id);
         if (!conn) continue;
 
-        const tx = txDocs.find((t) => t.id === conn.data().transactionId);
-        if (!tx) continue;
+        const transactionId = conn.data().transactionId as string;
+        if (!txIds.includes(transactionId)) continue;
 
-        const txDate = tx.data().date.toDate();
-        const fileDate = fileData.extractedDate.toDate();
-        const delay = Math.round(
-          (txDate.getTime() - fileDate.getTime()) / (1000 * 60 * 60 * 24)
-        );
-
-        delays.push(delay);
+        invoiceDates.push({
+          transactionId,
+          invoiceDate: fileData.extractedDate.toDate(),
+        });
       }
     }
   }
 
-  return delays;
+  return invoiceDates;
 }

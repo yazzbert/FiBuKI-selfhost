@@ -337,4 +337,60 @@ describe("characterization: learnBillingCycleCallable", () => {
 
     expect((await callCycle("p-c5")).billingCycle).toBeNull();
   });
+
+  // A card descriptor's bank partner must not pollute the supplier's cycle:
+  // learning reads `partnerId` only. Here the monthly history hangs off
+  // `bankPartnerId`, so there is nothing to learn from.
+  it("ignores transactions that carry the partner only as bankPartnerId", async () => {
+    await seedPartner("p-c7");
+    const dates = ["2026-01-15", "2026-02-15", "2026-03-15", "2026-04-15"];
+    for (let i = 0; i < dates.length; i++) {
+      await seedTx(`c7-t${i}`, "", `${dates[i]}T12:00:00Z`, { bankPartnerId: "p-c7" });
+    }
+    await drainTriggers();
+
+    expect((await callCycle("p-c7")).billingCycle).toBeNull();
+  });
+
+  // A declared cycle is the user's word: a re-learn (which is what a partner
+  // re-match or a re-extraction triggers) carries it over untouched.
+  it("keeps a declared cycle across a re-learn", async () => {
+    await seedPartner("p-c8");
+    const dates = ["2026-01-15", "2026-02-15", "2026-03-15", "2026-04-15"];
+    for (let i = 0; i < dates.length; i++) {
+      await seedTx(`c8-t${i}`, "p-c8", `${dates[i]}T12:00:00Z`);
+    }
+    await db.collection("partners").doc("p-c8").update({
+      billingCycle: {
+        frequencyDays: 30,
+        frequencyConfidence: 0,
+        sampleSize: 0,
+        updatedAt: Timestamp.now(),
+        recurrences: [
+          {
+            bandKey: "default",
+            declared: {
+              cadence: "quarterly",
+              frequencyDays: 90,
+              documentExpectation: "no_receipt_category",
+            },
+          },
+        ],
+      },
+    });
+    await drainTriggers();
+
+    await callCycle("p-c8");
+
+    const stored = (await db.collection("partners").doc("p-c8").get()).data()!
+      .billingCycle as Record<string, unknown>;
+    expect(stored.declared).toMatchObject({
+      cadence: "quarterly",
+      documentExpectation: "no_receipt_category",
+    });
+    // The declaration wins on the flat mirror the pre-split readers use...
+    expect(stored.frequencyDays).toBe(90);
+    // ...and the learned half stays visible beside it.
+    expect(stored.learned).toMatchObject({ frequencyDays: 30, sampleSize: 4 });
+  });
 });

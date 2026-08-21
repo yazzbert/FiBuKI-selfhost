@@ -926,10 +926,133 @@ export interface ReplayResult {
 // ============================================================================
 
 /**
- * Learned billing cycle for a partner.
- * Computed from intervals between consecutive transactions.
+ * ISO-4217 code plus the amount range one recurrence bills in.
+ *
+ * The band is what makes a partner with two cadences (Anthropic bills weekly
+ * per API usage and monthly per subscription) two recurrences instead of one
+ * noisy history, and what keeps a USD subscription one recurrence although the
+ * booked EUR amount drifts every month.
+ */
+export interface BillingAmountBand {
+  /** Lowest absolute amount seen in the band (inclusive) */
+  min: number;
+
+  /** Highest absolute amount seen in the band (inclusive) */
+  max: number;
+
+  /** Currency the band is expressed in */
+  currency: string;
+}
+
+/** Named cadence of a declared cycle; "custom" carries its own frequencyDays. */
+export type BillingCadence = "weekly" | "monthly" | "quarterly" | "yearly" | "custom";
+
+/**
+ * What the partner is expected to produce for each charge. A bank fee, an SVS
+ * instalment or an N26 reward is recurring and has no invoice — it reads as
+ * covered once categorised, not as "missing document".
+ */
+export type BillingDocumentExpectation = "invoice" | "no_receipt_category" | "none";
+
+/**
+ * What Fibuki worked out from the transaction history of one amount band.
+ * Derived by `deriveBillingCycle` in functions/src/matching/billingCycleDerivation.ts;
+ * keep the two in sync — that module works in plain Dates, this is the stored shape.
+ */
+export interface LearnedBillingCycle {
+  /** Average interval in days between transactions (e.g., 30, 90, 365) */
+  frequencyDays: number;
+
+  /** Confidence score (0-100) based on consistency of intervals */
+  frequencyConfidence: number;
+
+  /** Most common day-of-month for transactions (1-31) */
+  typicalDayOfMonth?: number;
+
+  /** Typical variance in days from the expected date */
+  dayVariance?: number;
+
+  /** Average delay in days from invoice date to transaction date (positive = invoice before tx) */
+  invoiceToTransactionDelay?: number;
+
+  /** Variance of the invoice-to-transaction delay */
+  delayVariance?: number;
+
+  /** Number of transactions in this band used to compute the cycle */
+  sampleSize: number;
+
+  /** When the derivation last ran */
+  learnedAt: Timestamp;
+
+  /** The band this recurrence covers; absent when the whole history is one band */
+  amountBand?: BillingAmountBand;
+}
+
+/**
+ * What the user stated by hand. Wins over the learned half, and survives every
+ * re-learn, re-match and re-extraction — a noisy history must not override what
+ * the bookkeeper knows.
+ */
+export interface DeclaredBillingCycle {
+  cadence: BillingCadence;
+
+  /** Days between charges — derived from `cadence` unless it is "custom" */
+  frequencyDays: number;
+
+  typicalDayOfMonth?: number;
+
+  /** Expected amount band in the billed currency */
+  expectedAmount?: BillingAmountBand;
+
+  documentExpectation: BillingDocumentExpectation;
+
+  declaredAt?: Timestamp;
+}
+
+/**
+ * The declared half resolved over the learned one, field by field. The declared
+ * half only carries what a user can reasonably state; the variances and the
+ * invoice delay still come from what was learned.
+ */
+export interface EffectiveBillingCycle {
+  source: "declared" | "learned";
+  frequencyDays: number;
+  frequencyConfidence?: number;
+  typicalDayOfMonth?: number;
+  dayVariance?: number;
+  invoiceToTransactionDelay?: number;
+  delayVariance?: number;
+  amountBand?: BillingAmountBand;
+  documentExpectation: BillingDocumentExpectation;
+}
+
+/** One recurrence of a partner, keyed by the amount band it bills in. */
+export interface BillingRecurrence {
+  /** Readable band key ("EUR:38-39"); "default" when there is no band */
+  bandKey: string;
+  learned?: LearnedBillingCycle;
+  declared?: DeclaredBillingCycle;
+  effective?: EffectiveBillingCycle;
+}
+
+/**
+ * Billing cycle of a partner: `learned` / `declared` / `effective`, multi-band.
+ *
+ * `learned`, `declared` and `effective` are the PRIMARY recurrence's halves;
+ * `recurrences` carries all of them, the primary first. A partner with one
+ * cadence has exactly one recurrence — that is the single-cycle shape this
+ * replaced, which stays valid as the one-band case.
+ *
+ * The flat frequency fields are the primary recurrence's effective view
+ * mirrored onto the root. They are what every reader written before the split
+ * (matchFileTransactions, aggregateGlobalInsights, the agent tools, the worker
+ * chat, createLocalPartnerFromGlobal) reads, so they keep working untouched
+ * until those readers move onto `effective`. Written by
+ * `toStoredBillingCycle`; do not write them by hand.
  */
 export interface BillingCycle {
+  // === flat mirror of the primary recurrence (pre-split shape) ===
+
   /** Average interval in days between transactions (e.g., 30, 90, 365) */
   frequencyDays: number;
 
@@ -953,6 +1076,20 @@ export interface BillingCycle {
 
   /** When this was last computed */
   updatedAt: Timestamp;
+
+  // === the split ===
+
+  /** Primary recurrence's learned half */
+  learned?: LearnedBillingCycle;
+
+  /** Primary recurrence's declared half */
+  declared?: DeclaredBillingCycle;
+
+  /** Primary recurrence's declared-over-learned resolution */
+  effective?: EffectiveBillingCycle;
+
+  /** Every recurrence of the partner, primary first; absent on pre-split documents */
+  recurrences?: BillingRecurrence[];
 }
 
 // ============================================================================
