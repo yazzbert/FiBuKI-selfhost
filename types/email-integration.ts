@@ -69,6 +69,14 @@ export interface EmailIntegration {
   /** Last time invoices were synced from this account */
   lastSyncAt?: Timestamp;
 
+  /**
+   * Last time the user pressed "Pull New Files" for this account.
+   * Written by the manual sync route at enqueue time and used for the
+   * 5-minute press throttle — deliberately separate from lastSyncAt, which
+   * the worker writes for scheduled syncs the user did not initiate.
+   */
+  lastManualSyncAt?: Timestamp;
+
   /** Status of the last sync attempt */
   lastSyncStatus?: "success" | "partial" | "failed";
 

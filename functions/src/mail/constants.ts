@@ -35,3 +35,14 @@ export const INVOICE_MIME_TYPES = [
   "image/png",
   "image/webp",
 ];
+
+/**
+ * Trailing window a manual "Pull New Files" press syncs, in days.
+ *
+ * Three rather than seven because attachment de-duplication happens by content
+ * hash *after* download, so a wider window re-downloads every attachment on
+ * every press — and the button's real job is "mail arrived in the last few
+ * hours". Re-scanning is otherwise safe: the sync worker only ever expands an
+ * integration's synced range, never contracts it.
+ */
+export const MANUAL_SYNC_WINDOW_DAYS = 3;

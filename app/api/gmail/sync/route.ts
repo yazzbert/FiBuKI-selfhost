@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { Timestamp } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
+import { MANUAL_SYNC_WINDOW_DAYS } from "@/functions/src/mail/constants";
 
 const db = getAdminDb();
 const INTEGRATIONS_COLLECTION = "emailIntegrations";
@@ -11,17 +12,24 @@ const TRANSACTIONS_COLLECTION = "transactions";
 
 /**
  * POST /api/gmail/sync
- * Manually trigger a sync for a Gmail integration
+ * Manually trigger a sync for a mail integration (Gmail or IMAP)
  *
  * Body: {
  *   integrationId: string;
+ *   force?: boolean;  // also sync a trailing MANUAL_SYNC_WINDOW_DAYS window
  * }
+ *
+ * Without `force` the work is derived from gap detection alone, which reports
+ * "already up to date" whenever the synced range already runs to now — the
+ * normal state right after a nightly sync, and therefore the normal state when
+ * a human presses a button. `force` adds a trailing window on top of any real
+ * gaps so the press always looks for mail that arrived since.
  */
 export async function POST(request: NextRequest) {
   try {
     const userId = await getServerUserIdWithFallback(request);
     const body = await request.json();
-    const { integrationId } = body;
+    const { integrationId, force } = body;
 
     if (!integrationId) {
       return NextResponse.json(
@@ -70,11 +78,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check for rate limiting (max 1 manual sync per 5 minutes per integration)
+    // Rate limit presses: max 1 manual sync per 5 minutes per integration.
+    // Keyed on lastManualSyncAt, not lastSyncAt — the latter is written by the
+    // worker on ANY completed sync, so a nightly run used to consume the
+    // user's throttle for a job they did not initiate.
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     if (
-      integration.lastSyncAt &&
-      integration.lastSyncAt.toDate() > fiveMinutesAgo
+      integration.lastManualSyncAt &&
+      integration.lastManualSyncAt.toDate() > fiveMinutesAgo
     ) {
       return NextResponse.json(
         {
@@ -132,6 +143,15 @@ export async function POST(request: NextRequest) {
     // Get date range from transactions
     const gapsToSync = await getSyncDateRanges(userId, integrationId, integration);
 
+    if (force) {
+      // The trailing window goes first so the mail the user is actually waiting
+      // for is fetched before any historical back-fill.
+      const to = new Date();
+      const from = new Date(to);
+      from.setDate(from.getDate() - MANUAL_SYNC_WINDOW_DAYS);
+      gapsToSync.unshift({ from, to });
+    }
+
     if (gapsToSync.length === 0) {
       // No gaps - already fully synced for current transaction range
       return NextResponse.json({
@@ -144,6 +164,11 @@ export async function POST(request: NextRequest) {
     // Create queue items for each gap
     const now = Timestamp.now();
     const queueIds: string[] = [];
+
+    // Stamp the press BEFORE the enqueue, not on completion: this is a press
+    // limiter, and a sync that hangs or dies would otherwise never set it,
+    // leaving the throttle silently disengaged.
+    await integrationRef.update({ lastManualSyncAt: now, updatedAt: now });
 
     for (const gap of gapsToSync) {
       const queueRef = await db.collection(SYNC_QUEUE_COLLECTION).add({
