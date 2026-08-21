@@ -286,7 +286,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   // =========================================================================
   {
     name: "list_partners",
-    description: "List user partners with optional search",
+    description: "List user partners with optional search. Each partner carries billingCycle: the effective cycle plus the learned and declared halves it was resolved from (null when the partner does not bill on a schedule).",
     inputSchema: {
       type: "object",
       properties: {
@@ -297,11 +297,67 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "get_partner",
-    description: "Get partner details by ID",
+    description: "Get partner details by ID, including billingCycle: the effective cycle plus the learned and declared halves it was resolved from, and one entry per recurrence (a partner can bill in more than one amount band).",
     inputSchema: {
       type: "object",
       properties: { partnerId: { type: "string", description: "The partner ID" } },
       required: ["partnerId"],
+    },
+  },
+  {
+    name: "set_partner_billing_cycle",
+    description: "Declare, change or clear the declared billing cycle of a partner. The declared half wins over what Fibuki learned from the transaction history; the learned half stays visible beside it. Pass declared: null to clear the declaration and fall back to the learned cycle.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        partnerId: { type: "string", description: "The partner ID" },
+        declared: {
+          type: ["object", "null"],
+          description: "The declared cycle, or null to clear it",
+          properties: {
+            cadence: {
+              type: "string",
+              enum: ["weekly", "monthly", "quarterly", "yearly", "custom"],
+              description: "Named cadence; 'custom' carries its own frequencyDays",
+            },
+            frequencyDays: {
+              type: "number",
+              description: "Days between charges — required for cadence 'custom', ignored otherwise",
+            },
+            typicalDayOfMonth: { type: "number", description: "Day of month the charge lands on (1-31)" },
+            expectedAmount: {
+              type: "object",
+              description: "Expected amount band in the billed currency — a USD subscription stays one recurrence although the booked EUR amount drifts",
+              properties: {
+                min: { type: "number", description: "Lowest amount in cents (inclusive)" },
+                max: { type: "number", description: "Highest amount in cents (inclusive)" },
+                currency: { type: "string", description: "Currency of the band (default EUR)" },
+              },
+              required: ["min", "max"],
+            },
+            documentExpectation: {
+              type: "string",
+              enum: ["invoice", "no_receipt_category", "none"],
+              description: "What each charge is expected to carry (default: invoice). 'no_receipt_category' covers bank fees, SVS and other recurring charges that never produce an invoice.",
+            },
+          },
+          required: ["cadence"],
+        },
+      },
+      required: ["partnerId", "declared"],
+    },
+  },
+  {
+    name: "list_recurring_partners",
+    description: "List partners that bill on a schedule, with everything a subscription view needs per partner: the billing cycle, the last charge seen (date, amount in the billed currency and in EUR, transaction id), the next expected charge window, and how many of its charges in the date range carry their expected document. Amounts are absolute cents. Returns { partners, nextCursor, count, dateFrom, dateTo } — pass nextCursor back as cursor for the next page.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dateFrom: { type: "string", description: "Coverage range start inclusive (YYYY-MM-DD). Default: 12 months ago." },
+        dateTo: { type: "string", description: "Coverage range end inclusive (YYYY-MM-DD). Default: today." },
+        limit: { type: "number", description: "Max partners per page (default 25, max 100)" },
+        cursor: { type: "string", description: "nextCursor from the previous response to fetch the next page" },
+      },
     },
   },
   {

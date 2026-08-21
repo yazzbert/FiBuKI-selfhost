@@ -8,6 +8,7 @@ import {
   createMockFirestore,
   createTestTransaction,
   createTestFile,
+  createTestPartner,
   createTestSource,
 } from "../../test/setup";
 
@@ -38,6 +39,7 @@ vi.mock("firebase-admin/firestore", () => {
       arrayUnion: (...elements: unknown[]) => ({ elements, constructor: { name: "ArrayUnionTransform" } }),
       arrayRemove: (...elements: unknown[]) => ({ elements, constructor: { name: "ArrayRemoveTransform" } }),
       increment: (n: number) => n,
+      delete: () => ({ constructor: { name: "DeleteTransform" } }),
     },
     Timestamp: MockTimestamp,
   };
@@ -958,6 +960,412 @@ describe("Tool Registry Handlers", () => {
 
       const conn = store.getDoc("fileConnections", "conn-1");
       expect(conn).toBeUndefined();
+    });
+  });
+
+  // ==========================================================================
+  // Billing cycle
+  // ==========================================================================
+
+  describe("billing cycle over the MCP", () => {
+    /** A learned cycle in the pre-split flat shape a partner may still carry. */
+    function learnedCycle(overrides: Record<string, unknown> = {}) {
+      return {
+        frequencyDays: 30,
+        frequencyConfidence: 80,
+        typicalDayOfMonth: 5,
+        dayVariance: 2,
+        sampleSize: 6,
+        learnedAt: new Date("2026-07-05"),
+        updatedAt: new Date("2026-07-05"),
+        ...overrides,
+      };
+    }
+
+    function charge(overrides: Record<string, unknown> = {}) {
+      return createTestTransaction({
+        userId,
+        partnerId: "partner-1",
+        amount: -3825,
+        currency: "EUR",
+        ...overrides,
+      });
+    }
+
+    describe("get_partner / list_partners", () => {
+      it("returns the effective cycle plus both halves", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Anthropic",
+          billingCycle: learnedCycle(),
+        }));
+
+        const partner = await handlers.getPartner(userId, "partner-1") as {
+          billingCycle: {
+            effective: { source: string; frequencyDays: number; documentExpectation: string };
+            learned: { sampleSize: number; learnedAt: string };
+            declared: unknown;
+            recurrences: Array<{ bandKey: string }>;
+          };
+        };
+
+        expect(partner.billingCycle.effective).toMatchObject({
+          source: "learned",
+          frequencyDays: 30,
+          documentExpectation: "invoice",
+        });
+        expect(partner.billingCycle.learned.sampleSize).toBe(6);
+        expect(partner.billingCycle.learned.learnedAt).toBe("2026-07-05T00:00:00.000Z");
+        expect(partner.billingCycle.declared).toBeNull();
+        expect(partner.billingCycle.recurrences).toHaveLength(1);
+      });
+
+      it("returns null for a partner that does not bill on a schedule", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({ userId, name: "Rewe" }));
+
+        const partner = await handlers.getPartner(userId, "partner-1") as { billingCycle: unknown };
+        const list = await handlers.listPartners(userId, {}) as Array<{ billingCycle: unknown }>;
+
+        expect(partner.billingCycle).toBeNull();
+        expect(list[0].billingCycle).toBeNull();
+      });
+
+      it("list_partners carries the cycle so no second call per partner is needed", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Notion",
+          billingCycle: learnedCycle({ frequencyDays: 365 }),
+        }));
+
+        const list = await handlers.listPartners(userId, {}) as Array<{
+          billingCycle: { effective: { frequencyDays: number } };
+        }>;
+
+        expect(list[0].billingCycle.effective.frequencyDays).toBe(365);
+      });
+    });
+
+    describe("set_partner_billing_cycle", () => {
+      it("declares a cycle on a partner with no history", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({ userId, name: "Canva" }));
+
+        const result = await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "monthly", typicalDayOfMonth: 12, documentExpectation: "invoice" },
+        }) as { billingCycle: { effective: { source: string; frequencyDays: number; typicalDayOfMonth: number } } };
+
+        expect(result.billingCycle.effective).toMatchObject({
+          source: "declared",
+          frequencyDays: 30,
+          typicalDayOfMonth: 12,
+        });
+
+        const stored = store.getDoc("partners", "partner-1")!.billingCycle as Record<string, unknown>;
+        expect(stored.frequencyDays).toBe(30);
+        // A declaration is the user's word: certain, with no history behind it.
+        expect(stored.frequencyConfidence).toBe(100);
+      });
+
+      it("lets the declared half win over the learned one and keeps it visible", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Anthropic",
+          billingCycle: learnedCycle(),
+        }));
+
+        const result = await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "weekly", documentExpectation: "invoice" },
+        }) as {
+          billingCycle: {
+            effective: { source: string; frequencyDays: number };
+            learned: { frequencyDays: number };
+            declared: { cadence: string; declaredAt: string };
+          };
+        };
+
+        expect(result.billingCycle.effective).toMatchObject({ source: "declared", frequencyDays: 7 });
+        expect(result.billingCycle.learned.frequencyDays).toBe(30);
+        expect(result.billingCycle.declared.cadence).toBe("weekly");
+        expect(result.billingCycle.declared.declaredAt).toEqual(expect.any(String));
+      });
+
+      it("keeps a custom cadence's own frequency and an expected amount band", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({ userId, name: "OpenAI" }));
+
+        const result = await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: {
+            cadence: "custom",
+            frequencyDays: 14,
+            expectedAmount: { min: 2000, max: 2000, currency: "usd" },
+            documentExpectation: "invoice",
+          },
+        }) as {
+          billingCycle: {
+            effective: { frequencyDays: number; amountBand: { min: number; currency: string } };
+            recurrences: Array<{ bandKey: string }>;
+          };
+        };
+
+        expect(result.billingCycle.effective.frequencyDays).toBe(14);
+        expect(result.billingCycle.effective.amountBand).toMatchObject({ min: 2000, currency: "USD" });
+        expect(result.billingCycle.recurrences[0].bandKey).toBe("USD:2000-2000");
+      });
+
+      it("null clears the declared half and falls back to the learned one", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Anthropic",
+          billingCycle: learnedCycle(),
+        }));
+        await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "weekly", documentExpectation: "none" },
+        });
+
+        const cleared = await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: null,
+        }) as {
+          billingCycle: {
+            effective: { source: string; frequencyDays: number; documentExpectation: string };
+            declared: unknown;
+          };
+        };
+
+        expect(cleared.billingCycle.declared).toBeNull();
+        expect(cleared.billingCycle.effective).toMatchObject({
+          source: "learned",
+          frequencyDays: 30,
+          documentExpectation: "invoice",
+        });
+      });
+
+      it("null on a partner with no learned half drops the cycle entirely", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({ userId, name: "Vidio" }));
+        await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "monthly" },
+        });
+
+        const cleared = await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: null,
+        }) as { billingCycle: unknown };
+
+        expect(cleared.billingCycle).toBeNull();
+        expect(store.getDoc("partners", "partner-1")!.billingCycle).toBeUndefined();
+      });
+
+      it("rejects a missing partner, a missing declared key and a bad cadence", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({ userId }));
+        store.setDoc("partners", "partner-2", createTestPartner({ userId: otherUserId }));
+
+        await expect(handlers.setPartnerBillingCycle(userId, { declared: null }))
+          .rejects.toThrow("partnerId is required");
+        await expect(handlers.setPartnerBillingCycle(userId, { partnerId: "partner-2", declared: null }))
+          .rejects.toThrow("Partner not found");
+        await expect(handlers.setPartnerBillingCycle(userId, { partnerId: "partner-1" }))
+          .rejects.toThrow("declared is required");
+        await expect(handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "fortnightly" },
+        })).rejects.toThrow("declared.cadence must be one of");
+        await expect(handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "custom" },
+        })).rejects.toThrow("declared.frequencyDays");
+      });
+    });
+
+    describe("list_recurring_partners", () => {
+      it("returns cycle, last charge, next expected window and coverage", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Anthropic",
+          billingCycle: learnedCycle(),
+        }));
+        store.setDoc("transactions", "tx-1", charge({ date: new Date("2026-05-05"), fileIds: ["file-1"] }));
+        store.setDoc("transactions", "tx-2", charge({ date: new Date("2026-06-05"), noReceiptCategoryId: "cat-1" }));
+        store.setDoc("transactions", "tx-3", charge({ date: new Date("2026-07-05") }));
+
+        const result = await handlers.listRecurringPartners(userId, {
+          dateFrom: "2026-01-01",
+          dateTo: "2026-07-31",
+        }) as {
+          partners: Array<{
+            partnerId: string;
+            name: string;
+            billingCycle: { effective: { frequencyDays: number } };
+            lastCharge: { transactionId: string; date: string; amount: number; currency: string; amountEur: number };
+            nextExpected: { expectedAt: string; from: string; to: string; varianceDays: number };
+            coverage: { charges: number; withFile: number; withCategory: number; missing: number };
+          }>;
+          nextCursor: string | null;
+          count: number;
+          dateFrom: string;
+          dateTo: string;
+        };
+
+        expect(result.count).toBe(1);
+        const partner = result.partners[0];
+        expect(partner.partnerId).toBe("partner-1");
+        expect(partner.name).toBe("Anthropic");
+        expect(partner.billingCycle.effective.frequencyDays).toBe(30);
+        // Last charge seen, in the billed currency and in EUR.
+        expect(partner.lastCharge).toMatchObject({
+          transactionId: "tx-3",
+          date: "2026-07-05",
+          amount: 3825,
+          currency: "EUR",
+          amountEur: 3825,
+        });
+        // 2026-07-05 + 30 days, plus/minus the learned day variance.
+        expect(partner.nextExpected).toMatchObject({
+          expectedAt: "2026-08-04",
+          from: "2026-08-02",
+          to: "2026-08-06",
+          varianceDays: 2,
+        });
+        expect(partner.coverage).toEqual({ charges: 3, withFile: 1, withCategory: 1, missing: 1 });
+        expect(result.nextCursor).toBeNull();
+        expect(result.dateFrom).toBe("2026-01-01");
+        expect(result.dateTo).toBe("2026-07-31");
+      });
+
+      it("counts coverage only inside the date range", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Anthropic",
+          billingCycle: learnedCycle(),
+        }));
+        store.setDoc("transactions", "tx-1", charge({ date: new Date("2025-12-05") }));
+        store.setDoc("transactions", "tx-2", charge({ date: new Date("2026-06-05") }));
+        store.setDoc("transactions", "tx-3", charge({ date: new Date("2026-07-05") }));
+
+        const result = await handlers.listRecurringPartners(userId, {
+          dateFrom: "2026-06-01",
+          dateTo: "2026-07-05",
+        }) as { partners: Array<{ coverage: { charges: number }; lastCharge: { transactionId: string } }> };
+
+        expect(result.partners[0].coverage.charges).toBe(2);
+        // The last charge seen is the newest one, whatever the coverage range is.
+        expect(result.partners[0].lastCharge.transactionId).toBe("tx-3");
+      });
+
+      it("reads the billed currency off the connected invoice", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "OpenAI",
+          billingCycle: learnedCycle(),
+        }));
+        store.setDoc("files", "file-1", createTestFile({
+          userId,
+          extractedAmount: 2000,
+          extractedCurrency: "USD",
+        }));
+        store.setDoc("transactions", "tx-1", charge({
+          date: new Date("2026-07-05"),
+          amount: -1847,
+          fileIds: ["file-1"],
+        }));
+
+        const result = await handlers.listRecurringPartners(userId, {}) as {
+          partners: Array<{ lastCharge: { amount: number; currency: string; amountEur: number; hasFile: boolean } }>;
+        };
+
+        expect(result.partners[0].lastCharge).toMatchObject({
+          amount: 2000,
+          currency: "USD",
+          amountEur: 1847,
+          hasFile: true,
+        });
+      });
+
+      it("never reports a missing document for a partner expected to produce none", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({ userId, name: "SVS" }));
+        await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "quarterly", documentExpectation: "none" },
+        });
+        store.setDoc("transactions", "tx-1", charge({ date: new Date("2026-07-05") }));
+
+        const result = await handlers.listRecurringPartners(userId, {
+          dateFrom: "2026-01-01",
+          dateTo: "2026-12-31",
+        }) as { partners: Array<{ coverage: { charges: number; missing: number } }> };
+
+        expect(result.partners[0].coverage).toMatchObject({ charges: 1, missing: 0 });
+      });
+
+      it("skips partners without a cycle and partners of another user", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Anthropic",
+          billingCycle: learnedCycle(),
+        }));
+        store.setDoc("partners", "partner-2", createTestPartner({ userId, name: "Rewe" }));
+        store.setDoc("partners", "partner-3", createTestPartner({
+          userId: otherUserId,
+          name: "Netflix",
+          billingCycle: learnedCycle(),
+        }));
+
+        const result = await handlers.listRecurringPartners(userId, {}) as {
+          partners: Array<{ partnerId: string }>;
+        };
+
+        expect(result.partners.map((p) => p.partnerId)).toEqual(["partner-1"]);
+      });
+
+      it("pages with a cursor", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({
+          userId,
+          name: "Anthropic",
+          billingCycle: learnedCycle(),
+        }));
+        store.setDoc("partners", "partner-2", createTestPartner({
+          userId,
+          name: "Notion",
+          billingCycle: learnedCycle(),
+        }));
+        store.setDoc("partners", "partner-3", createTestPartner({
+          userId,
+          name: "Vidio",
+          billingCycle: learnedCycle(),
+        }));
+
+        const first = await handlers.listRecurringPartners(userId, { limit: 2 }) as {
+          partners: Array<{ name: string }>;
+          nextCursor: string | null;
+        };
+        expect(first.partners.map((p) => p.name)).toEqual(["Anthropic", "Notion"]);
+        expect(first.nextCursor).toBe("partner-2");
+
+        const second = await handlers.listRecurringPartners(userId, {
+          limit: 2,
+          cursor: first.nextCursor!,
+        }) as { partners: Array<{ name: string }>; nextCursor: string | null };
+        expect(second.partners.map((p) => p.name)).toEqual(["Vidio"]);
+        expect(second.nextCursor).toBeNull();
+      });
+
+      it("has no charge and no window for a declared partner with no history", async () => {
+        store.setDoc("partners", "partner-1", createTestPartner({ userId, name: "Canva" }));
+        await handlers.setPartnerBillingCycle(userId, {
+          partnerId: "partner-1",
+          declared: { cadence: "monthly" },
+        });
+
+        const result = await handlers.listRecurringPartners(userId, {}) as {
+          partners: Array<{ lastCharge: unknown; nextExpected: unknown; coverage: { charges: number } }>;
+        };
+
+        expect(result.partners[0].lastCharge).toBeNull();
+        expect(result.partners[0].nextExpected).toBeNull();
+        expect(result.partners[0].coverage.charges).toBe(0);
+      });
     });
   });
 

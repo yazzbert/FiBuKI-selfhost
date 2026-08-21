@@ -19,6 +19,23 @@ import { TOOL_DEFINITIONS, TOOL_NAMES } from "./definitions";
 import type { ToolName } from "./definitions";
 import { PLANS } from "../billing/config";
 import type { PlanId, PlanFeatures } from "../billing/config";
+import {
+  BILLING_CYCLE_CONFIG,
+  bandKeyOf,
+  bandsOverlap,
+  cadenceToFrequencyDays,
+  mergeBillingCycle,
+  normalizeBillingCycle,
+  toStoredBillingCycle,
+} from "../matching/billingCycleDerivation";
+import type {
+  BillingAmountBand,
+  BillingCadence,
+  BillingDocumentExpectation,
+  DeclaredBillingCycle,
+  LearnedBillingCycle,
+} from "../matching/billingCycleDerivation";
+import { nextExpectedCharge, summarizeCoverage } from "../matching/billingCycleExpectations";
 
 /**
  * Convert a Firestore Timestamp to YYYY-MM-DD in Europe/Vienna timezone.
@@ -31,6 +48,33 @@ function toLocalDate(ts: Timestamp | { toDate?: () => Date } | string | null | u
   const date = typeof (ts as Timestamp).toDate === "function" ? (ts as Timestamp).toDate() : null;
   if (!date) return null;
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Vienna" }).format(date);
+}
+
+/** Any stored date — Timestamp, Date, ISO string or epoch millis — as a Date. */
+function readDate(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === "object" && typeof (value as Timestamp).toDate === "function") {
+    const date = (value as Timestamp).toDate();
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+}
+
+/** A Date as YYYY-MM-DD in Europe/Vienna — same convention as `toLocalDate`. */
+function formatLocalDate(date: Date): string {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Vienna" }).format(date);
+}
+
+/** YYYY-MM-DD (Europe/Vienna) to a Date, as the transaction filters read it. */
+function parseLocalDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value) return null;
+  const date = new Date(`${value}T00:00:00+01:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 export { TOOL_NAMES };
@@ -123,6 +167,10 @@ export async function handleTool(
       return getPartner(userId, args.partnerId as string);
     case "create_partner":
       return createPartner(userId, args);
+    case "set_partner_billing_cycle":
+      return setPartnerBillingCycle(userId, args);
+    case "list_recurring_partners":
+      return listRecurringPartners(userId, args);
     case "assign_partner_to_transaction":
       return assignPartnerToTx(userId, args);
     case "remove_partner_from_transaction":
@@ -733,6 +781,7 @@ export async function listPartners(userId: string, args: Record<string, unknown>
       website: data.website || null,
       country: data.country || null,
       defaultCategoryId: data.defaultCategoryId || null,
+      billingCycle: toApiBillingCycle(data.billingCycle),
     };
   });
 
@@ -756,7 +805,11 @@ export async function getPartner(userId: string, partnerId: string) {
   if (!doc.exists || doc.data()?.userId !== userId) {
     throw new Error("Partner not found");
   }
-  return { id: doc.id, ...doc.data() };
+  const data = doc.data()!;
+  // The stored billingCycle still mirrors the primary recurrence's fields flat
+  // onto its root for the readers written before the split; over the API it is
+  // the resolved shape only.
+  return { id: doc.id, ...data, billingCycle: toApiBillingCycle(data.billingCycle) };
 }
 
 export async function createPartner(userId: string, args: Record<string, unknown>) {
@@ -769,6 +822,366 @@ export async function createPartner(userId: string, args: Record<string, unknown
     website: args.website as string | undefined,
     country: args.country as string | undefined,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Billing cycle
+// ---------------------------------------------------------------------------
+
+/** Cadences and expectations a declaration may name. */
+const BILLING_CADENCES: BillingCadence[] = ["weekly", "monthly", "quarterly", "yearly", "custom"];
+const DOCUMENT_EXPECTATIONS: BillingDocumentExpectation[] = [
+  "invoice",
+  "no_receipt_category",
+  "none",
+];
+
+/**
+ * The billing cycle as the API returns it: the effective view plus the two
+ * halves it was resolved from, and one entry per recurrence.
+ *
+ * Read through `normalizeBillingCycle`, so a partner still carrying the
+ * pre-split flat shape reads as the one-band case. Instants become ISO strings
+ * — a Timestamp does not survive JSON.
+ */
+export function toApiBillingCycle(raw: unknown): Record<string, unknown> | null {
+  const structure = normalizeBillingCycle(raw);
+  if (!structure) return null;
+
+  return {
+    effective: structure.effective ?? null,
+    learned: structure.learned ? apiLearned(structure.learned) : null,
+    declared: structure.declared ? apiDeclared(structure.declared) : null,
+    recurrences: structure.recurrences.map((r) => ({
+      bandKey: r.bandKey,
+      effective: r.effective ?? null,
+      learned: r.learned ? apiLearned(r.learned) : null,
+      declared: r.declared ? apiDeclared(r.declared) : null,
+    })),
+  };
+}
+
+function apiLearned(learned: LearnedBillingCycle): Record<string, unknown> {
+  return { ...learned, learnedAt: learned.learnedAt.toISOString() };
+}
+
+function apiDeclared(declared: DeclaredBillingCycle): Record<string, unknown> {
+  return {
+    ...declared,
+    declaredAt: declared.declaredAt ? declared.declaredAt.toISOString() : null,
+  };
+}
+
+/**
+ * Declare, change or clear the declared half of a partner's billing cycle.
+ *
+ * `declared: null` clears every declaration on the partner and leaves what was
+ * learned; the effective cycle falls back to the learned half. A declaration
+ * replaces the one covering the same amount band and is folded in by
+ * `mergeBillingCycle`, the same fold the learner uses — so a band with no
+ * history of its own stays a recurrence in its own right (a vendor can be
+ * declared recurring from day one).
+ */
+export async function setPartnerBillingCycle(userId: string, args: Record<string, unknown>) {
+  const { partnerId } = args;
+  if (!partnerId) throw new Error("partnerId is required");
+  if (!("declared" in args)) {
+    throw new Error("declared is required (pass null to clear the declared cycle)");
+  }
+
+  const partnerRef = db.collection("partners").doc(partnerId as string);
+  const partnerSnap = await partnerRef.get();
+  if (!partnerSnap.exists || partnerSnap.data()?.userId !== userId) {
+    throw new Error("Partner not found");
+  }
+
+  const now = new Date();
+  const declared = args.declared === null ? null : parseDeclaredCycle(args.declared, now);
+
+  const existing = normalizeBillingCycle(partnerSnap.data()!.billingCycle);
+  const learned = (existing?.recurrences ?? [])
+    .map((r) => r.learned)
+    .filter((l): l is LearnedBillingCycle => !!l);
+
+  // Keep the declarations of the other bands; the new one replaces whatever
+  // covered its band. Clearing drops all of them.
+  const declarations = (existing?.recurrences ?? [])
+    .map((r) => r.declared)
+    .filter((d): d is DeclaredBillingCycle => !!d)
+    .filter((d) => (declared ? !bandsOverlap(d.expectedAmount, declared.expectedAmount) : false));
+  if (declared) declarations.push(declared);
+
+  const merged = mergeBillingCycle(
+    {
+      recurrences: declarations.map((d) => ({
+        bandKey: bandKeyOf(d.expectedAmount),
+        declared: d,
+      })),
+    },
+    learned
+  );
+
+  if (!merged) {
+    // Nothing declared and nothing learned — the partner does not bill on a
+    // schedule at all, so the field goes rather than lingering as an empty hull.
+    await partnerRef.update({
+      billingCycle: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { success: true, partnerId, billingCycle: null };
+  }
+
+  const billingCycle = toStoredBillingCycle(merged, (d) => Timestamp.fromDate(d), now);
+  await partnerRef.update({ billingCycle, updatedAt: FieldValue.serverTimestamp() });
+
+  return { success: true, partnerId, billingCycle: toApiBillingCycle(billingCycle) };
+}
+
+function parseDeclaredCycle(raw: unknown, now: Date): DeclaredBillingCycle {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("declared must be an object or null");
+  }
+  const r = raw as Record<string, unknown>;
+
+  const cadence = r.cadence as BillingCadence;
+  if (!BILLING_CADENCES.includes(cadence)) {
+    throw new Error(`declared.cadence must be one of: ${BILLING_CADENCES.join(", ")}`);
+  }
+
+  const frequencyDays = cadenceToFrequencyDays(
+    cadence,
+    typeof r.frequencyDays === "number" ? r.frequencyDays : undefined
+  );
+  if (!(frequencyDays > 0)) {
+    throw new Error('declared.frequencyDays must be a positive number for cadence "custom"');
+  }
+
+  const expectation = (r.documentExpectation ?? "invoice") as BillingDocumentExpectation;
+  if (!DOCUMENT_EXPECTATIONS.includes(expectation)) {
+    throw new Error(
+      `declared.documentExpectation must be one of: ${DOCUMENT_EXPECTATIONS.join(", ")}`
+    );
+  }
+
+  let typicalDayOfMonth: number | undefined;
+  if (r.typicalDayOfMonth !== undefined && r.typicalDayOfMonth !== null) {
+    const day = r.typicalDayOfMonth;
+    if (typeof day !== "number" || day < 1 || day > 31) {
+      throw new Error("declared.typicalDayOfMonth must be between 1 and 31");
+    }
+    typicalDayOfMonth = Math.round(day);
+  }
+
+  return {
+    cadence,
+    frequencyDays,
+    ...(typicalDayOfMonth !== undefined ? { typicalDayOfMonth } : {}),
+    ...(r.expectedAmount !== undefined && r.expectedAmount !== null
+      ? { expectedAmount: parseAmountBand(r.expectedAmount) }
+      : {}),
+    documentExpectation: expectation,
+    declaredAt: now,
+  };
+}
+
+function parseAmountBand(raw: unknown): BillingAmountBand {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("declared.expectedAmount must be an object with min and max");
+  }
+  const r = raw as Record<string, unknown>;
+  const min = r.min;
+  const max = r.max;
+  if (typeof min !== "number" || typeof max !== "number") {
+    throw new Error("declared.expectedAmount.min and .max must be numbers (cents)");
+  }
+  if (min > max) {
+    throw new Error("declared.expectedAmount.min must not be greater than max");
+  }
+  // Amounts are absolute here — the band describes what is billed, not how the
+  // bank booked it.
+  return {
+    min: Math.abs(min),
+    max: Math.abs(max),
+    currency: typeof r.currency === "string" && r.currency ? r.currency.toUpperCase() : "EUR",
+  };
+}
+
+/**
+ * Every partner that bills on a schedule, with what a subscription view needs
+ * per partner: the cycle, the last charge seen, the next expected window and
+ * the document coverage of its charges in the date range.
+ *
+ * This response shape is a contract — the homelab subscription view renders
+ * from it directly. Keep it stable.
+ *
+ * A partner is recurring when it has an effective cycle, declared or learned.
+ * That lives in a nested field Firestore cannot filter on, so the partners are
+ * read the way `list_partners` reads them and filtered here; only the page's
+ * partners cost a transaction query.
+ */
+export async function listRecurringPartners(userId: string, args: Record<string, unknown>) {
+  const dateTo = parseLocalDate(args.dateTo) ?? new Date();
+  const dateFrom = parseLocalDate(args.dateFrom) ?? twelveMonthsBefore(dateTo);
+  // dateTo is inclusive: charges up to the end of that day count.
+  const rangeEnd = new Date(dateTo);
+  rangeEnd.setDate(rangeEnd.getDate() + 1);
+
+  const snapshot = await db
+    .collection("partners")
+    .where("userId", "==", userId)
+    .where("isActive", "==", true)
+    .orderBy("name", "asc")
+    .get();
+
+  const recurring = snapshot.docs
+    .map((doc) => ({ id: doc.id, data: doc.data(), cycle: normalizeBillingCycle(doc.data().billingCycle) }))
+    .filter((p) => !!p.cycle?.effective)
+    .sort(
+      (a, b) =>
+        String(a.data.name || "").localeCompare(String(b.data.name || "")) ||
+        a.id.localeCompare(b.id)
+    );
+
+  // Cursor is the last partner id of the previous page. An unknown cursor
+  // starts from the beginning, as it does in list_transactions.
+  const cursor = args.cursor as string | undefined;
+  const cursorIndex = cursor ? recurring.findIndex((p) => p.id === cursor) : -1;
+  const start = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+  const limit = Math.min(Math.max((args.limit as number) || 25, 1), 100);
+  const page = recurring.slice(start, start + limit);
+
+  const partners = [];
+  for (const partner of page) {
+    partners.push(
+      await buildRecurringPartner(userId, partner.id, partner.data, partner.cycle!, dateFrom, rangeEnd)
+    );
+  }
+
+  const nextCursor =
+    start + limit < recurring.length && page.length > 0 ? page[page.length - 1].id : null;
+
+  return {
+    partners,
+    nextCursor,
+    count: partners.length,
+    dateFrom: formatLocalDate(dateFrom),
+    dateTo: formatLocalDate(dateTo),
+  };
+}
+
+/** Default coverage range: the twelve months before the range end. */
+function twelveMonthsBefore(date: Date): Date {
+  const from = new Date(date);
+  from.setFullYear(from.getFullYear() - 1);
+  return from;
+}
+
+async function buildRecurringPartner(
+  userId: string,
+  partnerId: string,
+  data: Record<string, unknown>,
+  cycle: NonNullable<ReturnType<typeof normalizeBillingCycle>>,
+  rangeStart: Date,
+  rangeEnd: Date
+) {
+  // By partnerId only — never bankPartnerId, a card descriptor's partner is not
+  // the supplier's charge.
+  const txSnapshot = await db
+    .collection("transactions")
+    .where("userId", "==", userId)
+    .where("partnerId", "==", partnerId)
+    .orderBy("date", "desc")
+    .limit(BILLING_CYCLE_CONFIG.MAX_TRANSACTIONS)
+    .get();
+
+  const charges = txSnapshot.docs
+    .map((doc) => {
+      const tx = doc.data();
+      return {
+        id: doc.id,
+        date: readDate(tx.date),
+        amount: typeof tx.amount === "number" ? tx.amount : 0,
+        currency: typeof tx.currency === "string" ? tx.currency : "EUR",
+        fileIds: Array.isArray(tx.fileIds) ? (tx.fileIds as string[]) : [],
+        hasCategory: !!tx.noReceiptCategoryId,
+      };
+    })
+    .filter((c) => !!c.date)
+    .sort((a, b) => b.date!.getTime() - a.date!.getTime());
+
+  const effective = cycle.effective!;
+  const last = charges[0] ?? null;
+  const inRange = charges.filter(
+    (c) => c.date!.getTime() >= rangeStart.getTime() && c.date!.getTime() < rangeEnd.getTime()
+  );
+
+  const expected = nextExpectedCharge(last?.date ?? null, effective);
+
+  return {
+    partnerId,
+    name: data.name ?? null,
+    billingCycle: toApiBillingCycle(data.billingCycle),
+    lastCharge: last ? await buildLastCharge(last) : null,
+    nextExpected: expected
+      ? {
+          expectedAt: formatLocalDate(expected.expectedAt),
+          from: formatLocalDate(expected.from),
+          to: formatLocalDate(expected.to),
+          varianceDays: expected.varianceDays,
+        }
+      : null,
+    coverage: summarizeCoverage(
+      inRange.map((c) => ({ hasFile: c.fileIds.length > 0, hasCategory: c.hasCategory })),
+      effective.documentExpectation
+    ),
+  };
+}
+
+interface ChargeRow {
+  id: string;
+  date: Date | null;
+  amount: number;
+  currency: string;
+  fileIds: string[];
+  hasCategory: boolean;
+}
+
+/**
+ * The last charge, with its amount in the billed currency and in EUR, so a
+ * run-rate can be computed without re-reading transactions.
+ *
+ * The bank books in the account's currency; what the vendor billed is on the
+ * connected invoice (a 20.00 USD subscription is booked as a drifting EUR
+ * amount). Both are absolute cents — a charge is a charge, whichever side of
+ * the ledger it was booked on. `amountEur` is null when the account itself is
+ * not in EUR, as no rate is stored to convert with.
+ */
+async function buildLastCharge(charge: ChargeRow) {
+  let amount = Math.abs(charge.amount);
+  let currency = charge.currency;
+
+  // A charge carries one invoice in practice; the bound keeps a transaction
+  // someone attached a folder to from costing a read per file.
+  for (const fileId of charge.fileIds.slice(0, 5)) {
+    const fileSnap = await db.collection("files").doc(fileId).get();
+    const file = fileSnap.data();
+    if (!file) continue;
+    if (typeof file.extractedAmount === "number" && typeof file.extractedCurrency === "string") {
+      amount = Math.abs(file.extractedAmount);
+      currency = file.extractedCurrency;
+      break;
+    }
+  }
+
+  return {
+    transactionId: charge.id,
+    date: charge.date ? formatLocalDate(charge.date) : null,
+    amount,
+    currency,
+    amountEur: charge.currency === "EUR" ? Math.abs(charge.amount) : null,
+    hasFile: charge.fileIds.length > 0,
+    hasCategory: charge.hasCategory,
+  };
 }
 
 export async function assignPartnerToTx(userId: string, args: Record<string, unknown>) {
