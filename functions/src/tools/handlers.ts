@@ -389,7 +389,24 @@ export async function updateTransaction(userId: string, args: Record<string, unk
   return { success: true, transactionId };
 }
 
-export async function listTransactionsNeedingFiles(userId: string, args: Record<string, unknown>) {
+/**
+ * One page of the user's transactions, newest first, filtered in memory.
+ *
+ * Every listing that selects on an absent field has to work this way:
+ * Firestore has no "field missing" predicate, so the read deliberately
+ * overfetches and a page is built from up to `scanLimit` documents. Rows past
+ * that are reached via `nextCursor`, not silently dropped, and the caller's
+ * `count` is the page size — never a count of what the account owes.
+ *
+ * The cursor is the last document actually CONSUMED, not the last one
+ * returned, so the next page resumes exactly where this one stopped: rows
+ * filtered out in memory are skipped, rows that simply didn't fit are not.
+ */
+async function scanTransactionsPage(
+  userId: string,
+  args: Record<string, unknown>,
+  keep: (transaction: Record<string, unknown>) => boolean
+): Promise<{ page: Array<Record<string, unknown>>; nextCursor: string | null }> {
   let query: FirebaseFirestore.Query = db
     .collection("transactions")
     .where("userId", "==", userId)
@@ -403,13 +420,6 @@ export async function listTransactionsNeedingFiles(userId: string, args: Record<
     }
   }
 
-  // "needs a receipt" is three absent-field tests (fileIds empty,
-  // noReceiptCategoryId unset, quotaExceeded unset) and Firestore has no
-  // "field missing" predicate, so the filtering happens in memory and the read
-  // deliberately overfetches — a page is built from up to `scanLimit`
-  // documents. Rows past that are reached via `nextCursor`, not silently
-  // dropped, and the returned `count` is the page size, never a count of what
-  // the account still owes receipts for.
   const requestedLimit = Math.min(Math.max((args.limit as number) || 50, 1), 500);
   const scanLimit = Math.min(requestedLimit * 5, 1000);
   query = query.limit(scanLimit);
@@ -420,64 +430,7 @@ export async function listTransactionsNeedingFiles(userId: string, args: Record<
     return { id: doc.id, ...data, date: toLocalDate(data.date) || data.date } as Record<string, unknown>;
   });
 
-  let transactions = scanned.filter(
-    (t) =>
-      (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) && !t.noReceiptCategoryId && !t.quotaExceeded
-  );
-
-  if (args.minAmount !== undefined) {
-    const minAmount = args.minAmount as number;
-    transactions = transactions.filter((t) => Math.abs((t.amount as number) || 0) >= minAmount);
-  }
-
-  // The page ends either at the requested limit or at the end of the scan.
-  // The cursor is the last document actually consumed, so the next page
-  // resumes exactly where this one stopped — rows filtered out in memory are
-  // skipped, rows that simply didn't fit are not.
-  const page = transactions.slice(0, requestedLimit);
-  const truncated = transactions.length > requestedLimit;
-  const hasMore = truncated || scanned.length === scanLimit;
-
-  const nextCursor = !hasMore
-    ? null
-    : truncated
-      ? (page[page.length - 1].id as string)
-      : ((scanned[scanned.length - 1]?.id as string) ?? null);
-
-  return { transactions: page, nextCursor, count: page.length };
-}
-
-/**
- * The chase queue (#104): transactions holding a receipt but no invoice.
- *
- * `documentationState` is a present-field equality that Firestore could
- * filter on directly, but doing so needs a composite index alongside the date
- * ordering, and the sibling listing already established the over-fetch shape.
- * So a page is built from up to `scanLimit` documents, rows past that are
- * reached via `nextCursor` rather than silently dropped, and the returned
- * `count` is the page size — never a count of what the account still owes.
- */
-export async function listTransactionsMissingInvoice(userId: string, args: Record<string, unknown>) {
-  let query: FirebaseFirestore.Query = db
-    .collection("transactions")
-    .where("userId", "==", userId)
-    .orderBy("date", "desc");
-
-  if (args.cursor) {
-    const cursorSnap = await db.collection("transactions").doc(args.cursor as string).get();
-    if (cursorSnap.exists && cursorSnap.data()?.userId === userId) {
-      query = query.startAfter(cursorSnap);
-    }
-  }
-
-  const requestedLimit = Math.min(Math.max((args.limit as number) || 50, 1), 500);
-  const scanLimit = Math.min(requestedLimit * 5, 1000);
-  query = query.limit(scanLimit);
-
-  const snapshot = await query.get();
-  const scanned = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Record<string, unknown>);
-
-  let matching = scanned.filter((t) => t.documentationState === "receipt-only");
+  let matching = scanned.filter(keep);
 
   if (args.minAmount !== undefined) {
     const minAmount = args.minAmount as number;
@@ -493,6 +446,39 @@ export async function listTransactionsMissingInvoice(userId: string, args: Recor
     : truncated
       ? (page[page.length - 1].id as string)
       : ((scanned[scanned.length - 1]?.id as string) ?? null);
+
+  return { page, nextCursor };
+}
+
+export async function listTransactionsNeedingFiles(userId: string, args: Record<string, unknown>) {
+  // "needs a receipt" is three absent-field tests: no files, no no-receipt
+  // category, not parked on the quota limit.
+  const { page, nextCursor } = await scanTransactionsPage(
+    userId,
+    args,
+    (t) =>
+      (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) &&
+      !t.noReceiptCategoryId &&
+      !t.quotaExceeded
+  );
+
+  return { transactions: page, nextCursor, count: page.length };
+}
+
+/**
+ * The chase queue (#104): transactions holding a receipt but no invoice.
+ *
+ * `documentationState` is a present-field equality Firestore could filter on
+ * directly, but that needs a composite index alongside the date ordering, and
+ * the sibling listing already established the over-fetch shape — so this uses
+ * the same scan, with the same cursor semantics.
+ */
+export async function listTransactionsMissingInvoice(userId: string, args: Record<string, unknown>) {
+  const { page, nextCursor } = await scanTransactionsPage(
+    userId,
+    args,
+    (t) => t.documentationState === "receipt-only"
+  );
 
   // Only the page's own documents are read — the § 11 defect list is what
   // makes the row actionable, and reading it for rows nobody asked for would
@@ -520,7 +506,7 @@ export async function listTransactionsMissingInvoice(userId: string, args: Recor
 
       return {
         id: t.id,
-        date: toLocalDate(t.date as Timestamp) || t.date,
+        date: t.date,
         amount: t.amount,
         currency: t.currency ?? "EUR",
         name: t.name ?? null,

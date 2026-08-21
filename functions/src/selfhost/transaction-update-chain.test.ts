@@ -193,6 +193,39 @@ describe("selfhost hardening: onTransactionUpdate chain", () => {
     expect(after.updatedAt).toEqual(before);
   });
 
+  it("still runs the partner automations when the same update also derives documentationState", async () => {
+    // The interaction the trigger's early-return guard exists for. A row that
+    // predates #104 has no documentationState, so ANY first touch derives one
+    // — including the touch that assigns a partner. Returning early on that
+    // write would defer the partner automations to a re-trigger, where
+    // partnerId is unchanged and the guard skips them for good.
+    await db.collection("partners").doc("p-hetzner").set({
+      userId: USER,
+      name: "Hetzner",
+      isActive: true,
+    });
+    await seedCategory("cat-hosting", {
+      templateId: "bank-fees",
+      matchedPartnerIds: ["p-hetzner"],
+    });
+    await db.collection("transactions").doc("t-both").set(baseTx({ name: "Hetzner Online" }));
+
+    await db.collection("transactions").doc("t-both").update({
+      partnerId: "p-hetzner",
+      partnerType: "user",
+      partnerMatchedBy: "manual",
+      updatedAt: Timestamp.now(),
+    });
+    await drainTriggers();
+
+    const tx = (await db.collection("transactions").doc("t-both").get()).data()!;
+    // The new field was derived…
+    expect(tx.documentationState).toBe("no-receipt-category");
+    // …and the category automation that belonged to this event still ran.
+    expect(tx.noReceiptCategoryId).toBe("cat-hosting");
+    expect(tx.noReceiptCategoryMatchedBy).toBe("auto");
+  });
+
   // -------------------------------------------------------------------------
   // 2. Resolution learning (dynamic import inside the trigger)
   // -------------------------------------------------------------------------

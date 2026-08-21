@@ -494,6 +494,41 @@ describe("Tool Registry Handlers", () => {
       expect(result.transactions).toEqual([]);
     });
 
+    it("pages the whole queue when the receipt-only rows are sparse in the scan", async () => {
+      // 60 transactions, every fifth one a receipt-only gap. With limit 3 the
+      // scan window (3 * 5 = 15 rows) holds exactly 3 matches, so the cursor
+      // has to resume from the last row CONSUMED, not the last one returned —
+      // the case a copied pagination block gets wrong.
+      for (let i = 0; i < 60; i++) {
+        store.setDoc(
+          "transactions",
+          `tx-${String(i).padStart(3, "0")}`,
+          createTestTransaction({
+            userId,
+            date: new Date(Date.UTC(2026, 0, 1) + (60 - i) * 60_000),
+            documentationState: i % 5 === 0 ? "receipt-only" : "invoice",
+          })
+        );
+      }
+
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let guard = 0; guard < 40; guard++) {
+        const page: Awaited<ReturnType<typeof handlers.listTransactionsMissingInvoice>> =
+          await handlers.listTransactionsMissingInvoice(userId, {
+            limit: 3,
+            ...(cursor ? { cursor } : {}),
+          });
+        seen.push(...page.transactions.map((t) => t.id as string));
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+
+      expect(seen).toHaveLength(12);
+      expect(new Set(seen).size).toBe(12);
+      expect(seen.every((id) => Number(id.slice(3)) % 5 === 0)).toBe(true);
+    });
+
     it("is reachable through the dispatcher under its tool name", async () => {
       store.setDoc(
         "transactions",
