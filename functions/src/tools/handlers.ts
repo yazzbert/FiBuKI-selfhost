@@ -34,6 +34,8 @@ import {
 } from "../extraction/retryExtractionOps";
 import { getStorage } from "firebase-admin/storage";
 import { randomUUID } from "crypto";
+import { classifyFileRecord, documentTypeFields } from "../documents/adapter";
+import { syncDocumentationStateForTransactions } from "../documents/syncDocumentationState";
 import { TOOL_DEFINITIONS, TOOL_NAMES } from "./definitions";
 import type { ToolName } from "./definitions";
 import { PLANS } from "../billing/config";
@@ -131,6 +133,8 @@ export async function handleTool(
       return updateTransaction(userId, args);
     case "list_transactions_needing_files":
       return listTransactionsNeedingFiles(userId, args);
+    case "list_transactions_missing_invoice":
+      return listTransactionsMissingInvoice(userId, args);
     case "import_transactions":
       return importTransactions(userId, args);
 
@@ -443,6 +447,95 @@ export async function listTransactionsNeedingFiles(userId: string, args: Record<
   return { transactions: page, nextCursor, count: page.length };
 }
 
+/**
+ * The chase queue (#104): transactions holding a receipt but no invoice.
+ *
+ * `documentationState` is a present-field equality that Firestore could
+ * filter on directly, but doing so needs a composite index alongside the date
+ * ordering, and the sibling listing already established the over-fetch shape.
+ * So a page is built from up to `scanLimit` documents, rows past that are
+ * reached via `nextCursor` rather than silently dropped, and the returned
+ * `count` is the page size — never a count of what the account still owes.
+ */
+export async function listTransactionsMissingInvoice(userId: string, args: Record<string, unknown>) {
+  let query: FirebaseFirestore.Query = db
+    .collection("transactions")
+    .where("userId", "==", userId)
+    .orderBy("date", "desc");
+
+  if (args.cursor) {
+    const cursorSnap = await db.collection("transactions").doc(args.cursor as string).get();
+    if (cursorSnap.exists && cursorSnap.data()?.userId === userId) {
+      query = query.startAfter(cursorSnap);
+    }
+  }
+
+  const requestedLimit = Math.min(Math.max((args.limit as number) || 50, 1), 500);
+  const scanLimit = Math.min(requestedLimit * 5, 1000);
+  query = query.limit(scanLimit);
+
+  const snapshot = await query.get();
+  const scanned = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Record<string, unknown>);
+
+  let matching = scanned.filter((t) => t.documentationState === "receipt-only");
+
+  if (args.minAmount !== undefined) {
+    const minAmount = args.minAmount as number;
+    matching = matching.filter((t) => Math.abs((t.amount as number) || 0) >= minAmount);
+  }
+
+  const page = matching.slice(0, requestedLimit);
+  const truncated = matching.length > requestedLimit;
+  const hasMore = truncated || scanned.length === scanLimit;
+
+  const nextCursor = !hasMore
+    ? null
+    : truncated
+      ? (page[page.length - 1].id as string)
+      : ((scanned[scanned.length - 1]?.id as string) ?? null);
+
+  // Only the page's own documents are read — the § 11 defect list is what
+  // makes the row actionable, and reading it for rows nobody asked for would
+  // turn a listing into a fan-out.
+  const transactions = await Promise.all(
+    page.map(async (t) => {
+      const fileIds = (t.fileIds as string[] | undefined) ?? [];
+      const files = await Promise.all(
+        fileIds.slice(0, 10).map(async (fileId) => {
+          const snap = await db.collection("files").doc(fileId).get();
+          if (!snap.exists) return null;
+          const data = snap.data()!;
+          return {
+            fileId,
+            fileName: data.fileName ?? null,
+            documentType: data.documentType ?? null,
+            missingElements: data.documentTypeMissingElements ?? [],
+            basisReason: (data.documentTypeBasis as { reason?: string } | undefined)?.reason ?? null,
+          };
+        })
+      );
+
+      const documents = files.filter((f): f is NonNullable<typeof f> => f !== null);
+      const missingElements = [...new Set(documents.flatMap((d) => d.missingElements as string[]))];
+
+      return {
+        id: t.id,
+        date: toLocalDate(t.date as Timestamp) || t.date,
+        amount: t.amount,
+        currency: t.currency ?? "EUR",
+        name: t.name ?? null,
+        partner: t.partner ?? t.partnerName ?? null,
+        partnerId: t.partnerId ?? null,
+        documentationState: t.documentationState,
+        missingElements,
+        documents,
+      };
+    })
+  );
+
+  return { transactions, nextCursor, count: transactions.length };
+}
+
 // ============================================================================
 // Files
 // ============================================================================
@@ -675,7 +768,19 @@ export async function updateFileExtraction(userId: string, args: Record<string, 
     throw error;
   }
 
+  // The § 11 classification is stored, not recomputed at read time, so a
+  // correction that moves the amount or the rate must move it too — otherwise
+  // the person fixes the figure and the document type stays wrong (#104).
+  const corrected = { ...fileSnap.data()!, ...built.updates };
+  Object.assign(built.updates, documentTypeFields(classifyFileRecord(corrected)));
+
   await fileRef.update(built.updates);
+
+  const previousDocumentType = fileSnap.data()?.documentType;
+  const connectedTransactionIds = (fileSnap.data()?.transactionIds as string[] | undefined) ?? [];
+  if (previousDocumentType !== built.updates.documentType && connectedTransactionIds.length > 0) {
+    await syncDocumentationStateForTransactions(db, connectedTransactionIds);
+  }
 
   const after = (await fileRef.get()).data() ?? {};
   console.log(`[updateFileExtraction] Corrected file ${fileId}`, {
@@ -1686,6 +1791,7 @@ export async function scoreFileTransactionMatch(userId: string, args: Record<str
       extractedIban: fileData.extractedIban,
       extractedText: fileData.extractedText,
       partnerId: fileData.partnerId,
+      documentType: fileData.documentType,
     },
     {
       id: transactionId as string,
@@ -1698,6 +1804,7 @@ export async function scoreFileTransactionMatch(userId: string, args: Record<str
       partnerId: txData.partnerId,
       partnerIban: txData.partnerIban,
       reference: txData.reference,
+      documentationState: txData.documentationState,
     },
     []
   );
@@ -1708,6 +1815,9 @@ export async function scoreFileTransactionMatch(userId: string, args: Record<str
     confidence: result.confidence,
     matchSources: result.matchSources,
     breakdown: formatScoreBreakdown(result.breakdown),
+    // #104: why a confident pair still scored zero, or why it will not
+    // auto-connect. Absent when the transaction has no documentation state.
+    documentation: result.documentation ?? null,
   };
 }
 
