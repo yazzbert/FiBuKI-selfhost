@@ -434,3 +434,80 @@ describe("classifyDocumentType — the user's own outgoing documents", () => {
     expect(issued.type).toBe("invoice");
   });
 });
+
+describe("classifyDocumentType — the cross-border B2B shape", () => {
+  /** A US vendor: no UID to print, no Austrian rate, but it bills a business. */
+  const usVendor: DocumentFacts = {
+    grossTotal: 108700,
+    currency: "EUR",
+    vatPercent: null,
+    lineItems: [{ description: "Even G2 Clip & Pouch" }],
+    supplierName: "Hong Kong Even Realities Limited",
+    supplierAddress: "Kwun Tong, Hong Kong",
+    supplierVatId: null,
+    recipientName: "Yazzbert e.U.",
+    recipientAddress: "1040 Wien, Austria",
+    recipientVatId: "ATU78971436",
+    issueDate: "2026-07-27",
+    selfDesignation: "Invoice",
+    invoiceNumber: "24605562011",
+    text: "Invoice 24605562011. Total EUR 1,087.00. Amount Paid EUR 1,087.00.",
+  };
+
+  it("reads the recipient's Austrian UID on a supplier with none as a supply taxed elsewhere", () => {
+    const result = classifyDocumentType(usVendor);
+
+    expect(result.type).toBe("invoice");
+    expect(result.basis.zeroVatReason).toBe("cross-border-b2b");
+  });
+
+  it("does not need the document to state the reverse-charge wording", () => {
+    const result = classifyDocumentType({ ...usVendor, text: null });
+
+    expect(result.type).toBe("invoice");
+  });
+
+  it("gives up again once the recipient UID is gone — a bare total is not an invoice", () => {
+    const result = classifyDocumentType({ ...usVendor, recipientVatId: null });
+
+    expect(result.type).toBe("unknown");
+    expect(result.basis.zeroVatReason).toBeNull();
+  });
+
+  it("does not excuse an Austrian supplier who printed a UID but no rate", () => {
+    const result = classifyDocumentType({ ...usVendor, supplierVatId: "ATU12345678" });
+
+    expect(result.type).toBe("receipt");
+    expect(result.basis.zeroVatReason).toBeNull();
+  });
+
+  it("only reads an AUSTRIAN recipient UID — anyone else's is not this user's supply", () => {
+    const result = classifyDocumentType({ ...usVendor, recipientVatId: "DE123456789" });
+
+    expect(result.type).toBe("unknown");
+  });
+
+  it("keeps a numberless US document out of the chase queue", () => {
+    // Without the recipient UID this hits "no VAT, no UID, no number" and
+    // reads as a till receipt. The re-extraction sweep is what makes that
+    // rule reachable, so the guard has to be in place before it lands.
+    //
+    // The answer is `unknown`, not `invoice`: § 11 Abs 1 lit. h binds an
+    // Austrian invoice, so a missing sequential number on a supply taxed
+    // elsewhere is reported but proves nothing either way.
+    const numberless = { ...usVendor, invoiceNumber: null };
+
+    expect(classifyDocumentType({ ...numberless, recipientVatId: null }).type).toBe("receipt");
+
+    const crossBorder = classifyDocumentType(numberless);
+    expect(crossBorder.type).toBe("unknown");
+    expect(crossBorder.missingElements).toContain("invoice-number");
+  });
+
+  it("is never consulted when the document prints a rate", () => {
+    const result = classifyDocumentType({ ...usVendor, vatPercent: 20, supplierVatId: "ATU12345678" });
+
+    expect(result.type).toBe("invoice");
+    expect(result.basis.zeroVatReason).toBeNull();
+  });
+});

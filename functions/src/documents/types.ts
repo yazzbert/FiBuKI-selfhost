@@ -54,8 +54,22 @@ export type Section11Element =
 /** Which § 11 regime the document's gross total puts it in. */
 export type Section11Regime = "kleinbetrag" | "standard";
 
-/** Why an absent Austrian VAT rate is lawful rather than a defect. */
-export type ZeroVatReason = "reverse-charge" | "exempt" | "foreign-supplier";
+/**
+ * Why an absent Austrian VAT rate is lawful rather than a defect.
+ *
+ *   reverse-charge    the document states the § 19 wording
+ *   exempt            the document states an exemption
+ *   foreign-supplier  the supplier's UID is not Austrian
+ *   cross-border-b2b  no supplier UID, but the document prints the
+ *                     RECIPIENT's Austrian UID — the shape a supply taxed
+ *                     outside Austria takes when the supplier has no UID
+ *                     to print at all
+ */
+export type ZeroVatReason =
+  | "reverse-charge"
+  | "exempt"
+  | "foreign-supplier"
+  | "cross-border-b2b";
 
 /** What the document's own printed heading reads as, when it is recognisable. */
 export type SelfDesignationClass = "invoice" | "receipt" | "credit-note";

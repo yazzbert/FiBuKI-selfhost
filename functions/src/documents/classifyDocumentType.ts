@@ -119,6 +119,11 @@ function isPresent(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** Strip the punctuation a UID is printed with, so the country prefix is readable. */
+function normalizeVatId(vatId: string | null | undefined): string {
+  return (vatId ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -175,9 +180,22 @@ export function readZeroVatReason(facts: DocumentFacts): ZeroVatReason | null {
 
   // No stated reason, but a supplier UID that is not Austrian is itself a
   // cross-border fact: the supply is taxed elsewhere or by the recipient.
-  const vatId = (facts.supplierVatId ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const vatId = normalizeVatId(facts.supplierVatId);
   if (/^[A-Z]{2}/.test(vatId) && !vatId.startsWith("AT")) {
     return "foreign-supplier";
+  }
+
+  // The supplier has no UID to print — a US or other third-country vendor —
+  // but the document prints the RECIPIENT's Austrian UID. That is the
+  // cross-border B2B shape: the supplier billed a business abroad and the
+  // recipient self-assesses. A domestic till receipt never carries the
+  // buyer's UID, so this cannot be mistaken for one.
+  //
+  // It also excuses an Austrian invoice whose supplier UID extraction simply
+  // failed to read. That direction is the safe one: it leaves a real gap out
+  // of the chase queue rather than putting phantom work into it.
+  if (!isPresent(facts.supplierVatId) && normalizeVatId(facts.recipientVatId).startsWith("AT")) {
+    return "cross-border-b2b";
   }
 
   return null;
@@ -223,8 +241,7 @@ function judgeSteuersatz(
   if (zeroVatReason) return "excused";
 
   // An Austrian supplier billing an Austrian supply must print the rate.
-  const vatId = (facts.supplierVatId ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  if (vatId.startsWith("AT")) return "missing";
+  if (normalizeVatId(facts.supplierVatId).startsWith("AT")) return "missing";
 
   // The document says what it is, and it is not an invoice.
   if (selfDesignationClass === "receipt") return "missing";
@@ -290,6 +307,11 @@ function auditElements(
       undecidable.push("invoice-number");
     } else if (!isPresent(facts.invoiceNumber)) {
       missing.push("invoice-number");
+      // § 11 Abs 1 lit. h binds an Austrian invoice. Once the supply is
+      // established as taxed outside Austria, a missing sequential number is
+      // still worth reporting but cannot be held against the document — a US
+      // vendor is not writing to the Austrian statute.
+      if (steuersatz === "excused") undecidable.push("invoice-number");
     }
 
     if (grossTotal > RECIPIENT_VAT_ID_LIMIT_CENTS) {
