@@ -156,6 +156,26 @@ function hasPositiveRate(facts: DocumentFacts): boolean {
 }
 
 /**
+ * Does the document STATE its rate as zero, rather than not state one at all?
+ *
+ * Two sources count, and line items deliberately do not. The top-level field
+ * is what a human sets through the correction tool to record "the VAT on this
+ * document must not be claimed" — a Kammerumlage assessment, an exempt
+ * postal service. The printed rate-group block is transcribed off the
+ * document, so a 0% row there means the document said so. Line items carry a
+ * defaulted zero often enough that reading them here would invent a statement
+ * the document never made.
+ *
+ * A stated zero satisfies § 11 Abs 6 Z 6: the Steuersatz is on the document.
+ * It is not an excuse for anything else — an Austrian supplier billing a
+ * zero-rated supply over 400 EUR still owes its UID.
+ */
+function statesZeroRate(facts: DocumentFacts): boolean {
+  if (toFiniteNumber(facts.vatPercent) === 0) return true;
+  return (facts.rateGroups ?? []).some((group) => toFiniteNumber(group?.rate) === 0);
+}
+
+/**
  * Does the document charge a rate Austria actually levies?
  *
  * This is what makes a missing supplier UID a real § 11 Abs 1 lit. i defect:
@@ -238,6 +258,9 @@ function judgeSteuersatz(
   selfDesignationClass: SelfDesignationClass | null
 ): SteuersatzVerdict {
   if (hasPositiveRate(facts)) return "present";
+  // The rate is stated and it is zero. That is a Steuersatz, not a gap — and
+  // unlike an excuse it leaves every other § 11 element standing.
+  if (zeroVatReason === "zero-rated") return "present";
   if (zeroVatReason) return "excused";
 
   // An Austrian supplier billing an Austrian supply must print the rate.
@@ -377,7 +400,11 @@ export function classifyDocumentType(facts: DocumentFacts): DocumentTypeResult {
 
   // Only consulted when no rate is printed: a document that shows 20% needs no
   // excuse, and reading one off its text could only misfire.
-  const zeroVatReason = hasPositiveRate(facts) ? null : readZeroVatReason(facts);
+  // A stated reason outranks a bare zero: a reverse-charge invoice printing
+  // "0%" is better described by the reverse charge than by the zero.
+  const zeroVatReason = hasPositiveRate(facts)
+    ? null
+    : readZeroVatReason(facts) ?? (statesZeroRate(facts) ? "zero-rated" : null);
   const steuersatz = judgeSteuersatz(facts, zeroVatReason, selfDesignationClass);
 
   const { missing, undecidable } = auditElements(facts, regime, grossTotal, steuersatz);

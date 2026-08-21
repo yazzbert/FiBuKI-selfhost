@@ -99,7 +99,13 @@ export interface DocumentTypeBasis {
   grossTotal: number | null;
   selfDesignation: string | null;
   selfDesignationClass: "invoice" | "receipt" | "credit-note" | null;
-  zeroVatReason: "reverse-charge" | "exempt" | "foreign-supplier" | "cross-border-b2b" | null;
+  zeroVatReason:
+    | "reverse-charge"
+    | "exempt"
+    | "foreign-supplier"
+    | "cross-border-b2b"
+    | "zero-rated"
+    | null;
   degraded: boolean;
 }
 

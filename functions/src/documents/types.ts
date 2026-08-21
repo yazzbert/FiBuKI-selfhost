@@ -64,12 +64,15 @@ export type Section11Regime = "kleinbetrag" | "standard";
  *                     RECIPIENT's Austrian UID — the shape a supply taxed
  *                     outside Austria takes when the supplier has no UID
  *                     to print at all
+ *   zero-rated        the rate IS stated, and it is zero — a printed 0% row,
+ *                     or a human recording that the VAT is not claimable
  */
 export type ZeroVatReason =
   | "reverse-charge"
   | "exempt"
   | "foreign-supplier"
-  | "cross-border-b2b";
+  | "cross-border-b2b"
+  | "zero-rated";
 
 /** What the document's own printed heading reads as, when it is recognisable. */
 export type SelfDesignationClass = "invoice" | "receipt" | "credit-note";

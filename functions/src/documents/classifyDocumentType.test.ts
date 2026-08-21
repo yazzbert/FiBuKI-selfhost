@@ -511,3 +511,84 @@ describe("classifyDocumentType — the cross-border B2B shape", () => {
     expect(result.basis.zeroVatReason).toBeNull();
   });
 });
+
+describe("classifyDocumentType — a stated zero rate is a Steuersatz, not a gap", () => {
+  /** A Wirtschaftskammer Grundumlage assessment: a levy, never a taxable supply. */
+  const levy: DocumentFacts = {
+    grossTotal: 8500,
+    currency: "EUR",
+    vatPercent: 0,
+    vatAmount: 0,
+    lineItems: [{ description: "FG Werbung und Marktkommunikation 2026" }],
+    supplierName: "Wirtschaftskammer Wien",
+    supplierAddress: "Straße der Wiener Wirtschaft 1, 1020 Wien",
+    supplierVatId: "ATU16211007",
+    issueDate: "2026-02-23",
+    selfDesignation: "Vorschreibung",
+    invoiceNumber: null,
+  };
+
+  it("accepts a human recording that the VAT is not claimable", () => {
+    const result = classifyDocumentType(levy);
+
+    expect(result.type).toBe("invoice");
+    expect(result.basis.zeroVatReason).toBe("zero-rated");
+    expect(result.missingElements).not.toContain("steuersatz");
+  });
+
+  it("accepts a printed 0% row in the document's own rate-group block", () => {
+    const post = classifyDocumentType({
+      ...levy,
+      grossTotal: 2331,
+      vatPercent: null,
+      vatAmount: null,
+      rateGroups: [{ rate: 0 }],
+      supplierName: "Österreichische Post AG",
+      supplierVatId: "ATU46674503",
+    });
+
+    expect(post.type).toBe("invoice");
+    expect(post.basis.zeroVatReason).toBe("zero-rated");
+  });
+
+  it("still calls it a receipt when no rate is stated at all", () => {
+    const result = classifyDocumentType({ ...levy, vatPercent: null, vatAmount: null });
+
+    expect(result.type).toBe("receipt");
+    expect(result.basis.zeroVatReason).toBeNull();
+  });
+
+  it("does not read a defaulted zero off the line items", () => {
+    const result = classifyDocumentType({
+      ...levy,
+      vatPercent: null,
+      lineItems: [{ description: "Beitrag", vatPercent: 0 }],
+    });
+
+    expect(result.type).toBe("receipt");
+  });
+
+  it("lets a stated reason outrank a bare zero, because it explains more", () => {
+    const result = classifyDocumentType({
+      ...levy,
+      supplierVatId: null,
+      text: "Reverse charge — VAT to be accounted for by the recipient",
+    });
+
+    expect(result.basis.zeroVatReason).toBe("reverse-charge");
+  });
+
+  it("excuses nothing else: an Austrian supplier over 400 EUR still owes its UID", () => {
+    const result = classifyDocumentType({
+      ...levy,
+      grossTotal: 120000,
+      supplierVatId: null,
+      recipientName: "Yazzbert e.U.",
+      recipientAddress: "1040 Wien",
+      invoiceNumber: "2026-0042",
+    });
+
+    expect(result.type).not.toBe("invoice");
+    expect(result.missingElements).toContain("supplier-vat-id");
+  });
+});
