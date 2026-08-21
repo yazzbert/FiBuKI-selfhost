@@ -14,6 +14,8 @@ export * from "./provider";
 export { GmailProvider } from "./GmailProvider";
 export { ImapProvider } from "./imap/ImapProvider";
 export type { ImapConfig } from "./imap/ImapProvider";
+export { classifyImapError } from "./imap/classifyImapError";
+export type { ImapErrorCode, ImapErrorClassification } from "./imap/classifyImapError";
 
 /** Provider-specific, already-decrypted credentials. */
 export interface MailCredentials {
