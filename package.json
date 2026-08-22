@@ -16,6 +16,7 @@
     "test:file-filters": "node --test tests/apply-file-filters.test.mjs",
     "test:file-url-params": "node --test tests/file-url-params.test.mjs",
     "test:bulk-file-selection": "node --test tests/bulk-file-selection.test.mjs",
+    "test:row-neighbour": "node --test tests/row-neighbour.test.mjs",
     "setup": "bash scripts/setup.sh",
     "generate:mcp-automations": "node scripts/generate-mcp-automations.js",
     "generate:tool-definitions": "node scripts/generate-tool-definitions.js",
