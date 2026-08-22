@@ -6,6 +6,9 @@ import { Timestamp } from "firebase-admin/firestore";
 import { getServerUserIdWithFallback, unauthorizedResponse } from "@/lib/auth/get-server-user";
 import { encrypt, getEncryptionKey } from "@/lib/crypto/encryption";
 import { startImapInitialSync } from "@/functions/src/gmail/startImapInitialSync";
+// Shared with the sync worker so a connect-time failure and a sync-time
+// failure speak with one voice. The app layer imports from functions/, never
+// the reverse — functions/ builds standalone for deploy.
 import { classifyImapError } from "@/functions/src/mail/imap/classify-error";
 
 const db = getAdminDb();

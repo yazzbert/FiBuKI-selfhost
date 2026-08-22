@@ -42,6 +42,8 @@ interface FileTableProps {
   enableMultiSelect?: boolean;
   selectedRowIds?: Set<string>;
   onSelectionChange?: (selectedIds: Set<string>) => void;
+  /** Callback with the row ids in displayed order (filtered rows, active sort) */
+  onDisplayedOrderChange?: (orderedIds: string[]) => void;
   /** Checkbox column: toggling a single row's checkbox (independent of modifier-click) */
   onToggleFileSelection?: (fileId: string, checked: boolean) => void;
   /** Checkbox column: toggling the header select-all checkbox */
@@ -83,6 +85,7 @@ export const FileTable = forwardRef<FilesDataTableHandle, FileTableProps>(
       enableMultiSelect,
       selectedRowIds,
       onSelectionChange,
+      onDisplayedOrderChange,
       onToggleFileSelection,
       onToggleSelectAll,
       selectAllState = "unchecked",
@@ -147,7 +150,7 @@ export const FileTable = forwardRef<FilesDataTableHandle, FileTableProps>(
     const totalUnfilteredCount = allFilesCount ?? files.length;
     const hasAnyFilters = searchValue || filters.extractedDateFrom || filters.extractedDateTo ||
       filters.hasConnections !== undefined || filters.amountType || filters.partnerIds?.length ||
-      filters.extractionComplete !== undefined || filters.isNotInvoice || filters.includeDeleted;
+      filters.extractionComplete !== undefined || filters.isNotInvoice !== undefined || filters.includeDeleted;
 
     const emptyState = useMemo(() => {
       // Don't show empty state while still loading - prevents flicker
@@ -169,11 +172,16 @@ export const FileTable = forwardRef<FilesDataTableHandle, FileTableProps>(
           />
         );
       }
-      // Has files but filters returned nothing
+      // Has files but filters returned nothing. Without a search term the
+      // preset's "match your search" reads wrong — a filter hid them.
       return (
         <TableEmptyState
           icon={<Search className="h-full w-full" />}
-          title={emptyStatePresets.files.noResults.title}
+          title={
+            searchValue
+              ? emptyStatePresets.files.noResults.title
+              : "No files match these filters"
+          }
           description={emptyStatePresets.files.noResults.description}
           action={hasAnyFilters ? {
             label: emptyStatePresets.files.noResults.actionLabel!,
@@ -182,7 +190,7 @@ export const FileTable = forwardRef<FilesDataTableHandle, FileTableProps>(
           size="sm"
         />
       );
-    }, [loading, totalUnfilteredCount, hasAnyFilters, router, onUploadClick]);
+    }, [loading, totalUnfilteredCount, hasAnyFilters, searchValue, router, onUploadClick]);
 
     const syncStatus = useGmailSyncStatus();
 
@@ -234,6 +242,7 @@ export const FileTable = forwardRef<FilesDataTableHandle, FileTableProps>(
             enableMultiSelect={enableMultiSelect}
             selectedRowIds={selectedRowIds}
             onSelectionChange={onSelectionChange}
+            onDisplayedOrderChange={onDisplayedOrderChange}
             emptyState={emptyState}
             searchingFileIds={runningFileIds}
           />
