@@ -196,6 +196,165 @@ describe("calculateDateScore", () => {
       expect(result.score).toBe(25);
     });
   });
+
+  // === Frequency / whole-period penalty (yazzbert/FiBuKI-selfhost#168) ===
+
+  describe("with frequency penalty", () => {
+    it("still gives 25 for an exact delay match when frequency is present", () => {
+      const billingCycle: BillingCycleHint = {
+        invoiceToTransactionDelay: 14,
+        delayVariance: 3,
+        frequencyDays: 30,
+      };
+
+      const result = calculateDateScore(
+        new Date("2024-12-01"),
+        new Date("2024-12-15"),
+        billingCycle
+      );
+      expect(result.score).toBe(25);
+      expect(result.source).toBe("date_exact");
+    });
+
+    it("still gives 25 for a delay within variance when frequency is present", () => {
+      const billingCycle: BillingCycleHint = {
+        invoiceToTransactionDelay: 1,
+        delayVariance: 2,
+        frequencyDays: 7,
+      };
+
+      // actual delay = 3, expected = 1, diff = 2 <= variance(2) — not a period boundary
+      const result = calculateDateScore(
+        new Date("2024-06-01"),
+        new Date("2024-06-04"),
+        billingCycle
+      );
+      expect(result.score).toBe(25);
+    });
+
+    it("penalises a candidate one whole period away from the expected delay", () => {
+      const billingCycle: BillingCycleHint = {
+        invoiceToTransactionDelay: 1,
+        delayVariance: 2,
+        frequencyDays: 7,
+      };
+
+      // actual delay = 8 (1 + one week), expected = 1, diff = 7 = exactly one period
+      const result = calculateDateScore(
+        new Date("2024-06-01"),
+        new Date("2024-06-09"),
+        billingCycle
+      );
+      expect(result.score).toBe(0);
+      expect(result.source).toBeNull();
+    });
+
+    it("penalises a candidate two whole periods away from the expected delay", () => {
+      const billingCycle: BillingCycleHint = {
+        invoiceToTransactionDelay: 1,
+        delayVariance: 2,
+        frequencyDays: 7,
+      };
+
+      // actual delay = 15 (1 + two weeks), diff = 14 = exactly two periods
+      const result = calculateDateScore(
+        new Date("2024-06-01"),
+        new Date("2024-06-16"),
+        billingCycle
+      );
+      expect(result.score).toBe(0);
+    });
+
+    it("penalises a period-boundary candidate even when it would otherwise fall inside 2x variance", () => {
+      // The bug this guards: a loose delayVariance (5) makes variance*2 (10)
+      // exceed a short weekly frequency (7), so a candidate exactly one
+      // period away would land in the "close" band (22) by the old
+      // delay-only check order. The period check must run first.
+      const billingCycle: BillingCycleHint = {
+        invoiceToTransactionDelay: 1,
+        delayVariance: 5,
+        frequencyDays: 7,
+      };
+
+      // actual delay = 8, expected = 1, diff = 7 — one period away, and
+      // 7 <= variance*2 (10), so the old code would have scored this 22.
+      const result = calculateDateScore(
+        new Date("2024-06-01"),
+        new Date("2024-06-09"),
+        billingCycle
+      );
+      expect(result.score).toBe(0);
+    });
+
+    it("does not penalise mid-period proximity (not a whole period away)", () => {
+      const billingCycle: BillingCycleHint = {
+        invoiceToTransactionDelay: 1,
+        delayVariance: 1,
+        frequencyDays: 7,
+      };
+
+      // actual delay = 4, diff = 3 — closer to 0 periods than 1, and outside
+      // variance/2x-variance, so it falls through to standard proximity.
+      const result = calculateDateScore(
+        new Date("2024-06-01"),
+        new Date("2024-06-05"),
+        billingCycle
+      );
+      expect(result.score).not.toBe(0);
+    });
+
+    it("has no effect when frequencyDays is present but invoiceToTransactionDelay is not", () => {
+      const billingCycle: BillingCycleHint = {
+        delayVariance: 3,
+        frequencyDays: 7,
+        // No invoiceToTransactionDelay — the period check requires it to
+        // compute an expected invoice date, so it must not fire.
+      };
+
+      // 14 day diff → standard scoring → 8, same as with no billing cycle at all.
+      const result = calculateDateScore(
+        new Date("2024-06-01"),
+        new Date("2024-06-15"),
+        billingCycle
+      );
+      expect(result.score).toBe(8);
+    });
+
+    it("acceptance case (Invoice-INCW9PTA-0011 shape): a same-amount weekly receipt ranks highest on exactly one of four candidate charges", () => {
+      // Shape from yazzbert/FiBuKI-selfhost#164: a 38.25 weekly charge was
+      // connected to four transactions (2026-06-29, 07-05, 07-06, 07-06).
+      // Amount and partner scores are identical across all four (same
+      // amount, same partner), so the date score alone must produce a
+      // unique winner once the billing cycle is known. The real reported
+      // dates aren't clean weekly intervals (6, 1, 0 days apart) — that
+      // irregularity is exactly why the charges got tangled in the first
+      // place — so this uses a clean weekly-spaced synthetic fixture
+      // instead of the literal dates: one period before the real charge,
+      // the real charge itself, and two same-day candidates a day after
+      // (mirroring the real data's 07-05/07-06/07-06 cluster).
+      const billingCycle: BillingCycleHint = {
+        invoiceToTransactionDelay: 3,
+        delayVariance: 0,
+        frequencyDays: 7,
+      };
+      const fileDate = new Date("2026-07-02"); // invoice extracted date
+      const target = new Date("2026-07-05"); // this charge's actual date
+
+      const onePeriodBefore = calculateDateScore(fileDate, new Date("2026-06-28"), billingCycle);
+      const theCharge = calculateDateScore(fileDate, target, billingCycle);
+      const dayAfter1 = calculateDateScore(fileDate, new Date("2026-07-06"), billingCycle);
+      const dayAfter2 = calculateDateScore(fileDate, new Date("2026-07-06"), billingCycle);
+
+      expect(theCharge.score).toBe(25);
+      expect(onePeriodBefore.score).toBe(0); // exactly one period before — penalised
+      expect(dayAfter1.score).toBeLessThan(theCharge.score);
+      expect(dayAfter2.score).toBeLessThan(theCharge.score);
+
+      const scores = [onePeriodBefore, theCharge, dayAfter1, dayAfter2].map((r) => r.score);
+      const winners = scores.filter((s) => s === Math.max(...scores));
+      expect(winners).toHaveLength(1);
+    });
+  });
 });
 
 // ============================================================================
@@ -767,5 +926,128 @@ describe("SCORING_CONFIG", () => {
     expect(SCORING_CONFIG.SUGGESTION_THRESHOLD).toBe(50);
     expect(SCORING_CONFIG.DATE_RANGE_DAYS).toBe(30);
     expect(SCORING_CONFIG.MAX_SUGGESTIONS).toBe(5);
+  });
+});
+
+// ============================================================================
+// Documentation-aware suppression (#104)
+// ============================================================================
+
+describe("scoreTransaction — suppression against an already-documented target", () => {
+  // A cent-exact, same-day pair: 40 + 25 + 20 hard-facts = 85, the
+  // auto-match threshold. Every case below starts from this score, so any
+  // difference is the suppression rule and nothing else.
+  const file = (documentType: FileMatchingData["documentType"]): FileMatchingData => ({
+    extractedAmount: 5400,
+    extractedCurrency: "EUR",
+    extractedDate: ts("2024-06-12"),
+    documentType,
+  });
+
+  const target = (
+    documentationState: TransactionData["documentationState"]
+  ): TransactionData => ({
+    id: "tx-1",
+    amount: -5400,
+    date: ts("2024-06-12"),
+    currency: "EUR",
+    name: "Elektro Huber",
+    documentationState,
+  });
+
+  it("scores an undocumented target exactly as it did before the rule existed", () => {
+    const withState = scoreTransaction(file("invoice"), target("undocumented"));
+    const withoutState = scoreTransaction(file("invoice"), target(undefined));
+
+    expect(withState.confidence).toBe(85);
+    expect(withoutState.confidence).toBe(85);
+    expect(withoutState.documentation).toBeUndefined();
+  });
+
+  it("scores an invoice against a receipt-only target at full score — the upgrade suppression must never hide", () => {
+    const result = scoreTransaction(file("invoice"), target("receipt-only"));
+
+    expect(result.confidence).toBe(85);
+    expect(result.documentation?.outcome).toBe("upgrade");
+    expect(result.documentation?.reason).toBe("invoice-upgrades-receipt-only");
+  });
+
+  it("suppresses a receipt against a target that already holds an invoice", () => {
+    const result = scoreTransaction(file("receipt"), target("invoice"));
+
+    expect(result.confidence).toBe(0);
+    expect(result.documentation?.outcome).toBe("suppressed");
+    expect(result.documentation?.reason).toBe("receipt-against-invoice");
+    expect(result.documentation?.confidenceBefore).toBe(85);
+  });
+
+  it("suppresses a second invoice against a target that already holds one", () => {
+    const result = scoreTransaction(file("invoice"), target("invoice"));
+
+    expect(result.confidence).toBe(0);
+    expect(result.documentation?.reason).toBe("duplicate-document-class");
+  });
+
+  it("suppresses a second receipt against a receipt-only target", () => {
+    const result = scoreTransaction(file("receipt"), target("receipt-only"));
+
+    expect(result.confidence).toBe(0);
+    expect(result.documentation?.reason).toBe("duplicate-document-class");
+  });
+
+  it("drops a suppressed pair below the suggestion threshold, so it leaves the queue", () => {
+    const result = scoreTransaction(file("receipt"), target("invoice"));
+
+    expect(result.confidence).toBeLessThan(SCORING_CONFIG.SUGGESTION_THRESHOLD);
+  });
+
+  it("keeps a suppressed pair inspectable rather than erasing why it scored", () => {
+    const result = scoreTransaction(file("receipt"), target("invoice"));
+
+    expect(result.breakdown.amount).toBe(40);
+    expect(result.matchSources).toContain("amount_exact");
+  });
+
+  it("proposes an unknown-type candidate against a documented target but never auto-matches it", () => {
+    const result = scoreTransaction(file("unknown"), target("invoice"));
+
+    expect(result.confidence).toBeGreaterThanOrEqual(SCORING_CONFIG.SUGGESTION_THRESHOLD);
+    expect(result.confidence).toBeLessThan(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+    expect(result.documentation?.outcome).toBe("capped");
+  });
+
+  it("treats a candidate with no classification at all the same way", () => {
+    const result = scoreTransaction(file(undefined), target("invoice"));
+
+    expect(result.confidence).toBeLessThan(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+    expect(result.documentation?.outcome).toBe("capped");
+  });
+
+  it("caps rather than suppresses against a target whose own documents are unclassified", () => {
+    const result = scoreTransaction(file("invoice"), target("unknown"));
+
+    expect(result.confidence).toBeLessThan(SCORING_CONFIG.AUTO_MATCH_THRESHOLD);
+    expect(result.documentation?.outcome).toBe("capped");
+    expect(result.documentation?.reason).toBe("target-documents-unclassified");
+  });
+
+  it("leaves a no-receipt-category target alone — attaching a document there is an upgrade", () => {
+    const result = scoreTransaction(file("receipt"), target("no-receipt-category"));
+
+    expect(result.confidence).toBe(85);
+    expect(result.documentation?.outcome).toBe("clear");
+  });
+
+  it("never raises a score: a capped pair that was already low stays where it was", () => {
+    const weak = scoreTransaction(
+      { ...file("unknown"), extractedDate: ts("2024-06-30") },
+      target("invoice")
+    );
+    const baseline = scoreTransaction(
+      { ...file("unknown"), extractedDate: ts("2024-06-30") },
+      target("undocumented")
+    );
+
+    expect(weak.confidence).toBe(baseline.confidence);
   });
 });

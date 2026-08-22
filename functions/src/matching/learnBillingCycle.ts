@@ -14,6 +14,8 @@ import {
   type BillingCycleTransaction,
   type DerivedBillingCycle,
 } from "./billingCycle";
+import { rescoreFileConnectionsForPartner } from "./rescoreFileConnections";
+import { derivePartnerAliases, deriveScoringWeights } from "./transactionScoring";
 
 const db = getFirestore();
 
@@ -44,6 +46,7 @@ export const learnBillingCycleCallable = createCallable<
     if (!partnerSnap.exists || partnerSnap.data()!.userId !== ctx.userId) {
       throw new HttpsError("not-found", "Partner not found");
     }
+    const partnerData = partnerSnap.data()!;
 
     // Query transactions for this partner, ordered by date. partnerId only —
     // never bankPartnerId, which reflects the bank's descriptor rather than
@@ -77,7 +80,7 @@ export const learnBillingCycleCallable = createCallable<
       return { success: true, billingCycle: null };
     }
 
-    const existingDeclared = partnerSnap.data()!.billingCycle?.declared;
+    const existingDeclared = partnerData.billingCycle?.declared;
     const learnedAt = Timestamp.now();
     const learnedWithTimestamp = learned.map((cycle) => ({ ...cycle, learnedAt }));
     const effective = resolveEffectiveCycles(learned, existingDeclared);
@@ -95,6 +98,30 @@ export const learnBillingCycleCallable = createCallable<
       `[BillingCycle] Partner ${partnerId}: ${learned.length} band(s) learned, ` +
       `sample=${txSnapshot.size}`
     );
+
+    // Re-score already-connected files now that the cycle changed, so a
+    // same-amount recurring document that was mis-attached to the wrong
+    // charge (yazzbert/FiBuKI-selfhost#168) ranks correctly without
+    // disturbing which files are actually connected. Awaited (not
+    // fire-and-forget): callers of this callable expect the re-score to have
+    // already happened by the time it returns. Wrapped in try/catch, not
+    // left to propagate: the billing-cycle write above has already
+    // committed, so a re-score failure (e.g. a connection deleted by a
+    // concurrent session between the query and the write) must not turn a
+    // successful learn into a failed callable call.
+    try {
+      await rescoreFileConnectionsForPartner(
+        ctx.db,
+        ctx.userId,
+        partnerId,
+        txSnapshot.docs,
+        effective,
+        deriveScoringWeights(partnerData),
+        derivePartnerAliases(partnerData)
+      );
+    } catch (error) {
+      console.warn(`[BillingCycle] Re-score failed for partner ${partnerId}:`, error);
+    }
 
     // Today's callers (worker chat, agent tools) expect one flat cycle back.
     // With more than one band, surface the most confident one.

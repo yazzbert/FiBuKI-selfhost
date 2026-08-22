@@ -54,6 +54,7 @@ const OPENAPI_SPEC = {
                       "connect_file_to_transaction",
                       "disconnect_file_from_transaction",
                       "list_transactions_needing_files",
+                      "list_transactions_missing_invoice",
                       "mark_file_as_not_invoice",
                       "unmark_file_as_not_invoice",
                       "dismiss_transaction_suggestion",
@@ -212,6 +213,8 @@ const OPENAPI_SPEC = {
       "Disconnect a file from a transaction. Args: fileId (string), transactionId (string)",
     list_transactions_needing_files:
       "Find transactions without receipts. Returns { transactions, nextCursor, count } — count is this page, not a total. Args: minAmount? (number, in cents), limit? (number, max 500), cursor? (string, nextCursor from the previous page)",
+    list_transactions_missing_invoice:
+      "Find transactions documented by a receipt only — a document is attached but no § 11 UStG invoice was ever received, so no Vorsteuer may be claimed. Each row carries the vendor, the amount, the date and the § 11 elements the attached document is missing. Returns { transactions, nextCursor, count } — count is this page, not a total. Args: minAmount? (number, in cents), limit? (number, max 500), cursor? (string, nextCursor from the previous page)",
     retry_file_extraction:
       "Re-run extraction on a file that extracted without erroring but produced nothing usable (no line items, no VAT amount). Runs synchronously, up to a minute. Resets partner and transaction matching for the file; a manual partner assignment is kept. Args: fileId (string), force? (boolean, required for a file that already extracted cleanly)",
     mark_file_as_not_invoice:
