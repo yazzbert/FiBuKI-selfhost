@@ -34,8 +34,25 @@ import {
 } from "../extraction/retryExtractionOps";
 import { getStorage } from "firebase-admin/storage";
 import { randomUUID } from "crypto";
+import { classifyFileRecord, documentTypeFields } from "../documents/adapter";
+import { syncDocumentationStateForTransactions } from "../documents/syncDocumentationState";
 import { TOOL_DEFINITIONS, TOOL_NAMES } from "./definitions";
 import type { ToolName } from "./definitions";
+import { readBankOriginalAmount } from "../fx/bankOriginalAmount";
+import {
+  CADENCE_DAYS,
+  nextExpectedCharge,
+  resolveEffectiveCycles,
+  selectEffectiveCycleForAmount,
+  summarizeChargeCoverage,
+  type BillingCadence,
+  type BillingDocumentExpectation,
+  type ChargeDocumentation,
+  type DeclaredCycleInput,
+  type DerivedBillingCycle,
+  type ExpectedChargeWindow,
+  type ResolvedEffectiveCycle,
+} from "../matching/billingCycle";
 import { PLANS } from "../billing/config";
 import { KNOWN_AUSTRIAN_RATES } from "../uva/rateSet";
 import type { PlanId, PlanFeatures } from "../billing/config";
@@ -131,6 +148,8 @@ export async function handleTool(
       return updateTransaction(userId, args);
     case "list_transactions_needing_files":
       return listTransactionsNeedingFiles(userId, args);
+    case "list_transactions_missing_invoice":
+      return listTransactionsMissingInvoice(userId, args);
     case "import_transactions":
       return importTransactions(userId, args);
 
@@ -176,6 +195,10 @@ export async function handleTool(
       return getPartner(userId, args.partnerId as string);
     case "create_partner":
       return createPartner(userId, args);
+    case "set_partner_billing_cycle":
+      return setPartnerBillingCycle(userId, args);
+    case "list_recurring_partners":
+      return listRecurringPartners(userId, args);
     case "assign_partner_to_transaction":
       return assignPartnerToTx(userId, args);
     case "remove_partner_from_transaction":
@@ -385,7 +408,24 @@ export async function updateTransaction(userId: string, args: Record<string, unk
   return { success: true, transactionId };
 }
 
-export async function listTransactionsNeedingFiles(userId: string, args: Record<string, unknown>) {
+/**
+ * One page of the user's transactions, newest first, filtered in memory.
+ *
+ * Every listing that selects on an absent field has to work this way:
+ * Firestore has no "field missing" predicate, so the read deliberately
+ * overfetches and a page is built from up to `scanLimit` documents. Rows past
+ * that are reached via `nextCursor`, not silently dropped, and the caller's
+ * `count` is the page size — never a count of what the account owes.
+ *
+ * The cursor is the last document actually CONSUMED, not the last one
+ * returned, so the next page resumes exactly where this one stopped: rows
+ * filtered out in memory are skipped, rows that simply didn't fit are not.
+ */
+async function scanTransactionsPage(
+  userId: string,
+  args: Record<string, unknown>,
+  keep: (transaction: Record<string, unknown>) => boolean
+): Promise<{ page: Array<Record<string, unknown>>; nextCursor: string | null }> {
   let query: FirebaseFirestore.Query = db
     .collection("transactions")
     .where("userId", "==", userId)
@@ -399,13 +439,6 @@ export async function listTransactionsNeedingFiles(userId: string, args: Record<
     }
   }
 
-  // "needs a receipt" is three absent-field tests (fileIds empty,
-  // noReceiptCategoryId unset, quotaExceeded unset) and Firestore has no
-  // "field missing" predicate, so the filtering happens in memory and the read
-  // deliberately overfetches — a page is built from up to `scanLimit`
-  // documents. Rows past that are reached via `nextCursor`, not silently
-  // dropped, and the returned `count` is the page size, never a count of what
-  // the account still owes receipts for.
   const requestedLimit = Math.min(Math.max((args.limit as number) || 50, 1), 500);
   const scanLimit = Math.min(requestedLimit * 5, 1000);
   query = query.limit(scanLimit);
@@ -416,22 +449,15 @@ export async function listTransactionsNeedingFiles(userId: string, args: Record<
     return { id: doc.id, ...data, date: toLocalDate(data.date) || data.date } as Record<string, unknown>;
   });
 
-  let transactions = scanned.filter(
-    (t) =>
-      (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) && !t.noReceiptCategoryId && !t.quotaExceeded
-  );
+  let matching = scanned.filter(keep);
 
   if (args.minAmount !== undefined) {
     const minAmount = args.minAmount as number;
-    transactions = transactions.filter((t) => Math.abs((t.amount as number) || 0) >= minAmount);
+    matching = matching.filter((t) => Math.abs((t.amount as number) || 0) >= minAmount);
   }
 
-  // The page ends either at the requested limit or at the end of the scan.
-  // The cursor is the last document actually consumed, so the next page
-  // resumes exactly where this one stopped — rows filtered out in memory are
-  // skipped, rows that simply didn't fit are not.
-  const page = transactions.slice(0, requestedLimit);
-  const truncated = transactions.length > requestedLimit;
+  const page = matching.slice(0, requestedLimit);
+  const truncated = matching.length > requestedLimit;
   const hasMore = truncated || scanned.length === scanLimit;
 
   const nextCursor = !hasMore
@@ -440,7 +466,79 @@ export async function listTransactionsNeedingFiles(userId: string, args: Record<
       ? (page[page.length - 1].id as string)
       : ((scanned[scanned.length - 1]?.id as string) ?? null);
 
+  return { page, nextCursor };
+}
+
+export async function listTransactionsNeedingFiles(userId: string, args: Record<string, unknown>) {
+  // "needs a receipt" is three absent-field tests: no files, no no-receipt
+  // category, not parked on the quota limit.
+  const { page, nextCursor } = await scanTransactionsPage(
+    userId,
+    args,
+    (t) =>
+      (!(t.fileIds as string[]) || (t.fileIds as string[]).length === 0) &&
+      !t.noReceiptCategoryId &&
+      !t.quotaExceeded
+  );
+
   return { transactions: page, nextCursor, count: page.length };
+}
+
+/**
+ * The chase queue (#104): transactions holding a receipt but no invoice.
+ *
+ * `documentationState` is a present-field equality Firestore could filter on
+ * directly, but that needs a composite index alongside the date ordering, and
+ * the sibling listing already established the over-fetch shape — so this uses
+ * the same scan, with the same cursor semantics.
+ */
+export async function listTransactionsMissingInvoice(userId: string, args: Record<string, unknown>) {
+  const { page, nextCursor } = await scanTransactionsPage(
+    userId,
+    args,
+    (t) => t.documentationState === "receipt-only"
+  );
+
+  // Only the page's own documents are read — the § 11 defect list is what
+  // makes the row actionable, and reading it for rows nobody asked for would
+  // turn a listing into a fan-out.
+  const transactions = await Promise.all(
+    page.map(async (t) => {
+      const fileIds = (t.fileIds as string[] | undefined) ?? [];
+      const files = await Promise.all(
+        fileIds.slice(0, 10).map(async (fileId) => {
+          const snap = await db.collection("files").doc(fileId).get();
+          if (!snap.exists) return null;
+          const data = snap.data()!;
+          return {
+            fileId,
+            fileName: data.fileName ?? null,
+            documentType: data.documentType ?? null,
+            missingElements: data.documentTypeMissingElements ?? [],
+            basisReason: (data.documentTypeBasis as { reason?: string } | undefined)?.reason ?? null,
+          };
+        })
+      );
+
+      const documents = files.filter((f): f is NonNullable<typeof f> => f !== null);
+      const missingElements = [...new Set(documents.flatMap((d) => d.missingElements as string[]))];
+
+      return {
+        id: t.id,
+        date: t.date,
+        amount: t.amount,
+        currency: t.currency ?? "EUR",
+        name: t.name ?? null,
+        partner: t.partner ?? t.partnerName ?? null,
+        partnerId: t.partnerId ?? null,
+        documentationState: t.documentationState,
+        missingElements,
+        documents,
+      };
+    })
+  );
+
+  return { transactions, nextCursor, count: transactions.length };
 }
 
 // ============================================================================
@@ -675,7 +773,19 @@ export async function updateFileExtraction(userId: string, args: Record<string, 
     throw error;
   }
 
+  // The § 11 classification is stored, not recomputed at read time, so a
+  // correction that moves the amount or the rate must move it too — otherwise
+  // the person fixes the figure and the document type stays wrong (#104).
+  const corrected = { ...fileSnap.data()!, ...built.updates };
+  Object.assign(built.updates, documentTypeFields(classifyFileRecord(corrected)));
+
   await fileRef.update(built.updates);
+
+  const previousDocumentType = fileSnap.data()?.documentType;
+  const connectedTransactionIds = (fileSnap.data()?.transactionIds as string[] | undefined) ?? [];
+  if (previousDocumentType !== built.updates.documentType && connectedTransactionIds.length > 0) {
+    await syncDocumentationStateForTransactions(db, connectedTransactionIds);
+  }
 
   const after = (await fileRef.get()).data() ?? {};
   console.log(`[updateFileExtraction] Corrected file ${fileId}`, {
@@ -1195,6 +1305,7 @@ export async function listPartners(userId: string, args: Record<string, unknown>
       website: data.website || null,
       country: data.country || null,
       defaultCategoryId: data.defaultCategoryId || null,
+      billingCycle: toApiBillingCycle(data.billingCycle),
     };
   });
 
@@ -1218,7 +1329,10 @@ export async function getPartner(userId: string, partnerId: string) {
   if (!doc.exists || doc.data()?.userId !== userId) {
     throw new Error("Partner not found");
   }
-  return { id: doc.id, ...doc.data() };
+  const data = doc.data()!;
+  // The stored cycle carries Timestamps, which do not survive JSON — the
+  // billing cycle goes out in the same shape both partner tools return.
+  return { id: doc.id, ...data, billingCycle: toApiBillingCycle(data.billingCycle) };
 }
 
 export async function createPartner(userId: string, args: Record<string, unknown>) {
@@ -1231,6 +1345,454 @@ export async function createPartner(userId: string, args: Record<string, unknown
     website: args.website as string | undefined,
     country: args.country as string | undefined,
   });
+}
+
+// ============================================================================
+// Partner billing cycle (#167)
+// ============================================================================
+
+/** How far back a partner's charges are read when nothing else is asked for. */
+const DEFAULT_COVERAGE_MONTHS = 13;
+
+/**
+ * Charges read per partner in `list_recurring_partners`, newest first.
+ * Four years of a weekly recurrence — past that, coverage counts are bounded
+ * by this rather than by the date range.
+ */
+const CHARGE_SCAN_LIMIT = 200;
+
+const DOCUMENT_EXPECTATIONS: BillingDocumentExpectation[] = [
+  "invoice",
+  "no-receipt-category",
+  "nothing",
+];
+
+/** A partner's stored billing cycle, one entry per recurrence in each half. */
+interface StoredBillingCycle {
+  learned?: Array<DerivedBillingCycle & { learnedAt?: unknown }>;
+  declared?: DeclaredCycleInput[];
+  effective?: ResolvedEffectiveCycle[];
+}
+
+function readStoredBillingCycle(raw: unknown): StoredBillingCycle {
+  if (!raw || typeof raw !== "object") return {};
+  const cycle = raw as StoredBillingCycle;
+  return {
+    learned: Array.isArray(cycle.learned) ? cycle.learned : [],
+    declared: Array.isArray(cycle.declared) ? cycle.declared : [],
+    effective: Array.isArray(cycle.effective) ? cycle.effective : [],
+  };
+}
+
+/**
+ * The billing cycle as the tools return it: the effective view plus the two
+ * halves it was resolved from. Null for a partner that does not bill on a
+ * schedule, so a client can test the field rather than an empty hull.
+ */
+function toApiBillingCycle(raw: unknown): Record<string, unknown> | null {
+  const { learned = [], declared = [], effective = [] } = readStoredBillingCycle(raw);
+  if (learned.length === 0 && declared.length === 0 && effective.length === 0) return null;
+
+  return {
+    effective,
+    // learnedAt is an instant, not a calendar day: ISO, not YYYY-MM-DD.
+    learned: learned.map((cycle) => ({
+      ...cycle,
+      learnedAt: toIsoInstant(cycle.learnedAt),
+    })),
+    declared,
+  };
+}
+
+function toIsoInstant(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value.toISOString();
+  if (typeof value === "object" && typeof (value as Timestamp).toDate === "function") {
+    const date = (value as Timestamp).toDate();
+    return isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  if (typeof value === "string") return value;
+  return null;
+}
+
+/**
+ * Declare, change or clear the declared half of a partner's billing cycle.
+ *
+ * The learned half is never written here — a re-learn and a declaration are
+ * two independent lanes over one field, and the effective view is re-resolved
+ * from both by the same pure function the learner uses. `declared: null`
+ * drops every declaration; with nothing learned to fall back on the field
+ * goes entirely rather than lingering as an empty hull.
+ */
+export async function setPartnerBillingCycle(userId: string, args: Record<string, unknown>) {
+  const { partnerId } = args;
+  if (!partnerId) throw new Error("partnerId is required");
+  if (!("declared" in args)) {
+    throw new Error("declared is required (pass null to clear the declared cycle)");
+  }
+
+  const partnerRef = db.collection("partners").doc(partnerId as string);
+  const partnerSnap = await partnerRef.get();
+  if (!partnerSnap.exists || partnerSnap.data()?.userId !== userId) {
+    throw new Error("Partner not found");
+  }
+
+  const declared = args.declared === null ? [] : parseDeclaredCycles(args.declared);
+  const { learned = [] } = readStoredBillingCycle(partnerSnap.data()!.billingCycle);
+  const effective = resolveEffectiveCycles(learned, declared);
+
+  if (declared.length === 0 && learned.length === 0) {
+    await partnerRef.update({
+      billingCycle: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { success: true, partnerId, billingCycle: null };
+  }
+
+  // Written whole rather than by dotted path: clearing has to remove the
+  // declared half, and a field-path delete cannot run in the same update as
+  // the effective view it changes.
+  const billingCycle = {
+    ...(learned.length > 0 ? { learned } : {}),
+    ...(declared.length > 0 ? { declared } : {}),
+    effective,
+  };
+  await partnerRef.update({ billingCycle, updatedAt: FieldValue.serverTimestamp() });
+
+  return { success: true, partnerId, billingCycle: toApiBillingCycle(billingCycle) };
+}
+
+/** One declared recurrence, or an array of them (one per amount band). */
+function parseDeclaredCycles(raw: unknown): DeclaredCycleInput[] {
+  const entries = Array.isArray(raw) ? raw : [raw];
+  if (entries.length === 0) return [];
+
+  const declared = entries.map(parseDeclaredCycle);
+
+  // Resolution matches a declaration to a learned recurrence by its band, so
+  // two declarations that cannot be told apart would fold onto one another.
+  const bands = declared.map((d) => d.amountBand ?? null);
+  if (new Set(bands).size !== bands.length) {
+    throw new Error("each declared recurrence needs its own amountBand");
+  }
+
+  return declared;
+}
+
+function parseDeclaredCycle(raw: unknown): DeclaredCycleInput {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("declared must be an object, an array of objects, or null");
+  }
+  const input = raw as Record<string, unknown>;
+
+  const cadence = input.cadence as BillingCadence | undefined;
+  if (cadence !== undefined && !(cadence in CADENCE_DAYS)) {
+    throw new Error(
+      `declared.cadence must be one of: ${Object.keys(CADENCE_DAYS).join(", ")} ` +
+      "(or give declared.frequencyDays instead)"
+    );
+  }
+
+  const frequencyDays = requireDays(input, cadence);
+  const expectedAmountMin = optionalCents(input.expectedAmountMin, "declared.expectedAmountMin");
+  const expectedAmountMax = optionalCents(input.expectedAmountMax, "declared.expectedAmountMax");
+  if (
+    expectedAmountMin !== undefined &&
+    expectedAmountMax !== undefined &&
+    expectedAmountMin > expectedAmountMax
+  ) {
+    throw new Error("declared.expectedAmountMin must not exceed declared.expectedAmountMax");
+  }
+
+  let amountBand = optionalCents(input.amountBand, "declared.amountBand");
+  // A band given as a range still needs its nominal amount: that is what a
+  // declaration is matched to a learned recurrence by.
+  if (amountBand === undefined && expectedAmountMin !== undefined && expectedAmountMax !== undefined) {
+    amountBand = Math.round(((expectedAmountMin + expectedAmountMax) / 2) * 100) / 100;
+  }
+
+  const expectation = (input.documentExpectation ?? "invoice") as BillingDocumentExpectation;
+  if (!DOCUMENT_EXPECTATIONS.includes(expectation)) {
+    throw new Error(
+      `declared.documentExpectation must be one of: ${DOCUMENT_EXPECTATIONS.join(", ")}`
+    );
+  }
+
+  let currency: string | undefined;
+  if (input.currency !== undefined && input.currency !== null) {
+    if (typeof input.currency !== "string" || !/^[A-Za-z]{3}$/.test(input.currency)) {
+      throw new Error("declared.currency must be a three-letter code, e.g. EUR");
+    }
+    currency = input.currency.toUpperCase();
+  }
+
+  // Spread conditionally: Firestore rejects an undefined value outright.
+  return {
+    frequencyDays,
+    ...(amountBand !== undefined ? { amountBand } : {}),
+    ...(expectedAmountMin !== undefined ? { expectedAmountMin } : {}),
+    ...(expectedAmountMax !== undefined ? { expectedAmountMax } : {}),
+    ...(currency !== undefined ? { currency } : {}),
+    documentExpectation: expectation,
+  };
+}
+
+function requireDays(input: Record<string, unknown>, cadence: BillingCadence | undefined): number {
+  const named = cadence !== undefined ? CADENCE_DAYS[cadence] : undefined;
+  const given = input.frequencyDays;
+
+  if (given !== undefined && given !== null) {
+    if (typeof given !== "number" || !Number.isFinite(given) || given <= 0) {
+      throw new Error("declared.frequencyDays must be a positive number of days");
+    }
+    if (named !== undefined && Math.round(given) !== named) {
+      throw new Error(
+        `declared.cadence "${cadence}" is ${named} days — drop declared.frequencyDays or give ${named}`
+      );
+    }
+    return Math.round(given);
+  }
+
+  if (named === undefined) {
+    throw new Error("declared needs either a cadence or frequencyDays");
+  }
+  return named;
+}
+
+function optionalCents(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative amount in cents`);
+  }
+  return value;
+}
+
+/**
+ * Every partner that bills on a schedule, with what a subscription view needs
+ * to render without a second call per partner: the cycle, the last charge
+ * seen, the next expected window and the document coverage of its charges.
+ *
+ * **This response shape is a contract** — yazzbert/homelab#134 renders from it
+ * directly. Keep it stable.
+ *
+ * "Recurring" is an effective cycle, declared or learned, which lives in a
+ * nested array Firestore cannot filter on: the partners are read the way
+ * `list_partners` reads them and filtered here, and only the page's partners
+ * cost a transaction query.
+ */
+export async function listRecurringPartners(userId: string, args: Record<string, unknown>) {
+  const dateTo = (args.dateTo as string | undefined) ?? new Date().toISOString().slice(0, 10);
+  const rangeEnd = dayEndExclusiveUtc(dateTo);
+  if (!rangeEnd) {
+    throw new Error(`dateTo must be a calendar day as YYYY-MM-DD, got "${args.dateTo}"`);
+  }
+  const dateFrom = (args.dateFrom as string | undefined) ?? defaultCoverageStart(dateTo);
+  const rangeStart = dayStartUtc(dateFrom);
+  if (!rangeStart) {
+    throw new Error(`dateFrom must be a calendar day as YYYY-MM-DD, got "${args.dateFrom}"`);
+  }
+
+  const snapshot = await db
+    .collection("partners")
+    .where("userId", "==", userId)
+    .where("isActive", "==", true)
+    .orderBy("name", "asc")
+    .get();
+
+  const recurring = snapshot.docs
+    .map((doc) => ({ id: doc.id, data: doc.data(), cycle: readStoredBillingCycle(doc.data().billingCycle) }))
+    .filter((partner) => (partner.cycle.effective?.length ?? 0) > 0);
+
+  // The cursor is the last partner id of the previous page; an unknown one
+  // starts from the beginning, as it does in the transaction listings.
+  const cursorIndex = args.cursor
+    ? recurring.findIndex((partner) => partner.id === (args.cursor as string))
+    : -1;
+  const start = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+  const limit = Math.min(Math.max((args.limit as number) || 25, 1), 100);
+  const page = recurring.slice(start, start + limit);
+
+  const partners = [];
+  for (const partner of page) {
+    partners.push(
+      await buildRecurringPartner(
+        userId,
+        partner.id,
+        partner.data,
+        partner.cycle,
+        rangeStart,
+        rangeEnd
+      )
+    );
+  }
+
+  return {
+    partners,
+    nextCursor: start + page.length < recurring.length ? page[page.length - 1].id : null,
+    count: partners.length,
+    dateFrom,
+    dateTo,
+  };
+}
+
+/** Default coverage window: wide enough that a yearly charge is seen once. */
+function defaultCoverageStart(dateTo: string): string {
+  const end = dayStartUtc(dateTo) ?? new Date();
+  const from = new Date(end);
+  from.setUTCMonth(from.getUTCMonth() - DEFAULT_COVERAGE_MONTHS);
+  return from.toISOString().slice(0, 10);
+}
+
+/** One charge of a recurring partner, as read off the transaction. */
+interface RecurringCharge {
+  id: string;
+  date: Date;
+  /** Signed, in the account's currency — the amount the bands were learned on. */
+  amount: number;
+  currency: string;
+  hasFile: boolean;
+  hasCategory: boolean;
+  noReceiptCategoryId: string | null;
+  /** What the bank says it actually charged, before settling (#112). */
+  billed: { amount: number; currency: string } | null;
+}
+
+async function buildRecurringPartner(
+  userId: string,
+  partnerId: string,
+  data: Record<string, unknown>,
+  cycle: StoredBillingCycle,
+  rangeStart: Date,
+  rangeEnd: Date
+) {
+  // partnerId only — never bankPartnerId: the card descriptor's partner is
+  // not the supplier whose cycle this is.
+  const snapshot = await db
+    .collection("transactions")
+    .where("userId", "==", userId)
+    .where("partnerId", "==", partnerId)
+    .where("date", "<", Timestamp.fromDate(rangeEnd))
+    .orderBy("date", "desc")
+    .limit(CHARGE_SCAN_LIMIT)
+    .get();
+
+  const charges = snapshot.docs
+    .map((doc) => toRecurringCharge(doc.id, doc.data()))
+    .filter((charge): charge is RecurringCharge => charge !== null)
+    .sort((a, b) => b.date.getTime() - a.date.getTime());
+
+  const effective = cycle.effective ?? [];
+  const primary = effective[0];
+  // Which recurrence a charge belongs to is the same band selection the
+  // matcher makes, on the same amount the bands were learned from. A charge
+  // that belongs to no band — a one-off payment to a recurring vendor — is
+  // counted for the partner but is nobody's recurrence, so it can't push a
+  // stray amount into the weekly band's last charge.
+  const bandOf = (charge: RecurringCharge) =>
+    selectEffectiveCycleForAmount(effective, charge.amount);
+  const expectationOf = (charge: RecurringCharge) => bandOf(charge) ?? primary;
+  const inRange = charges.filter((charge) => charge.date.getTime() >= rangeStart.getTime());
+  const lastCharge = charges[0] ?? null;
+
+  return {
+    partnerId,
+    name: data.name ?? null,
+    // The vendor's own site is where a missing invoice gets downloaded from.
+    website: data.website ?? null,
+    billingCycle: toApiBillingCycle(data.billingCycle),
+    lastCharge: lastCharge ? toApiCharge(lastCharge) : null,
+    nextExpected: toApiWindow(
+      nextExpectedCharge(lastCharge?.date ?? null, lastCharge ? expectationOf(lastCharge) : primary)
+    ),
+    coverage: summarizeChargeCoverage(
+      inRange.map((charge) => toDocumentation(charge, expectationOf(charge)))
+    ),
+    recurrences: effective.map((band) => {
+      const ofBand = (charge: RecurringCharge) => bandOf(charge) === band;
+      const last = charges.find(ofBand) ?? null;
+      return {
+        amountBand: band.amountBand ?? null,
+        source: band.source,
+        frequencyDays: band.frequencyDays,
+        frequencyConfidence: band.frequencyConfidence ?? null,
+        typicalDayOfMonth: band.typicalDayOfMonth ?? null,
+        documentExpectation: band.documentExpectation ?? "invoice",
+        lastCharge: last ? toApiCharge(last) : null,
+        nextExpected: toApiWindow(nextExpectedCharge(last?.date ?? null, band)),
+        coverage: summarizeChargeCoverage(
+          inRange.filter(ofBand).map((charge) => toDocumentation(charge, band))
+        ),
+      };
+    }),
+  };
+}
+
+function toRecurringCharge(id: string, data: Record<string, unknown>): RecurringCharge | null {
+  const date = data.date instanceof Date
+    ? data.date
+    : typeof (data.date as Timestamp | undefined)?.toDate === "function"
+      ? (data.date as Timestamp).toDate()
+      : null;
+  if (!date || isNaN(date.getTime())) return null;
+
+  const original = readBankOriginalAmount(
+    (data._original as { rawRow?: Record<string, string> } | undefined)?.rawRow
+  );
+
+  return {
+    id,
+    date,
+    amount: typeof data.amount === "number" ? data.amount : 0,
+    currency: (data.currency as string) || "EUR",
+    hasFile: ((data.fileIds as string[] | undefined) ?? []).length > 0,
+    hasCategory: !!data.noReceiptCategoryId,
+    noReceiptCategoryId: (data.noReceiptCategoryId as string | undefined) ?? null,
+    billed: original ? { amount: original.amount, currency: original.currency } : null,
+  };
+}
+
+function toDocumentation(
+  charge: RecurringCharge,
+  band: ResolvedEffectiveCycle | undefined
+): ChargeDocumentation {
+  return {
+    hasFile: charge.hasFile,
+    hasCategory: charge.hasCategory,
+    documentExpectation: band?.documentExpectation,
+  };
+}
+
+/**
+ * A charge, in the currency it was billed in and in EUR.
+ *
+ * The bank books in the account's currency; what the vendor actually charged
+ * is the bank's own stated original (#112), which is why nothing here
+ * converts. Both figures are ABSOLUTE cents — unlike the signed amounts
+ * `list_transactions` returns, a charge is a charge whichever way it was
+ * booked. `amountEur` is null when the account is not in EUR: no rate is
+ * stored to convert with, and a guess would end up in a run-rate.
+ */
+function toApiCharge(charge: RecurringCharge) {
+  return {
+    transactionId: charge.id,
+    date: toLocalDate(charge.date),
+    amount: charge.billed ? charge.billed.amount : Math.abs(charge.amount),
+    currency: charge.billed ? charge.billed.currency : charge.currency,
+    amountEur: charge.currency.toUpperCase() === "EUR" ? Math.abs(charge.amount) : null,
+    hasFile: charge.hasFile,
+    hasCategory: charge.hasCategory,
+    noReceiptCategoryId: charge.noReceiptCategoryId,
+  };
+}
+
+function toApiWindow(window: ExpectedChargeWindow | null) {
+  if (!window) return null;
+  return {
+    expectedAt: toLocalDate(window.expectedAt),
+    from: toLocalDate(window.from),
+    to: toLocalDate(window.to),
+    varianceDays: window.varianceDays,
+  };
 }
 
 export async function assignPartnerToTx(userId: string, args: Record<string, unknown>) {
@@ -1686,6 +2248,7 @@ export async function scoreFileTransactionMatch(userId: string, args: Record<str
       extractedIban: fileData.extractedIban,
       extractedText: fileData.extractedText,
       partnerId: fileData.partnerId,
+      documentType: fileData.documentType,
     },
     {
       id: transactionId as string,
@@ -1698,6 +2261,7 @@ export async function scoreFileTransactionMatch(userId: string, args: Record<str
       partnerId: txData.partnerId,
       partnerIban: txData.partnerIban,
       reference: txData.reference,
+      documentationState: txData.documentationState,
     },
     []
   );
@@ -1708,6 +2272,9 @@ export async function scoreFileTransactionMatch(userId: string, args: Record<str
     confidence: result.confidence,
     matchSources: result.matchSources,
     breakdown: formatScoreBreakdown(result.breakdown),
+    // #104: why a confident pair still scored zero, or why it will not
+    // auto-connect. Absent when the transaction has no documentation state.
+    documentation: result.documentation ?? null,
   };
 }
 

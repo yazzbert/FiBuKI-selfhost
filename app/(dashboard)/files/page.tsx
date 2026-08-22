@@ -9,7 +9,6 @@ import { storage, db } from "@/lib/firebase/config";
 import { createFile, checkFileDuplicate, retryFileExtraction, connectFileToTransaction, OperationsContext } from "@/lib/operations";
 import { FileTable } from "@/components/files/file-table";
 import { FileDetailPanel } from "@/components/files/file-detail-panel";
-import { FileBulkActionsPanel } from "@/components/files/file-bulk-actions-panel";
 import { FileUploadZone } from "@/components/files/file-upload-zone";
 import { FileViewerOverlay } from "@/components/files/file-viewer-overlay";
 import { ConnectTransactionOverlay } from "@/components/files/connect-transaction-overlay";
@@ -25,7 +24,14 @@ import { useGlobalPartners } from "@/hooks/use-global-partners";
 import { useTransactions } from "@/hooks/use-transactions";
 import { TaxFile, FileFilters } from "@/types/file";
 import { parseFileFiltersFromUrl, buildFileSearchParams } from "@/lib/filters/file-url-params";
+import { getNeighbourRowId } from "@/lib/navigation/row-neighbour";
+import {
+  toggleFileCheckbox,
+  toggleSelectAll,
+  getSelectAllCheckedState,
+} from "@/lib/selection/bulk-file-selection";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SummaryToast, SummaryToastState } from "@/components/ui/summary-toast";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -106,7 +112,7 @@ function FilesContent() {
   // Get search value from URL
   const searchValue = searchParams.get("search") || "";
 
-  const { files, allFilesCount, loading, remove, restore, markAsNotInvoice, unmarkAsNotInvoice } = useFiles({
+  const { files, allFilesCount, invoiceCount, loading, remove, restore, markAsNotInvoice, unmarkAsNotInvoice } = useFiles({
     search: searchValue,
     ...filters,
   });
@@ -154,6 +160,8 @@ function FilesContent() {
   const [additionalSelectedIds, setAdditionalSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [bulkToast, setBulkToast] = useState<SummaryToastState | null>(null);
 
   // Primary selected ID comes from URL
   const primarySelectedId = searchParams.get("id");
@@ -170,13 +178,42 @@ function FilesContent() {
     return all;
   }, [primarySelectedId, additionalSelectedIds]);
 
-  // Derive selected files from all IDs
-  const selectedFiles = useMemo(() => {
-    return files.filter((f) => allSelectedIds.has(f.id));
-  }, [files, allSelectedIds]);
+  // The floating bulk-action bar shows once there's an additional (bulk) selection —
+  // solo browsing (just primarySelectedId, no checkboxes/modifier-clicks) doesn't count.
+  const showBulkActionBar = additionalSelectedIds.size > 0;
 
-  // Show bulk panel when there are additional selections (primary + at least one more)
-  const showBulkPanel = additionalSelectedIds.size > 0;
+  const displayedFileIds = useMemo(() => files.map((f) => f.id), [files]);
+
+  // The order the table paints: the page's filters and search fold into `files`,
+  // the sort column and direction are the table's own state, so it reports them
+  // back here. Prev/next walks this list. Until the table has reported (first
+  // paint, or while it is behind the loading skeleton) fall back to the hook's
+  // array order so navigation is never dead.
+  const [tableOrderedFileIds, setTableOrderedFileIds] = useState<string[]>([]);
+  const orderedFileIds = useMemo(
+    () => (tableOrderedFileIds.length ? tableOrderedFileIds : displayedFileIds),
+    [tableOrderedFileIds, displayedFileIds]
+  );
+
+  const selectAllState = useMemo(
+    () => getSelectAllCheckedState({ displayedFileIds, selectedIds: allSelectedIds }),
+    [displayedFileIds, allSelectedIds]
+  );
+
+  // Auto-dismiss the bulk-action summary toast
+  useEffect(() => {
+    if (!bulkToast) return;
+    const timer = setTimeout(() => setBulkToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [bulkToast]);
+
+  // Clear the bulk selection whenever filters or search actually change (not on
+  // every searchParams navigation — filters/searchValue are keyed so this only
+  // fires when their real values change, e.g. not when ?id= changes on click).
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
+  useEffect(() => {
+    setAdditionalSelectedIds(new Set());
+  }, [filtersKey, searchValue]);
 
   // File viewer state
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -420,16 +457,12 @@ function FilesContent() {
   }, [invoiceIdParam, files]);
 
   // Invoices are also rows in the files list (each issued invoice has a
-  // backing TaxFile). Find the index of the invoice's file so up/down
-  // navigation can move through the same list the user sees.
-  const invoiceFileIndex = useMemo(() => {
-    if (!invoiceFileId) return -1;
-    return files.findIndex((f) => f.id === invoiceFileId);
-  }, [invoiceFileId, files]);
-
-  const invoiceHasPrevious = invoiceFileIndex > 0;
+  // backing TaxFile), so invoice navigation walks the same displayed order as
+  // the file panel.
+  const invoiceHasPrevious =
+    getNeighbourRowId(orderedFileIds, invoiceFileId, -1) !== null;
   const invoiceHasNext =
-    invoiceFileIndex >= 0 && invoiceFileIndex < files.length - 1;
+    getNeighbourRowId(orderedFileIds, invoiceFileId, 1) !== null;
 
   // Set page title
   usePageTitle("Files", selectedFile?.fileName);
@@ -448,14 +481,10 @@ function FilesContent() {
     [ctx, selectedFile, closeConnectTransactionOverlay]
   );
 
-  // Find current index for navigation
-  const currentIndex = useMemo(() => {
-    if (!primarySelectedId) return -1;
-    return files.findIndex((f) => f.id === primarySelectedId);
-  }, [primarySelectedId, files]);
-
-  const hasPrevious = currentIndex > 0;
-  const hasNext = currentIndex >= 0 && currentIndex < files.length - 1;
+  const hasPrevious =
+    getNeighbourRowId(orderedFileIds, primarySelectedId, -1) !== null;
+  const hasNext =
+    getNeighbourRowId(orderedFileIds, primarySelectedId, 1) !== null;
 
   // Note: We intentionally do NOT close the viewer when navigating between files
   // The viewer should stay open so users can browse through files quickly
@@ -550,7 +579,9 @@ function FilesContent() {
       // The FileDetailPanel fork to InvoiceDetailPanel does NOT lift those, so
       // routing invoice files via ?id= leaves the thumbnail-toggle dead.
       if (file.invoiceId) {
-        const params = new URLSearchParams();
+        // Keep filters and search on the URL: they define the list prev/next
+        // walks, so landing on an invoice row must not widen it.
+        const params = buildFileSearchParams(filters, searchValue, null);
         params.set("invoiceId", file.invoiceId);
         router.push(`/files?${params.toString()}`, { scroll: false });
         return;
@@ -567,17 +598,50 @@ function FilesContent() {
     router.push(newUrl, { scroll: false });
   }, [router, filters, searchValue]);
 
-  const handleNavigatePrevious = useCallback(() => {
-    if (currentIndex > 0) {
-      handleSelectFile(files[currentIndex - 1]);
-    }
-  }, [currentIndex, files, handleSelectFile]);
+  // Checkbox column: independent of row-click selection, so it never opens or
+  // navigates the detail panel — except unchecking the primary row's own
+  // checkbox, which has no other representation than closing its panel.
+  const handleFileCheckboxChange = useCallback(
+    (fileId: string, checked: boolean) => {
+      const result = toggleFileCheckbox({
+        fileId,
+        checked,
+        primarySelectedId,
+        additionalSelectedIds,
+      });
+      setAdditionalSelectedIds(result.additionalSelectedIds);
+      if (result.closePrimary) {
+        handleCloseDetail();
+      }
+    },
+    [primarySelectedId, additionalSelectedIds, handleCloseDetail]
+  );
 
-  const handleNavigateNext = useCallback(() => {
-    if (currentIndex >= 0 && currentIndex < files.length - 1) {
-      handleSelectFile(files[currentIndex + 1]);
+  const handleToggleSelectAll = useCallback(() => {
+    const result = toggleSelectAll({
+      displayedFileIds,
+      primarySelectedId,
+      additionalSelectedIds,
+    });
+    setAdditionalSelectedIds(result.additionalSelectedIds);
+    if (result.closePrimary) {
+      handleCloseDetail();
     }
-  }, [currentIndex, files, handleSelectFile]);
+  }, [displayedFileIds, primarySelectedId, additionalSelectedIds, handleCloseDetail]);
+
+  // Step through the displayed order (-1 previous, 1 next)
+  const navigateFileBy = useCallback(
+    (step: number) => {
+      const targetId = getNeighbourRowId(orderedFileIds, primarySelectedId, step);
+      const target = targetId ? files.find((f) => f.id === targetId) : undefined;
+      if (target) handleSelectFile(target);
+    },
+    [orderedFileIds, primarySelectedId, files, handleSelectFile]
+  );
+
+  const handleNavigatePrevious = useCallback(() => navigateFileBy(-1), [navigateFileBy]);
+
+  const handleNavigateNext = useCallback(() => navigateFileBy(1), [navigateFileBy]);
 
   // Navigate from the invoice panel through the files list. When the
   // destination row backs another invoice, route via ?invoiceId= so the
@@ -585,28 +649,38 @@ function FilesContent() {
   // regular files, route via ?id= so they get the standard file panel.
   const navigateInvoiceTo = useCallback(
     (target: TaxFile) => {
-      const params = new URLSearchParams();
+      // Filters and search stay on the URL for the same reason as above.
+      const params = buildFileSearchParams(
+        filters,
+        searchValue,
+        target.invoiceId ? null : target.id
+      );
       if (target.invoiceId) {
         params.set("invoiceId", target.invoiceId);
-      } else {
-        params.set("id", target.id);
       }
       router.push(`/files?${params.toString()}`, { scroll: false });
     },
-    [router]
+    [router, filters, searchValue]
   );
 
-  const handleInvoiceNavigatePrevious = useCallback(() => {
-    if (invoiceFileIndex > 0) {
-      navigateInvoiceTo(files[invoiceFileIndex - 1]);
-    }
-  }, [invoiceFileIndex, files, navigateInvoiceTo]);
+  const navigateInvoiceBy = useCallback(
+    (step: number) => {
+      const targetId = getNeighbourRowId(orderedFileIds, invoiceFileId, step);
+      const target = targetId ? files.find((f) => f.id === targetId) : undefined;
+      if (target) navigateInvoiceTo(target);
+    },
+    [orderedFileIds, invoiceFileId, files, navigateInvoiceTo]
+  );
 
-  const handleInvoiceNavigateNext = useCallback(() => {
-    if (invoiceFileIndex >= 0 && invoiceFileIndex < files.length - 1) {
-      navigateInvoiceTo(files[invoiceFileIndex + 1]);
-    }
-  }, [invoiceFileIndex, files, navigateInvoiceTo]);
+  const handleInvoiceNavigatePrevious = useCallback(
+    () => navigateInvoiceBy(-1),
+    [navigateInvoiceBy]
+  );
+
+  const handleInvoiceNavigateNext = useCallback(
+    () => navigateInvoiceBy(1),
+    [navigateInvoiceBy]
+  );
 
   const handleDelete = useCallback(async () => {
     if (!selectedFile) return;
@@ -740,57 +814,115 @@ function FilesContent() {
   // Multi-select: bulk delete
   const handleBulkDelete = useCallback(async () => {
     if (allSelectedIds.size === 0) return;
-    if (!confirm(`Delete ${allSelectedIds.size} files? This cannot be undone.`)) return;
+    const fileIds = Array.from(allSelectedIds);
+    if (!confirm(`Delete ${fileIds.length} files? This cannot be undone.`)) return;
 
     setIsBulkDeleting(true);
+    setBulkProgress({ completed: 0, total: fileIds.length });
+    let successCount = 0;
+    let failureCount = 0;
     try {
-      const fileIds = Array.from(allSelectedIds);
       for (const fileId of fileIds) {
         const file = files.find((f) => f.id === fileId);
         const isGmailFile = file?.sourceType?.startsWith("gmail");
-        await remove(fileId, isGmailFile);
+        try {
+          await remove(fileId, isGmailFile);
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to delete file ${fileId}:`, error);
+          failureCount++;
+        }
+        setBulkProgress((prev) => (prev ? { ...prev, completed: prev.completed + 1 } : prev));
       }
       // Clear additional selections and primary
       setAdditionalSelectedIds(new Set());
       const params = buildFileSearchParams(filters, searchValue, null);
       const newUrl = params.toString() ? `/files?${params.toString()}` : "/files";
       router.push(newUrl, { scroll: false });
+      setBulkToast({
+        message:
+          failureCount > 0
+            ? `Deleted ${successCount} of ${fileIds.length} files (${failureCount} failed)`
+            : `Deleted ${successCount} file${successCount === 1 ? "" : "s"}`,
+        tone: failureCount > 0 ? "error" : "success",
+      });
     } finally {
       setIsBulkDeleting(false);
+      setBulkProgress(null);
     }
   }, [allSelectedIds, files, remove, router, filters, searchValue]);
 
   // Multi-select: bulk mark as not invoice
   const handleBulkMarkAsNotInvoice = useCallback(async () => {
     if (allSelectedIds.size === 0) return;
+    const fileIds = Array.from(allSelectedIds);
 
     setIsBulkUpdating(true);
+    setBulkProgress({ completed: 0, total: fileIds.length });
+    let successCount = 0;
+    let failureCount = 0;
     try {
-      for (const fileId of allSelectedIds) {
-        await markAsNotInvoice(fileId);
+      for (const fileId of fileIds) {
+        try {
+          await markAsNotInvoice(fileId);
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to mark file ${fileId} as not invoice:`, error);
+          failureCount++;
+        }
+        setBulkProgress((prev) => (prev ? { ...prev, completed: prev.completed + 1 } : prev));
       }
+      setAdditionalSelectedIds(new Set());
+      setBulkToast({
+        message:
+          failureCount > 0
+            ? `Updated ${successCount} of ${fileIds.length} files (${failureCount} failed)`
+            : `Marked ${successCount} file${successCount === 1 ? "" : "s"} as not invoice`,
+        tone: failureCount > 0 ? "error" : "success",
+      });
     } finally {
       setIsBulkUpdating(false);
+      setBulkProgress(null);
     }
   }, [allSelectedIds, markAsNotInvoice]);
 
   // Multi-select: bulk mark as invoice (unmark as not invoice)
   const handleBulkMarkAsInvoice = useCallback(async () => {
     if (allSelectedIds.size === 0) return;
+    const fileIds = Array.from(allSelectedIds);
 
     setIsBulkUpdating(true);
+    setBulkProgress({ completed: 0, total: fileIds.length });
+    let successCount = 0;
+    let failureCount = 0;
     try {
-      for (const fileId of allSelectedIds) {
-        await unmarkAsNotInvoice(fileId);
-        // Trigger re-extraction since user says it IS an invoice
+      for (const fileId of fileIds) {
         try {
-          await retryFileExtraction(ctx, fileId);
+          await unmarkAsNotInvoice(fileId);
+          successCount++;
+          // Trigger re-extraction since user says it IS an invoice
+          try {
+            await retryFileExtraction(ctx, fileId);
+          } catch (error) {
+            console.error(`Failed to re-extract file ${fileId}:`, error);
+          }
         } catch (error) {
-          console.error(`Failed to re-extract file ${fileId}:`, error);
+          console.error(`Failed to mark file ${fileId} as invoice:`, error);
+          failureCount++;
         }
+        setBulkProgress((prev) => (prev ? { ...prev, completed: prev.completed + 1 } : prev));
       }
+      setAdditionalSelectedIds(new Set());
+      setBulkToast({
+        message:
+          failureCount > 0
+            ? `Updated ${successCount} of ${fileIds.length} files (${failureCount} failed)`
+            : `Marked ${successCount} file${successCount === 1 ? "" : "s"} as invoice`,
+        tone: failureCount > 0 ? "error" : "success",
+      });
     } finally {
       setIsBulkUpdating(false);
+      setBulkProgress(null);
     }
   }, [allSelectedIds, unmarkAsNotInvoice, ctx]);
 
@@ -822,8 +954,7 @@ function FilesContent() {
       <div
         className="relative h-full flex flex-col transition-[margin] duration-200 ease-in-out"
         style={{
-          marginRight:
-            selectedFile || showBulkPanel || invoiceIdParam ? panelWidth : 0,
+          marginRight: selectedFile || invoiceIdParam ? panelWidth : 0,
         }}
       >
         {/* FABs — anchored to the content column so they live within the
@@ -869,9 +1000,13 @@ function FilesContent() {
             ref={tableRef}
             files={files}
             allFilesCount={allFilesCount}
+            invoiceCount={invoiceCount}
             loading={loading}
             onSelectFile={handleSelectFile}
-            selectedFileId={primarySelectedId}
+            // While the invoice panel is open there is no ?id=, so hand the
+            // invoice's backing row over instead: it gets the primary highlight
+            // and the auto-scroll that any other navigated-to row gets.
+            selectedFileId={primarySelectedId ?? invoiceFileId}
             searchValue={searchValue}
             onSearchChange={handleSearchChange}
             filters={filters}
@@ -882,6 +1017,21 @@ function FilesContent() {
             enableMultiSelect={true}
             selectedRowIds={allSelectedIds}
             onSelectionChange={handleSelectionChange}
+            onDisplayedOrderChange={setTableOrderedFileIds}
+            onToggleFileSelection={handleFileCheckboxChange}
+            onToggleSelectAll={handleToggleSelectAll}
+            selectAllState={selectAllState}
+            bulkActionBar={{
+              selectedCount: allSelectedIds.size,
+              visible: showBulkActionBar,
+              onMarkAsNotInvoice: handleBulkMarkAsNotInvoice,
+              onMarkAsInvoice: handleBulkMarkAsInvoice,
+              onDelete: handleBulkDelete,
+              onClearSelection: handleClearSelection,
+              isDeleting: isBulkDeleting,
+              isUpdating: isBulkUpdating,
+              progress: bulkProgress,
+            }}
             onUploadClick={() => setIsUploadDialogOpen(true)}
           />
 
@@ -962,33 +1112,6 @@ function FilesContent() {
             />
           </div>
         </div>
-      ) : showBulkPanel ? (
-        <div
-          ref={panelRef}
-          className="fixed right-0 top-14 bottom-0 z-50 bg-background border-l flex"
-          style={{ width: panelWidth }}
-        >
-          {/* Resize handle */}
-          <div
-            className={cn(
-              "w-1 cursor-col-resize bg-border hover:bg-primary/20 active:bg-primary/30 flex-shrink-0",
-              isResizing && "bg-primary/30"
-            )}
-            onMouseDown={handleResizeStart}
-          />
-          {/* Bulk actions panel content */}
-          <div className="flex-1 overflow-hidden">
-            <FileBulkActionsPanel
-              selectedFiles={selectedFiles}
-              onDelete={handleBulkDelete}
-              onMarkAsNotInvoice={handleBulkMarkAsNotInvoice}
-              onMarkAsInvoice={handleBulkMarkAsInvoice}
-              onClearSelection={handleClearSelection}
-              isDeleting={isBulkDeleting}
-              isUpdating={isBulkUpdating}
-            />
-          </div>
-        </div>
       ) : selectedFile && (
         <div
           ref={panelRef}
@@ -1041,6 +1164,7 @@ function FilesContent() {
           <div className="fixed inset-0 z-50 cursor-col-resize" />
         )}
       </div>
+      <SummaryToast toast={bulkToast} />
     </TooltipProvider>
   );
 }
