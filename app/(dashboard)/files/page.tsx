@@ -26,6 +26,7 @@ import { TaxFile, FileFilters } from "@/types/file";
 import { PartnerFormData } from "@/types/partner";
 import { parseFileFiltersFromUrl, buildFileSearchParams } from "@/lib/filters/file-url-params";
 import { getNeighbourRowId } from "@/lib/navigation/row-neighbour";
+import { useRowNavigationKeys } from "@/hooks/use-row-navigation-keys";
 import {
   toggleFileCheckbox,
   toggleSelectAll,
@@ -685,6 +686,18 @@ function FilesContent() {
     () => navigateInvoiceBy(1),
     [navigateInvoiceBy]
   );
+
+  // Left/right walk the displayed order through the panel that is open — the
+  // invoice panel when ?invoiceId= is set, the file panel otherwise. The file
+  // viewer and the connect overlay render inline with no dialog role of their
+  // own, so they have to be named here; portalled dialogs and menus (upload,
+  // the bulk partner picker, any dropdown) the hook sees for itself.
+  const isFileOverlayOpen = viewerOpen || isConnectTransactionOpen;
+  useRowNavigationKeys({
+    enabled: Boolean(invoiceIdParam || selectedFile) && !isFileOverlayOpen,
+    onPrevious: invoiceIdParam ? handleInvoiceNavigatePrevious : handleNavigatePrevious,
+    onNext: invoiceIdParam ? handleInvoiceNavigateNext : handleNavigateNext,
+  });
 
   const handleDelete = useCallback(async () => {
     if (!selectedFile) return;
