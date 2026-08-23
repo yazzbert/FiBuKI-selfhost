@@ -581,6 +581,20 @@ VAT SUMMARY BLOCK ("rateGroups", IMPORTANT):
 - If the document prints NO such summary block, return "rateGroups": null
 - Never invent a summary block from a single total line
 
+DESIGNATED PAYABLE AMOUNT ("payableAmount", IMPORTANT):
+- Some documents print more than one candidate total: a Mahnung shows the
+  original invoice amount AND the sum now demanded, a Schlussrechnung shows the
+  full scope beside what is left after part-payments
+- Transcribe the figure THE DOCUMENT ITSELF designates as due, copied from
+  beside its own wording: "Zahlbetrag", "Zahlungsbetrag", "Zu zahlen",
+  "Zu zahlender Betrag", "Rechnungsbetrag", "Offener Betrag", "Amount Due",
+  "Total Due", "Balance Due"
+- Copy what is printed - do NOT compute it, do NOT derive it from a difference
+  or a sum, do NOT reconcile it against the other totals on the page
+- Never pick a number just because it is the largest, the smallest or the last
+  one on the page
+- If the document designates NO figure as due, return "payableAmount": null
+
 DOCUMENT SELF-DESIGNATION ("selfDesignation", IMPORTANT):
 - Transcribe the heading the document gives ITSELF, exactly as printed:
   "Rechnung", "Invoice", "Quittung", "Zahlungsbestätigung", "Receipt",
@@ -635,6 +649,7 @@ JSON structure:
     "date_raw": "15.12.2024",
     "amount": 12345,
     "amount_raw": "123,45 €",
+    "payableAmount": 12345,
     "currency": "EUR",
     "vatPercent": 19,
     "vatPercent_raw": "19%",
@@ -750,6 +765,7 @@ JSON only, no markdown, no explanation.`;
       date_raw?: string | null;
       amount?: number | null;
       amount_raw?: string | null;
+      payableAmount?: number | null;
       currency?: string | null;
       vatPercent?: number | null;
       vatPercent_raw?: string | null;
@@ -838,6 +854,9 @@ JSON only, no markdown, no explanation.`;
   const extracted: ExtractedData = {
     date: parsed.extracted?.date || null,
     amount: typeof parsed.extracted?.amount === "number" ? parsed.extracted.amount : null,
+    // Transcribed, not computed (#206): the figure the document designates as
+    // due, null when it designates none. It never rewrites `amount`.
+    payableAmount: toCents(parsed.extracted?.payableAmount),
     currency: normalizeCurrency(parsed.extracted?.currency),
     vatPercent: typeof parsed.extracted?.vatPercent === "number" ? parsed.extracted.vatPercent : null,
     lineItems,

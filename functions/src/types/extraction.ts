@@ -51,6 +51,20 @@ export interface ExtractedRateGroup {
 export interface ExtractedData {
   date: string | null; // ISO format YYYY-MM-DD
   amount: number | null; // cents
+  /**
+   * The figure the document itself designates as due — "Zahlbetrag",
+   * "Rechnungsbetrag", "zu zahlen", "Amount Due" — in cents (#206).
+   *
+   * Transcribed under the same house rule as the printed VAT summary block:
+   * copy the number printed beside that designation, never compute it, never
+   * infer it, never reconcile it against the other totals on the page. A
+   * Mahnung prints both the original invoice amount and the sum now demanded,
+   * and `amount` on its own cannot say which of the two is owed.
+   *
+   * null when the document designates no figure as due. Evidence, not verdict:
+   * nothing downstream is required to prefer it over `amount`.
+   */
+  payableAmount: number | null;
   currency: string | null;
   vatPercent: number | null;
   lineItems?: ExtractedLineItem[] | null;

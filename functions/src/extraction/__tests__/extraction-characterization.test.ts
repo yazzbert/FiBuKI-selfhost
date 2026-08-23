@@ -112,6 +112,9 @@ describe("characterization: geminiParser.parseWithGemini", () => {
     expect(res.extracted).toEqual({
       date: "2024-01-31",
       amount: 12345,
+      // #206: null when the response designates no figure as due — the
+      // document total is NOT copied into it as a fallback.
+      payableAmount: null,
       currency: "EUR",
       vatPercent: null,
       lineItems: null,
@@ -369,6 +372,46 @@ describe("characterization: geminiParser.parseWithGemini", () => {
     expect(res.extracted.invoiceNumber).toBeNull();
   });
 
+  it("payableAmount: a Mahnung's demanded figure survives beside the invoice total (#206)", async () => {
+    // IV-26-1163-3.pdf's shape: the document prints 750,00 (the original
+    // invoice) and 3.390,00 (what is now demanded). Nothing about "amount"
+    // says which of the two is owed, so the demanded figure is transcribed
+    // into its own field instead of being guessed at read time.
+    q({
+      extracted: {
+        amount: 75000,
+        payableAmount: 339000,
+        selfDesignation: "Mahnung",
+        rateGroups: [{ rate: 20, net: 62500, vat: 12500, gross: 75000 }],
+      },
+    });
+    const res = await parseWithGemini(BUF, "application/pdf");
+
+    expect(res.extracted.payableAmount).toBe(339000);
+    // The existing figure does not move: `amount` is still what it always was,
+    // and the printed VAT block still describes the invoice it belongs to.
+    expect(res.extracted.amount).toBe(75000);
+    expect(res.extracted.rateGroups).toEqual([{ rate: 20, net: 62500, vat: 12500, gross: 75000 }]);
+  });
+
+  it("payableAmount: a document printing one total yields that total unchanged (#206)", async () => {
+    q({ extracted: { amount: 12345, vatPercent: 20 } });
+    const res = await parseWithGemini(BUF, "application/pdf");
+
+    expect(res.extracted.amount).toBe(12345);
+    // Transcription, not computation: no designated figure is printed, so the
+    // field is null rather than a copy of the total.
+    expect(res.extracted.payableAmount).toBeNull();
+  });
+
+  it("payableAmount: an unreadable figure degrades to null (#206)", async () => {
+    q({ extracted: { amount: 12345, payableAmount: "dreitausend" } });
+    const res = await parseWithGemini(BUF, "application/pdf");
+
+    expect(res.extracted.amount).toBe(12345);
+    expect(res.extracted.payableAmount).toBeNull();
+  });
+
   it("repairs trailing commas in malformed JSON", async () => {
     q('{"extracted": {"amount": 500,}}');
     const res = await parseWithGemini(BUF, "application/pdf");
@@ -579,6 +622,7 @@ describe("characterization: claudeParser.parseWithClaude", () => {
     expect(res.extracted).toEqual({
       date: "2024-02-01",
       amount: 9999,
+      payableAmount: null, // #206: prompted for, absent from this response
       currency: "EUR",
       vatPercent: 20,
       lineItems: null, // characterization: legacy parser never extracts line items
@@ -609,6 +653,24 @@ describe("characterization: claudeParser.parseWithClaude", () => {
     expect(res.extracted.fieldSpans).toEqual({});
     expect(res.extracted.date).toBeNull();
     expect(res.extracted.partner).toBeNull();
+  });
+
+  it("carries the designated payable amount, and drops a non-number (#206)", async () => {
+    anthropic.create.mockResolvedValue({
+      usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: "text", text: JSON.stringify({ amount: 75000, payableAmount: 339000 }) }],
+    });
+    let res = await parseWithClaude("OCR", "k");
+    expect(res.extracted.payableAmount).toBe(339000);
+    expect(res.extracted.amount).toBe(75000);
+
+    anthropic.create.mockResolvedValue({
+      usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: "text", text: JSON.stringify({ amount: 75000, payableAmount: "3390,00" }) }],
+    });
+    res = await parseWithClaude("OCR", "k");
+    // characterization: same strict typeof number check as `amount` above
+    expect(res.extracted.payableAmount).toBeNull();
   });
 
   it("throws when the response contains no text block", async () => {
@@ -665,6 +727,7 @@ describe("characterization: documentExtractor", () => {
     expect(res.extracted).toEqual({
       date: null,
       amount: null,
+      payableAmount: null,
       currency: null,
       vatPercent: null,
       lineItems: null,
