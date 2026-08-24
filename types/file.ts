@@ -264,6 +264,18 @@ export interface TaxFile {
   /** AI-extracted amount in cents */
   extractedAmount?: number | null;
 
+  /**
+   * The figure the document itself designates as due, in cents, transcribed
+   * from beside its own wording ("Zahlbetrag", "Rechnungsbetrag", "zu zahlen",
+   * "Amount Due") (#206). A Mahnung prints both the original invoice amount
+   * and the sum now demanded, so this sits BESIDE `extractedAmount` rather
+   * than replacing it.
+   *
+   * Absent on every file extracted before the field existed; null when the
+   * document designates no figure as due.
+   */
+  extractedPayableAmount?: number | null;
+
   /** AI-extracted currency code */
   extractedCurrency?: string | null;
 
@@ -315,6 +327,22 @@ export interface TaxFile {
    * could not be carried forward; that file needs a human.
    */
   vatFieldsPreserved?: boolean;
+
+  /**
+   * #184: which extracted fields a human set by hand, and when each was set —
+   * `{ amount: Timestamp, vatPercent: Timestamp }`, keyed by the names
+   * `update_file_extraction` takes. Per field rather than one timestamp on the
+   * document, because a `vatPercent: 0` ruling on a levy says nothing about the
+   * total. Present means a re-extraction would discard a person's work, which
+   * is why `retryFileExtraction` refuses the file without `overwriteCorrections`.
+   *
+   * The rules live in `functions/src/files/extractionProvenanceOps.ts`; this is
+   * the shape the client reads, duplicated the way `DocumentType` is.
+   */
+  extractionCorrectedFields?: Record<string, Timestamp>;
+
+  /** The newest of those, so the corrected population is one query. */
+  extractionCorrectedAt?: Timestamp | null;
 
   /**
    * A human's standing decision that the VAT this document prints is not
@@ -715,6 +743,7 @@ export interface FileCreateData {
 export interface FileExtractionData {
   extractedDate?: Timestamp | null;
   extractedAmount?: number | null;
+  extractedPayableAmount?: number | null;
   extractedCurrency?: string | null;
   extractedVatPercent?: number | null;
   extractedVatAmount?: number | null;

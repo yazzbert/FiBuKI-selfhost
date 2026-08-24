@@ -652,6 +652,58 @@ describe("runExtraction: printed rate groups", () => {
 });
 
 // ===========================================================================
+// runExtraction — the document's own designated payable amount (#206)
+// ===========================================================================
+
+describe("runExtraction: designated payable amount", () => {
+  it("stores the demanded figure beside the document total, moving neither", async () => {
+    // IV-26-1163-3.pdf's shape: a Mahnung printing 750,00 (the original
+    // invoice) and 3.390,00 (what is now demanded). Before #206 nothing on
+    // the record distinguished them and the figure had to be set by hand.
+    const fileData = await seedFile("f-pay-mahnung");
+    q({
+      extracted: {
+        amount: 75000,
+        payableAmount: 339000,
+        vatPercent: 20,
+        selfDesignation: "Mahnung",
+        confidence: 0.8,
+      },
+    });
+    await runExtraction("f-pay-mahnung", fileData, { skipClassification: true });
+
+    const doc = await fileDoc("f-pay-mahnung");
+    expect(doc.extractedPayableAmount).toBe(339000);
+    // The pre-existing figure is untouched — the new field is a second
+    // reading, not a correction of the first.
+    expect(doc.extractedAmount).toBe(75000);
+    expect(doc.extractedVatPercent).toBe(20);
+  });
+
+  it("records an absence when the document designates no figure as due", async () => {
+    const fileData = await seedFile("f-pay-single");
+    q({ extracted: { amount: 4200, vatPercent: 20, confidence: 0.9 } });
+    await runExtraction("f-pay-single", fileData, { skipClassification: true });
+
+    const doc = await fileDoc("f-pay-single");
+    // Written, not omitted: "looked and found none" must be distinguishable
+    // from a record written before the field existed.
+    expect(doc.extractedPayableAmount).toBeNull();
+    expect(doc.extractedAmount).toBe(4200);
+  });
+
+  it("clears the figure when the document turns out not to be an invoice", async () => {
+    const fileData = await seedFile("f-pay-notinvoice");
+    q({ isInvoice: false, reason: "Werbeprospekt", confidence: 0.9 });
+    await runExtraction("f-pay-notinvoice", fileData, {});
+
+    const doc = await fileDoc("f-pay-notinvoice");
+    expect(doc.isNotInvoice).toBe(true);
+    expect(doc.extractedPayableAmount).toBeNull();
+  });
+});
+
+// ===========================================================================
 // retryFileExtraction — gating, reset semantics, error persistence
 // ===========================================================================
 
@@ -694,6 +746,47 @@ describe("characterization: retryFileExtraction callable", () => {
       code: "failed-precondition",
       message: "File has already been extracted successfully. Pass force to re-extract it anyway.",
     });
+  });
+
+  // #184: the marker has to survive the round trip through the shim's jsonb
+  // column, and the refusal has to fire for the UI's click too — the retry
+  // button always passes force, so force cannot be what protects a correction.
+  it("refuses a hand-corrected file, naming the fields, even when forced", async () => {
+    await seedFile("f-corrected", {
+      extractionComplete: true,
+      extractedVatPercent: 0,
+      extractionCorrectedFields: { vatPercent: Timestamp.now(), amount: Timestamp.now() },
+      extractionCorrectedAt: Timestamp.now(),
+    });
+
+    await expect(call({ fileId: "f-corrected", force: true })).rejects.toMatchObject({
+      code: "failed-precondition",
+      message: expect.stringContaining("(amount, vatPercent)"),
+    });
+    expect(gemini.requests).toHaveLength(0);
+    expect((await fileDoc("f-corrected")).extractedVatPercent).toBe(0);
+  });
+
+  it("re-extracts a corrected file when the caller opts in per file", async () => {
+    await seedFile("f-overwrite", {
+      extractionComplete: true,
+      extractionCorrectedFields: { amount: Timestamp.now() },
+      extractionCorrectedAt: Timestamp.now(),
+    });
+    q({ isInvoice: true, confidence: 0.95 });
+    q({ extracted: { amount: 42, confidence: 1 } });
+
+    const res = (await call({
+      fileId: "f-overwrite",
+      force: true,
+      overwriteCorrections: true,
+    })) as { success: boolean };
+
+    expect(res.success).toBe(true);
+    const doc = await fileDoc("f-overwrite");
+    expect(doc.extractedAmount).toBe(42);
+    // The marker survives the overwrite — the file stays on the exclusion list.
+    expect(Object.keys(doc.extractionCorrectedFields as object)).toEqual(["amount"]);
   });
 
   it("force re-extracts a completed file the guard would refuse", async () => {

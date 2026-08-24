@@ -51,7 +51,7 @@ async function queueItems(integrationId = INTEGRATION) {
 
 describe("startImapInitialSync", () => {
   beforeEach(async () => {
-    __resetFirestoreShim();
+    await __resetFirestoreShim();
     await seedIntegration();
   });
 
