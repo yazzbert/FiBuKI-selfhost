@@ -952,6 +952,7 @@ export async function runExtraction(
         extractedAdditionalFields: null,
         extractedSelfDesignation: null,
         extractedInvoiceNumber: null,
+        extractedPayableAmount: null,
         ...documentTypeFields(classifyDocumentType({ grossTotal: null, isNotInvoice: true })),
         // Every printed rate was just cleared, so there is nothing left to
         // review (#203).
@@ -1088,6 +1089,7 @@ export async function runExtraction(
     updateData.extractedAdditionalFields = null;
     updateData.extractedSelfDesignation = null;
     updateData.extractedInvoiceNumber = null;
+    updateData.extractedPayableAmount = null;
     console.log(`[+${Date.now() - t0}ms] Classified as NOT an invoice: ${result.notInvoiceReason}`);
   } else {
     // Add extracted fields if found
@@ -1115,6 +1117,13 @@ export async function runExtraction(
     // absence, or the §11 classifier reads the record as merely legacy.
     updateData.extractedSelfDesignation = extracted.selfDesignation ?? null;
     updateData.extractedInvoiceNumber = extracted.invoiceNumber ?? null;
+
+    // The document's own designated payable figure (#206), stored beside
+    // extractedAmount rather than instead of it: on a Mahnung the two are
+    // different numbers and the record has to be able to hold both. Written
+    // unconditionally, so "designates no figure as due" is recorded as an
+    // absence rather than left indistinguishable from a pre-#206 record.
+    updateData.extractedPayableAmount = extracted.payableAmount ?? null;
 
     const normalizedLineItems = normalizeExtractedLineItems(extracted.lineItems);
     if (normalizedLineItems.length > 0) {
