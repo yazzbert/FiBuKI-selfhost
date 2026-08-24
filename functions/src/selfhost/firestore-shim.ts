@@ -252,7 +252,15 @@ export async function __rawSqlForTest(
   return pg.tx(tenantId, (q) => q(sql, params));
 }
 
-/** Test helper: wipe all documents (current tenant). */
+/**
+ * Test helper: wipe all documents (current tenant).
+ *
+ * AWAIT IT. Under PGlite every statement runs through one serialized chain, so
+ * a floating call still lands before the seed that follows it and the bug hides.
+ * Against real Postgres each transaction takes its own pooled connection, so an
+ * un-awaited wipe can commit at any later point — including mid-test, deleting
+ * rows a test already seeded and used.
+ */
 export async function __resetFirestoreShim(): Promise<void> {
   await withTenant(async (q) => {
     await q(`DELETE FROM docs`);

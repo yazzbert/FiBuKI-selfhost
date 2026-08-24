@@ -46,8 +46,8 @@ function mangleSentinelClassNames(): () => void {
 describe("FieldValue sentinels under minified class names", () => {
   let restore: () => void;
 
-  beforeEach(() => {
-    __resetFirestoreShim();
+  beforeEach(async () => {
+    await __resetFirestoreShim();
     restore = mangleSentinelClassNames();
   });
 
