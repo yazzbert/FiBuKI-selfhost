@@ -698,6 +698,23 @@ describe("Tool Registry Handlers", () => {
       expect(connected.files).toHaveLength(1);
       expect(unconnected.files).toHaveLength(1);
     });
+
+    // #184: this is the exclusion list a re-extraction sweep builds for itself,
+    // in place of the hand-kept one it used to carry.
+    it("filters to the hand-corrected population, and away from it", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({ userId, extractionCorrectedFields: { vatPercent: new Date() } })
+      );
+      store.setDoc("files", "f-2", createTestFile({ userId }));
+
+      const corrected = await handlers.listFiles(userId, { handCorrected: true });
+      const untouched = await handlers.listFiles(userId, { handCorrected: false });
+
+      expect(corrected.files.map((f) => (f as { id: string }).id)).toEqual(["f-1"]);
+      expect(untouched.files.map((f) => (f as { id: string }).id)).toEqual(["f-2"]);
+    });
   });
 
   describe("listFiles - paging and the limit", () => {
@@ -1138,6 +1155,33 @@ describe("Tool Registry Handlers", () => {
       );
     });
 
+    // #184
+    it("records which fields the person set, and merges with an earlier correction", async () => {
+      store.setDoc(
+        "files",
+        "f-1",
+        createTestFile({
+          userId,
+          extractedAmount: 636000,
+          extractionCorrectedFields: { date: new Date("2026-08-01") },
+        })
+      );
+
+      const result = await handlers.updateFileExtraction(userId, {
+        fileId: "f-1",
+        amount: 318000,
+        vatAmount: 53000,
+      });
+
+      expect(result.correctedFields).toEqual(["amount", "vatAmount", "date"]);
+
+      const file = store.getDoc("files", "f-1") as Record<string, unknown>;
+      const marker = file.extractionCorrectedFields as Record<string, unknown>;
+      // The date stamp from the earlier correction is still there.
+      expect(Object.keys(marker).sort()).toEqual(["amount", "date", "vatAmount"]);
+      expect(file.extractionCorrectedAt).toBeDefined();
+    });
+
     it("ignores a key the schema does not name", async () => {
       store.setDoc("files", "f-1", createTestFile({ userId, extractedPartner: "ELDI Handels GmbH" }));
 
@@ -1202,6 +1246,94 @@ describe("Tool Registry Handlers", () => {
       await expect(
         handlers.reclassifyDocumentsTool(userId, { dryRun: "false" })
       ).rejects.toThrow("dryRun must be a boolean");
+    });
+  });
+
+  // ==========================================================================
+  // Retro-stamping the corrections that predate the marker (#184)
+  //
+  // The resolution rules are tested in files/__tests__/extraction-provenance;
+  // what belongs here is the tool surface — the dry-run default, the write, and
+  // the fact that a second run costs nothing.
+  // ==========================================================================
+
+  describe("stampKnownHandCorrections", () => {
+    /** The WKO levy, one of the three whose file id was confirmed. */
+    const WKO_ID = "5s2aA53k3yEXy6lzTosd";
+
+    beforeEach(() => {
+      store.setDoc("files", WKO_ID, createTestFile({ userId, fileName: "paperless-ap-714.pdf" }));
+    });
+
+    it("defaults to a dry run when dispatched with no arguments", async () => {
+      const result = (await handlers.handleTool(userId, "stamp_known_hand_corrections", {})) as {
+        dryRun: boolean;
+        stamped: number;
+        pending: number;
+        rows: Array<{ document: string; action: string; fields: string[] }>;
+      };
+
+      expect(result).toMatchObject({ dryRun: true, stamped: 0, pending: 1 });
+      expect(result.rows.find((row) => row.document === "paperless-ap-714")).toMatchObject({
+        action: "stamp",
+        fields: ["vatPercent"],
+      });
+      expect(store.getDoc("files", WKO_ID)?.extractionCorrectedFields).toBeUndefined();
+    });
+
+    it("stamps the marker when opted in, and reports what it could not resolve", async () => {
+      const result = (await handlers.stampKnownHandCorrections(userId, { dryRun: false })) as {
+        stamped: number;
+        unresolved: number;
+      };
+
+      expect(result).toMatchObject({ stamped: 1, unresolved: 6 });
+
+      const file = store.getDoc("files", WKO_ID) as Record<string, unknown>;
+      expect(Object.keys(file.extractionCorrectedFields as object)).toEqual(["vatPercent"]);
+      expect(file.extractionCorrectedAt).toBeDefined();
+    });
+
+    it("makes the stamped file refuse re-extraction, which is the point of it", async () => {
+      await handlers.stampKnownHandCorrections(userId, { dryRun: false });
+
+      await expect(
+        handlers.retryFileExtractionTool(userId, { fileId: WKO_ID, force: true })
+      ).rejects.toThrow(/^HAND_CORRECTED: .*\(vatPercent\)/);
+    });
+
+    it("writes nothing on a second run", async () => {
+      await handlers.stampKnownHandCorrections(userId, { dryRun: false });
+      const first = store.getDoc("files", WKO_ID)?.extractionCorrectedAt;
+
+      const again = (await handlers.stampKnownHandCorrections(userId, { dryRun: false })) as {
+        stamped: number;
+        alreadyStamped: number;
+      };
+
+      expect(again).toMatchObject({ stamped: 0, alreadyStamped: 1 });
+      expect(store.getDoc("files", WKO_ID)?.extractionCorrectedAt).toBe(first);
+    });
+
+    it("refuses a dryRun that is not a boolean", async () => {
+      await expect(
+        handlers.stampKnownHandCorrections(userId, { dryRun: "false" })
+      ).rejects.toThrow("dryRun must be a boolean");
+    });
+
+    it("does not stamp another user's file", async () => {
+      store.setDoc(
+        "files",
+        "theirs",
+        createTestFile({ userId: otherUserId, fileName: "IV-26-1170.pdf" })
+      );
+
+      const result = (await handlers.stampKnownHandCorrections(userId, { dryRun: false })) as {
+        rows: Array<{ document: string; action: string }>;
+      };
+
+      expect(result.rows.find((row) => row.document === "IV-26-1170")?.action).toBe("not-found");
+      expect(store.getDoc("files", "theirs")?.extractionCorrectedFields).toBeUndefined();
     });
   });
 
@@ -2408,6 +2540,61 @@ describe("Tool Registry Handlers", () => {
 
       await handlers.retryFileExtractionTool(userId, { fileId: "f-2", force: true });
       expect(extraction.runExtraction).toHaveBeenCalledTimes(1);
+    });
+
+    // #184: the whole point — a sweep must not re-roll the model over a value a
+    // person decided, and force cannot be the flag that protects it because
+    // every sweep (and the UI button) passes force already.
+    it("refuses a hand-corrected file, naming the fields, even when forced", async () => {
+      store.setDoc(
+        "files",
+        "f-corrected",
+        createTestFile({
+          userId,
+          extractionComplete: true,
+          extractedVatPercent: 0,
+          extractionCorrectedFields: { vatPercent: new Date(), amount: new Date() },
+        })
+      );
+
+      await expect(
+        handlers.retryFileExtractionTool(userId, { fileId: "f-corrected" })
+      ).rejects.toThrow(/^HAND_CORRECTED: .*\(amount, vatPercent\)/);
+      await expect(
+        handlers.retryFileExtractionTool(userId, { fileId: "f-corrected", force: true })
+      ).rejects.toThrow(/^HAND_CORRECTED:/);
+
+      expect(extraction.runExtraction).not.toHaveBeenCalled();
+      // A refused retry leaves the record alone — the corrected rate is intact.
+      expect((store.getDoc("files", "f-corrected") as Record<string, unknown>).extractedVatPercent).toBe(0);
+    });
+
+    it("re-extracts a corrected file when the caller says so per file", async () => {
+      store.setDoc(
+        "files",
+        "f-corrected",
+        createTestFile({
+          userId,
+          extractionComplete: true,
+          extractionCorrectedFields: { vatPercent: new Date() },
+        })
+      );
+
+      // Both flags: force answers "it already extracted cleanly",
+      // overwriteCorrections answers "and a person corrected it".
+      await handlers.retryFileExtractionTool(userId, {
+        fileId: "f-corrected",
+        force: true,
+        overwriteCorrections: true,
+      });
+
+      expect(extraction.runExtraction).toHaveBeenCalledTimes(1);
+      // The marker is not cleared: a person did rule on this document, and the
+      // file stays on the next sweep's exclusion list rather than falling off
+      // it because it was overridden once.
+      const marker = (store.getDoc("files", "f-corrected") as Record<string, unknown>)
+        .extractionCorrectedFields as Record<string, unknown>;
+      expect(Object.keys(marker)).toEqual(["vatPercent"]);
     });
 
     it("keeps a manual partner assignment across the reset", async () => {
