@@ -26,6 +26,17 @@ import {
   FileExtractionCorrection,
 } from "../files/extractionCorrectionOps";
 import {
+  buildCorrectionProvenance,
+  CORRECTABLE_FIELDS,
+  correctedFieldsOf,
+  hasHandCorrections,
+} from "../files/extractionProvenanceOps";
+import {
+  planKnownHandCorrectionStamps,
+  type KnownCorrectionFileView,
+  type StampAction,
+} from "../files/knownHandCorrections";
+import {
   buildDismissSuggestionUpdates,
   buildUndismissSuggestionUpdates,
   checkDismissalReason,
@@ -194,6 +205,8 @@ export async function handleTool(
       return retryFileExtractionTool(userId, args);
     case "reclassify_documents":
       return reclassifyDocumentsTool(userId, args);
+    case "stamp_known_hand_corrections":
+      return stampKnownHandCorrections(userId, args);
 
     // Identity entities (the user's personal/company entities used as invoice
     // sender). Returns id + name + vatId + ibans + address per entity.
@@ -615,6 +628,16 @@ export async function listFiles(userId: string, args: Record<string, unknown>) {
     );
   }
 
+  // #184: the corrected population, so a re-extraction sweep can build its own
+  // exclusion list from the records instead of carrying one by hand. In memory
+  // like the filters above — the marker is absent on every record written
+  // before it existed, and Firestore has no "field missing" predicate.
+  if (args.handCorrected !== undefined) {
+    files = files.filter((f: Record<string, unknown>) =>
+      args.handCorrected ? hasHandCorrections(f) : !hasHandCorrections(f)
+    );
+  }
+
   // The page ends either at the requested limit or at the end of the scan.
   // The cursor is the last document actually consumed, so the next page
   // resumes exactly where this one stopped — rows filtered out in memory are
@@ -781,7 +804,7 @@ export async function updateFileExtraction(userId: string, args: Record<string, 
   // unknown key must not reach the update, and "absent" has to stay distinct
   // from "null" all the way down.
   const fields: FileExtractionCorrection = {};
-  for (const key of ["amount", "vatAmount", "vatPercent", "date", "lineItems"] as const) {
+  for (const key of CORRECTABLE_FIELDS) {
     if (args[key] !== undefined) {
       (fields as Record<string, unknown>)[key] = args[key];
     }
@@ -789,7 +812,9 @@ export async function updateFileExtraction(userId: string, args: Record<string, 
 
   let built;
   try {
-    built = buildExtractionCorrection(fields);
+    // The stored record goes in so the correction's provenance stamp (#184)
+    // merges onto the marks earlier corrections left, instead of replacing them.
+    built = buildExtractionCorrection(fields, fileSnap.data()!);
   } catch (error) {
     if (error instanceof ExtractionCorrectionError) {
       throw new Error(error.message);
@@ -825,6 +850,9 @@ export async function updateFileExtraction(userId: string, args: Record<string, 
     success: true,
     fileId,
     changed: built.changed,
+    // Every field a human has ever set on this record, not only the ones this
+    // call moved — this is what a re-extraction now refuses on (#184).
+    correctedFields: correctedFieldsOf(after),
     file: {
       fileName: after.fileName ?? null,
       extractedAmount: after.extractedAmount ?? null,
@@ -833,6 +861,74 @@ export async function updateFileExtraction(userId: string, args: Record<string, 
       lineItemsUnreconciled: after.lineItemsUnreconciled ?? false,
       extractedRateGroups: after.extractedRateGroups ?? null,
     },
+  };
+}
+
+/**
+ * Retro-stamp the corrections that were made before the marker existed (#184).
+ *
+ * The table is checked in, in files/knownHandCorrections, and the resolution
+ * rules are pure and tested there; this owns the corpus read, the write and the
+ * argument. Dry run unless the caller passes dryRun exactly false, matching
+ * reclassify_documents and rematch_assigned_partners — and here the dry run is
+ * the review step that catches a name resolving to the wrong document before
+ * anything is stamped.
+ *
+ * The whole file corpus is read rather than queried per entry, because four of
+ * the seven resolve by file name and Firestore cannot filter on a substring.
+ * Only the two fields the plan reads come back, so the scan stays small.
+ *
+ * A second run writes nothing: an entry whose fields are already stamped comes
+ * back as already-stamped.
+ */
+export async function stampKnownHandCorrections(userId: string, args: Record<string, unknown>) {
+  if (args.dryRun !== undefined && typeof args.dryRun !== "boolean") {
+    throw new Error("dryRun must be a boolean");
+  }
+  const dryRun = args.dryRun === undefined ? true : args.dryRun === true;
+
+  const snapshot = await db
+    .collection("files")
+    .where("userId", "==", userId)
+    .select("fileName", "extractionCorrectedFields")
+    .get();
+
+  const files: KnownCorrectionFileView[] = snapshot.docs.map((doc) => ({
+    id: doc.id,
+    fileName: doc.data().fileName,
+    extractionCorrectedFields: doc.data().extractionCorrectedFields,
+  }));
+
+  const rows = planKnownHandCorrectionStamps(files);
+
+  if (!dryRun) {
+    for (const row of rows) {
+      if (row.action !== "stamp" || !row.fileId) continue;
+      const previous = files.find((file) => file.id === row.fileId);
+      await db.collection("files").doc(row.fileId).update({
+        ...buildCorrectionProvenance(previous, row.fields),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      console.log(`[stampKnownHandCorrections] Stamped ${row.fileId}`, {
+        userId,
+        document: row.document,
+        fields: row.fields,
+      });
+    }
+  }
+
+  const count = (action: StampAction) => rows.filter((row) => row.action === action).length;
+
+  return {
+    dryRun,
+    stamped: dryRun ? 0 : count("stamp"),
+    pending: dryRun ? count("stamp") : 0,
+    alreadyStamped: count("already-stamped"),
+    // Entries the corpus could not resolve. Never zero-by-assumption: a file
+    // renamed since the correction has to be findable as unresolved, not
+    // silently treated as done.
+    unresolved: count("not-found") + count("ambiguous"),
+    rows,
   };
 }
 
@@ -1017,6 +1113,8 @@ export async function unmarkFileVatNotClaimable(userId: string, args: Record<str
  * The refusal codes are surfaced as message prefixes, matching the
  * PAIR_REJECTED convention the connect handler uses: an agent working a list
  * needs to tell a stale id from a file that simply does not need re-extracting.
+ * HAND_CORRECTED is the one a sweep meets most (#184): it names the fields a
+ * person set, so the agent can decide per file instead of blanket-overriding.
  */
 export async function retryFileExtractionTool(userId: string, args: Record<string, unknown>) {
   const fileId = args.fileId as string;
@@ -1029,6 +1127,7 @@ export async function retryFileExtractionTool(userId: string, args: Record<strin
       fileId,
       userId,
       force: args.force === true,
+      overwriteCorrections: args.overwriteCorrections === true,
       anthropicApiKey: anthropicApiKey.value(),
     });
 
