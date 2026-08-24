@@ -135,8 +135,8 @@ async function queueDocs() {
 const pendingRetries = (docs: Record<string, unknown>[]) =>
   docs.filter((d) => d.status === "pending");
 
-beforeEach(() => {
-  __resetFirestoreShim();
+beforeEach(async () => {
+  await __resetFirestoreShim();
   h.box.searchError = undefined;
 });
 

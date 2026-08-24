@@ -18,6 +18,7 @@
     "test:bulk-file-selection": "node --test tests/bulk-file-selection.test.mjs",
     "test:row-neighbour": "node --test tests/row-neighbour.test.mjs",
     "test:arrow-keys": "node --test tests/arrow-key-navigation.test.mjs",
+    "test:document-type": "node --test tests/document-type-presentation.test.mjs",
     "setup": "bash scripts/setup.sh",
     "generate:mcp-automations": "node scripts/generate-mcp-automations.js",
     "generate:tool-definitions": "node scripts/generate-tool-definitions.js",

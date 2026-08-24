@@ -63,7 +63,7 @@ async function queueItems(integrationId: string) {
 
 describe("queueScheduledMailSyncs", () => {
   beforeEach(async () => {
-    __resetFirestoreShim();
+    await __resetFirestoreShim();
     await seedTransaction(100);
     await seedTransaction(10);
   });
