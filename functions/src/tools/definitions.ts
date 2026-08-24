@@ -193,6 +193,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description:
             "true = only files printing a VAT rate Austria does not have (anything outside 0/10/13/20 on the document's date). Each such file reports the offending rates in vatRatesOutsideSet. 11% is Versicherungssteuer, not VAT, and is not deductible — mark those with mark_file_vat_not_claimable.",
         },
+        handCorrected: {
+          type: "boolean",
+          description:
+            "true = only files whose extracted record a human corrected by hand. Each such file reports the fields in extractionCorrectedFields (field name -> when it was set) and the newest of them in extractionCorrectedAt. This is the exclusion list for a re-extraction sweep — retry_file_extraction refuses these files unless overwriteCorrections is passed.",
+        },
         limit: { type: "number", description: "Max results per page (default 50, max 500)" },
         cursor: { type: "string", description: "nextCursor from the previous response to fetch the next page" },
       },
@@ -323,7 +328,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "update_file_extraction",
     description:
-      "Correct a file's extracted record by hand. Use when re-extraction cannot get there because the right value needs judgement the document does not state unambiguously — a Schlussrechnung printing both the full amount and the part already invoiced, VAT that is correctly read but not claimable, a one-cent OCR slip inside the reconciliation tolerance. Only the fields you pass are touched; pass null to clear one. The corrected total is NOT re-derived from the line items, so an amount that deliberately differs from them survives. Correcting anything VAT-bearing makes you the authority on the file: the reconciliation flags, the printed rate-group block and the re-extraction downgrade markers are all cleared, because each would otherwise outrank what you just set.",
+      "Correct a file's extracted record by hand. Use when re-extraction cannot get there because the right value needs judgement the document does not state unambiguously — a Schlussrechnung printing both the full amount and the part already invoiced, VAT that is correctly read but not claimable, a one-cent OCR slip inside the reconciliation tolerance. Only the fields you pass are touched; pass null to clear one. The corrected total is NOT re-derived from the line items, so an amount that deliberately differs from them survives. Correcting anything VAT-bearing makes you the authority on the file: the reconciliation flags, the printed rate-group block and the re-extraction downgrade markers are all cleared, because each would otherwise outrank what you just set. Every correction records which fields you set and when, in extractionCorrectedFields — from then on retry_file_extraction refuses the file unless overwriteCorrections is passed, and list_files can return the corrected population with handCorrected: true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -363,7 +368,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "retry_file_extraction",
     description:
-      "Re-run extraction on a file. Use when a file extracted without erroring but produced nothing usable — no line items, no VAT amount, a wrong total — which is the case the UI's retry button did not cover. Extraction runs synchronously and can take up to a minute. Re-extracting resets partner and transaction matching for the file so both re-run against the new data; a manual partner assignment is kept. A file that already extracted cleanly needs force: true.",
+      "Re-run extraction on a file. Use when a file extracted without erroring but produced nothing usable — no line items, no VAT amount, a wrong total — which is the case the UI's retry button did not cover. Extraction runs synchronously and can take up to a minute. Re-extracting resets partner and transaction matching for the file so both re-run against the new data; a manual partner assignment is kept. A file that already extracted cleanly needs force: true. A file carrying hand corrections is refused with HAND_CORRECTED, naming the fields a person set — re-extraction would discard them, so overwriting takes its own flag, per file. Sweep over list_files with handCorrected: true first if you want to know which files that will be.",
     requiredFeature: "aiExtraction",
     inputSchema: {
       type: "object",
@@ -373,6 +378,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: "boolean",
           description:
             "Re-extract a file whose extraction completed without error. Required for that case, ignored otherwise.",
+        },
+        overwriteCorrections: {
+          type: "boolean",
+          description:
+            "Re-extract a file whose record a human corrected, replacing what they set with whatever the model reads this time. Deliberately separate from force, which sweeps and the UI pass as a matter of habit — decide this one per file, having read the fields the refusal names.",
         },
       },
       required: ["fileId"],
@@ -396,6 +406,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: "boolean",
           description:
             "Default true — classify and report only, nothing written. Pass false to persist.",
+        },
+      },
+    },
+  },
+  {
+    name: "stamp_known_hand_corrections",
+    description:
+      "One-time provenance backfill (#184): stamp the files that were corrected by hand BEFORE " +
+      "corrections recorded themselves, so no re-extraction sweep needs the hand-kept list of " +
+      "them again. The list of documents and the fields each correction set is checked into the " +
+      "code, not passed in — three resolve by file id, the rest by file name. Writes only the " +
+      "marker: no extracted value is read, changed or re-derived, so it cannot alter a figure. " +
+      "Defaults to a dry run: pass dryRun=false to write, after checking the rows resolved to the " +
+      "documents you expect. Idempotent — an entry already stamped comes back as already-stamped " +
+      "and a name matching several files comes back as ambiguous rather than being guessed. " +
+      "Corrections made from here on stamp themselves; this is for the ones that predate that.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dryRun: {
+          type: "boolean",
+          description:
+            "Default true — resolve and report only, nothing written. Pass false to persist.",
         },
       },
     },
