@@ -505,6 +505,15 @@ describe("selfhost auth-client — Google social callback pickup (built-in mode)
   const AUTH_BASE = `${API}/__auth`;
 
   /**
+   * Every module instance this describe loads. Each one adopts a session, and
+   * an adopted session starts a change stream (NEXT_PUBLIC_FIBUKI_API_URL is
+   * set here) that vi.resetModules() cannot reach: the module is unreferenced
+   * but its reconnect timer keeps running, and every reconnect calls getToken()
+   * on the shared fake window. Tracked so afterEach can shut them down.
+   */
+  const loadedTabs: AuthClient[] = [];
+
+  /**
    * Load the client as if the browser just returned from the Google flow:
    * the social marker is already on the URL and the API base is configured,
    * so module-init's fire-and-forget maybeCompleteSocialCallback runs the real
@@ -530,10 +539,17 @@ describe("selfhost auth-client — Google social callback pickup (built-in mode)
     }
     process.env.NEXT_PUBLIC_FIBUKI_API_URL = API;
     vi.stubGlobal("fetch", fetchImpl);
-    return import("../../../lib/selfhost/auth-client");
+    const tab = (await import("../../../lib/selfhost/auth-client")) as AuthClient;
+    loadedTabs.push(tab);
+    return tab;
   }
 
   afterEach(() => {
+    // Sign every loaded instance out: that drops currentUser, and notify()
+    // stops its change stream. Without this the reconnect ladder (~1s, ~2s, …)
+    // outlives the test and fires token refreshes into whatever test is
+    // running next — which is exactly what made the Web Locks test flaky.
+    for (const tab of loadedTabs.splice(0)) tab.__setSelfhostSession(null);
     vi.unstubAllGlobals();
     delete process.env.NEXT_PUBLIC_FIBUKI_API_URL;
   });
