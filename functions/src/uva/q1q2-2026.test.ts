@@ -22,6 +22,7 @@ import {
   FX_MARKUP_LOW,
   type UvaOpenItem,
 } from "./filing";
+import { buildEcbRateTable } from "../fx/ecbRates";
 import { reconcileDerivations, snapshotDerivations } from "./reconcile";
 import type { UvaPeriod, UvaTransaction } from "./types";
 
@@ -30,6 +31,26 @@ const Q2: UvaPeriod = { year: 2026, period: 2, type: "quarterly" };
 
 const run = (period: UvaPeriod, transactions: UvaTransaction[]) =>
   calculateUva({ period, transactions });
+
+/**
+ * The ECB reference rates for the eight payment dates below (#92), read off
+ * the published `eurofxref` history as USD per 1 EUR. 2026-05-01 is a TARGET
+ * holiday and 2026-05-03 a Sunday, so the 3 May payment reads 30 April — the
+ * "letzter veröffentlichter Kurs" the statute names, not a gap.
+ */
+const ECB_RATES = buildEcbRateTable([
+  { date: "2026-01-14", rates: { USD: 1.1651 } },
+  { date: "2026-02-03", rates: { USD: 1.1801 } },
+  { date: "2026-02-19", rates: { USD: 1.1753 } },
+  { date: "2026-03-11", rates: { USD: 1.1581 } },
+  { date: "2026-04-14", rates: { USD: 1.1793 } },
+  { date: "2026-04-30", rates: { USD: 1.1702 } },
+  { date: "2026-05-19", rates: { USD: 1.1620 } },
+  { date: "2026-06-11", rates: { USD: 1.1537 } },
+]);
+
+const runAtEcbRates = (period: UvaPeriod, transactions: UvaTransaction[]) =>
+  calculateUva({ period, transactions, ecbRates: ECB_RATES });
 
 // ---------------------------------------------------------------------------
 // Exception 2 — paperless-ap-1004, an 11% Filmproduktionshaftpflicht­versicherung
@@ -427,5 +448,78 @@ describe("reconciliation against the pre-sweep baseline", () => {
     expect(filing.reconciliation!.comparable).toBe(true);
     expect(filing.reconciliation!.accountedFor).toBe(true);
     expect(filing.blockers).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #92 — what the ECB rate would have moved on the eight documents
+//
+// The filings for these two quarters went out under method 3 (the effective
+// bank rate) as a written exception, with an exposure stated as a 1-3% band on
+// the converted Vorsteuer: EUR 0.44 to EUR 1.33 across both quarters. Now that
+// the published rates are in the run, the band can be replaced by the figure —
+// per document, which is the point: an aggregate says the filing was close, a
+// per-file table says which document moved and by how much.
+// ---------------------------------------------------------------------------
+
+describe("the ECB rate against the filed figures, per document", () => {
+  const q1 = buildUvaFiling({ report: runAtEcbRates(Q1, FX_Q1) });
+  const q2 = buildUvaFiling({ report: runAtEcbRates(Q2, FX_Q2) });
+  const deltas = [...q1.fxRateDeltas, ...q2.fxRateDeltas];
+
+  it("converts all eight at a published rate, naming the day for each", () => {
+    expect(deltas.map((d) => [d.fileId, d.method, d.rateDate])).toEqual([
+      ["usd-1", "ecb-reference", "2026-01-14"],
+      ["usd-2", "ecb-reference", "2026-02-03"],
+      ["usd-3", "ecb-reference", "2026-02-19"],
+      ["usd-4", "ecb-reference", "2026-03-11"],
+      ["usd-5", "ecb-reference", "2026-04-14"],
+      ["usd-6", "ecb-reference", "2026-04-30"],
+      ["usd-7", "ecb-reference", "2026-05-19"],
+      ["usd-8", "ecb-reference", "2026-06-11"],
+    ]);
+  });
+
+  it("states the move per file, not as a percentage of a total", () => {
+    expect(
+      deltas.map((d) => [d.fileId, d.vatAtEffectiveRate, d.vatAtAppliedRate, d.vatDelta])
+    ).toEqual([
+      ["usd-1", 554, 547, -7],
+      ["usd-2", 554, 540, -14],
+      ["usd-3", 554, 542, -12],
+      ["usd-4", 554, 550, -4],
+      ["usd-5", 554, 540, -14],
+      ["usd-6", 554, 544, -10],
+      ["usd-7", 554, 548, -6],
+      ["usd-8", 558, 556, -2],
+    ]);
+  });
+
+  it("lands inside the exposure the filings declared, and near its floor", () => {
+    const moved = deltas.reduce((s, d) => s + d.vatDelta, 0);
+    const filedAtBankRates = 4436;
+
+    // EUR 0.69 less Vorsteuer across both quarters. The filings bounded the
+    // method at EUR 0.44 to EUR 1.33; the measured figure sits inside it, so
+    // the exception those filings carry was honest about its size.
+    expect(moved).toBe(-69);
+    expect(-moved).toBeGreaterThanOrEqual(Math.round(filedAtBankRates * FX_MARKUP_LOW));
+    expect(-moved).toBeLessThanOrEqual(Math.round(filedAtBankRates * FX_MARKUP_HIGH));
+  });
+
+  it("moves KZ 060 by exactly that, and nothing else", () => {
+    expect(run(Q1, FX_Q1).totalInputVat - q1.report.totalInputVat).toBe(37);
+    expect(run(Q2, FX_Q2).totalInputVat - q2.report.totalInputVat).toBe(32);
+    expect(q1.report.unresolved).toEqual([]);
+    expect(q2.report.unresolved).toEqual([]);
+  });
+
+  it("re-labels the exception rather than dropping it", () => {
+    const fx = q1.exceptions.find((e) => e.kind === "fx-ecb-reference")!;
+
+    expect(fx.fileIds).toHaveLength(4);
+    expect(fx.basis).toContain("§ 20 Abs 6 UStG method 2");
+    expect(fx.exposure).toBeNull();
+    expect(q1.blockers).toEqual([]);
   });
 });
