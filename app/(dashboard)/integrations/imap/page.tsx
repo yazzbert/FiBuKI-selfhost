@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -9,7 +10,6 @@ import {
   Loader2,
   Check,
   AlertCircle,
-  Info,
   Trash2,
   Download,
 } from "lucide-react";
@@ -25,6 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ImapCredentialsDialog } from "@/components/integrations/imap-credentials-dialog";
 import { useEmailIntegrations } from "@/hooks/use-email-integrations";
 import { useActiveSyncForIntegration } from "@/hooks/use-integration-details";
 import { usePageTitle } from "@/hooks/use-page-title";
@@ -62,17 +63,10 @@ export default function ImapIntegrationPage() {
   const [success, setSuccess] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
 
-  // Set by "Fix & reconnect" on a broken mailbox row: the connect form doubles
-  // as the reconnect form (an in-place reconnect is not available — the
-  // duplicate check refuses a second active row for the same mailbox). The
-  // broken integration is disconnected only at submit time, not on click —
-  // clicking "Fix & reconnect" must not delete the mailbox before the user
-  // has entered a working password and actually confirmed the fix.
-  const [reconnectTarget, setReconnectTarget] = useState<{
-    id: string;
-    email: string;
-  } | null>(null);
-  const connectFormRef = useRef<HTMLDivElement>(null);
+  // The mailbox "Fix & reconnect" is repairing, if any. The dialog it opens
+  // updates the mailbox in place rather than replacing it, so the connect form
+  // below is only ever used for genuinely new mailboxes.
+  const [repairTarget, setRepairTarget] = useState<EmailIntegration | null>(null);
 
   // Pull-New-Files state, per mailbox. This page has no toast surface, so the
   // outcome is reported in an inline alert under the row, like the connect
@@ -88,15 +82,6 @@ export default function ImapIntegrationPage() {
     setSuccess(false);
     setConnecting(true);
     try {
-      // Reconnecting a broken mailbox: the duplicate check refuses a second
-      // active row for the same mailbox, so the old one is disconnected here,
-      // right before the new credentials are verified — not back when the
-      // user clicked "Fix & reconnect". If disconnect succeeds but the new
-      // login then fails, the mailbox is gone; that trade-off only exists once
-      // the user has actually submitted a password, never on a stray click.
-      if (reconnectTarget) {
-        await disconnect(reconnectTarget.id);
-      }
       await connectImap({
         host: host.trim(),
         port: Number(port) || 993,
@@ -108,7 +93,6 @@ export default function ImapIntegrationPage() {
         keywordPrefilter,
       });
       setSuccess(true);
-      setReconnectTarget(null);
       setPassword("");
       setHost("");
       setUser("");
@@ -193,27 +177,17 @@ export default function ImapIntegrationPage() {
   };
 
   /**
-   * "Fix & reconnect" on a broken mailbox row. There is no in-place reconnect
-   * — the connect route refuses a second active row for the same mailbox — so
-   * this carries its settings (host, port, mailbox, ...) into the connect
-   * form below, leaving only the password for the user to re-enter. The old
-   * integration is disconnected in handleConnect, at submit time, not here:
-   * a click that deletes the mailbox before a new password is even typed is
-   * one accidental tap away from data loss.
+   * "Fix & reconnect" on a broken mailbox row.
+   *
+   * Repairs the mailbox in place through the credential route, which verifies
+   * the new app-password before storing it. This replaces the old
+   * disconnect-then-connect: that path had to delete the integration to get
+   * around the connect route's duplicate check, and disconnect soft-deletes
+   * every file from the mailbox not yet matched to a transaction — so fixing
+   * a mistyped password cost the user their unmatched receipts.
    */
   const handleReconnect = (integration: EmailIntegration) => {
-    setHost(integration.imapHost || "");
-    setPort(String(integration.imapPort || 993));
-    setSecure(integration.imapSecure ?? true);
-    setUser(integration.email || "");
-    setPassword("");
-    setMailbox(integration.imapMailbox || "INBOX");
-    setAllowSelfSigned(integration.imapAllowSelfSigned ?? false);
-    setKeywordPrefilter(integration.imapKeywordPrefilter ?? true);
-    setFormError(null);
-    setSuccess(false);
-    setReconnectTarget({ id: integration.id, email: integration.email });
-    connectFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setRepairTarget(integration);
   };
 
   return (
@@ -259,7 +233,7 @@ export default function ImapIntegrationPage() {
         )}
 
         {/* Connect form */}
-        <Card ref={connectFormRef}>
+        <Card>
           <CardHeader>
             <CardTitle>Connect a mailbox</CardTitle>
             <CardDescription>
@@ -269,16 +243,6 @@ export default function ImapIntegrationPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleConnect} className="space-y-4">
-              {reconnectTarget && !success && (
-                <Alert>
-                  <Info className="h-4 w-4" />
-                  <AlertTitle>Reconnecting {reconnectTarget.email}</AlertTitle>
-                  <AlertDescription>
-                    Settings carried over — enter the new app-password and submit.
-                    The broken mailbox is disconnected only once this succeeds.
-                  </AlertDescription>
-                </Alert>
-              )}
               {success && (
                 <Alert>
                   <Check className="h-4 w-4" />
@@ -395,6 +359,16 @@ export default function ImapIntegrationPage() {
           </CardContent>
         </Card>
       </div>
+
+      {repairTarget && (
+        <ImapCredentialsDialog
+          integration={repairTarget}
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) setRepairTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -434,8 +408,15 @@ function ImapMailboxRow({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between rounded-lg border p-3">
-        <div className="min-w-0">
-          <div className="font-medium truncate">{integration.email}</div>
+        {/* The row body opens the mailbox's detail page — its import
+            statistics, sync history, and pause/resume controls, which were
+            reachable for Gmail accounts only because nothing linked here.
+            The buttons to the right stay in place rather than joining the
+            link, so a press does not navigate. */}
+        <Link href={`/integrations/${integration.id}`} className="min-w-0 group">
+          <div className="font-medium truncate group-hover:underline">
+            {integration.email}
+          </div>
           <div className="text-xs text-muted-foreground truncate">
             {integration.imapHost}:{integration.imapPort} ·{" "}
             {integration.imapMailbox || "INBOX"}
@@ -455,7 +436,7 @@ function ImapMailboxRow({
               <span className="text-muted-foreground">Not synced yet</span>
             )}
           </div>
-        </div>
+        </Link>
         <div className="flex items-center gap-2">
           {/* Hidden while paused or an active sync is running; disabled (not
               hidden) for a fatal classified error, matching the Gmail integration. */}
