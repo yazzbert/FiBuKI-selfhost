@@ -111,5 +111,3 @@ Search `docs/` and the git history before proposing an approach. The most common
 waste is re-deriving a decision that's already written down — see
 [`rewrite-goals.md`](./rewrite-goals.md) for the ones that are settled (Postgres not
 Supabase; port not rewrite; Austria only; same features both tiers).
-</content>
-</invoke>
