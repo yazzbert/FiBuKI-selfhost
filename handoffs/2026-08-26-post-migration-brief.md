@@ -23,7 +23,13 @@ migrated.
 
 ## Where it stands
 
-All six landing waves are on `felixtosh/FiBuKI` `main` — 26 PRs, #109 through #153. The fork is
+All six landing waves are on `felixtosh/FiBuKI` `main` — 26 PRs, #109 through #153. **Plus
+#90**, Felix's own PR, open since 24 August and merged the same evening as `a726f5b8`: the
+self-host shim matched `FieldValue` sentinels by `constructor.name`, which the Next production
+bundler mangles, so every sentinel written from an app route stored as `{}` and one such row
+crashed every page on sign-in. That is the upstream landing of **fork #52** — close it in the
+migration rather than copying it, and note the near-miss: it looked already-landed only because
+the local checkout tracks the FORK's `main`, not `origin/main`. The fork is
 drained of code and now of issues: 3 open, all held. Upstream carries 40 open issues, of which
 #155–#171 arrived in the migration.
 
@@ -65,17 +71,33 @@ ours to force:
 
 ## Verify before it is forgotten
 
-**CodeQL alert closure for PR #177** (Stefan's other session: `Object.create(null)` → `Map` +
-`Object.fromEntries`, killing the computed-key sink rather than making it safe; supersedes
-#173, whose null prototype left the alert firing). At merge time 8 `js/remote-property-injection`
-alerts still read open on `main`. CodeQL has to re-run on `main` before #285/#296 close:
+**CodeQL alert closure for PR #177 — DONE, verified 2026-08-26 18:00 UTC.** #285 and #296 both
+read `state=fixed` on `refs/heads/main` after the trunk was re-analysed, and the open count for
+`js/remote-property-injection` went **8 → 6**. Nothing left to check here.
 
-```bash
-gh api "repos/felixtosh/FiBuKI/code-scanning/alerts?state=open&per_page=100" \
-  --jq '[.[] | select(.rule.id | test("property-injection"))] | length'
-```
+The method matters more than the result, because two earlier PRs merged claiming this fix and did
+not deliver it:
 
-Upstream #174 is the tracking issue; it stays open until that count drops.
+- A **green PR CodeQL check proves only that no NEW alert appeared** relative to the base. It says
+  nothing about whether an existing alert still fires. #90 and #173 both went green while leaving
+  #285/#296 open.
+- The **merge-ref instance is not proof either**: #285 read `fixed` on `refs/pull/90/merge` and
+  came back **open** on `main` after that PR merged. Newer PR analyses are diff-informed, so the
+  instance may not exist at all — and an empty result looks identical to a clean one.
+- The only proof is the alert's state on `refs/heads/main` after the merge:
+  `gh api /repos/felixtosh/FiBuKI/code-scanning/alerts/<n> --jq '.state'`
+
+Why the `Map` worked where `Object.create(null)` did not: the rule anchors on the **write
+statement** with an attacker-influenced key. Changing what it writes *into* leaves the statement
+there, so the alert just moves down the file. Deleting the statement closes it. Full method in
+memory as `reference_codeql_alert_verification`.
+
+**Upstream #174 stays open for the six siblings**, and now carries their corrected line numbers —
+the four in `firestore-shim.ts` moved to 480/487/504/613 when #177 landed, so read alert NUMBERS,
+not lines. Its split: **#282/#283/#284 are mechanical** with a `Map` (check `customMetadata` in
+`storage-routes.ts` first — it is handed to the storage SDK). **#279/#280/#281 are not**: they
+walk a dot-path into an *existing* decoded document, so there is no accumulator to replace and a
+written dismissal is the likely honest answer, especially for #281, which is a `delete`.
 
 ## Owed by Felix, unchanged
 
