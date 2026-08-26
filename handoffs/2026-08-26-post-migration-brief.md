@@ -53,7 +53,7 @@ ours to force:
    `FIBU_YYYYMMDD-NNNN`, the private research path and a named restaurant with descriptive
    fixture ids, and `scripts/check-corpus-anchors.js` now fails CI before `npm ci` if one comes
    back. Fixture prose describes documents instead of citing them.
-2. **That cluster is now down to #232 and #149.** Updated 2026-08-26 evening:
+2. **That cluster is now down to #232.** Updated 2026-08-26, late evening:
    - **#229 and #233 are DONE** — upstream PR #178, 9/9 green, merged; both fork issues closed
      by hand afterwards (a cross-repo `Closes` links but never closes — see
      [[reference_github_crossrepo_closes]]). The § 11 classifier now stores whether the named
@@ -64,7 +64,20 @@ ours to force:
    - **#232 is the remainder of that cluster** and is untouched: extraction misreads the
      recipient block, which is the mechanism behind #229. #229's rule works on whatever
      extraction produced, so a misread recipient still lands wrong — it just lands visibly now.
-   - **#149 has not started**; its brief is `handoffs/2026-08-26-issue-149-brief.md`.
+   - **#149 is done and waiting on Felix** — upstream PR **#179**, 9/9 green, `MERGEABLE`.
+     The panel's save moved behind an `updateFileExtractedFields` callable that routes through
+     the same builder the MCP tool uses, so a correction typed by a person leaves provenance and
+     re-extraction refuses it. Its brief is fulfilled and removed. Two things came out of it that
+     are not in the PR:
+     - **The deploy list grows.** The callable does not exist until
+       `firebase deploy --only functions`, and until then the panel's save fails outright — this
+       is not a "field reads undefined" case, it is a missing function. Add it to what is owed
+       below.
+     - **A follow-up nobody has taken.** `updateFile` (from #178) still does the
+       classification / direction-review / provenance sequence inline for `invoiceDirection`,
+       which is now the third copy of it. `buildCorrectedFileUpdate` is where that lives for the
+       other two surfaces. Flagged on PR #179 as a comment; open it as an issue if it survives
+       the walkthrough.
 3. **#99, then the archive.** Repointing `fibuki.home.syh.at` at the merged `main` is parked until
    Stefan's taxes are filed. When it moves: dump first, repoint, then **archive the fork — never
    delete it** — and close #98.
@@ -101,7 +114,8 @@ written dismissal is the likely honest answer, especially for #281, which is a `
 
 ## Owed by Felix, unchanged
 
-`firebase deploy --only functions`. It carries `retryFileExtraction` **with** its authentication
+`firebase deploy --only functions`. It carries `updateFileExtractedFields` (PR #179 — without it the
+file panel's save has no function to call), `retryFileExtraction` **with** its authentication
 and ownership check (the deployed version has neither, so any caller can spend another account's
 extraction budget and reset its matching), `calculateUva` (the UVA page calls a function that does
 not exist), `prepareUvaFiling`, `scheduledRefreshEcbRates` (until it runs once, no foreign-currency
@@ -117,7 +131,7 @@ offer it there and leave the deploy to Felix.
 
 ## Non-goals
 
-- Do not open lanes against the held issues, or against #116/#149.
+- Do not open lanes against the held issues, or against #116/#149 — both are landed.
 - Do not touch #99 or the fork archive.
 - Do not deploy anything to the live Firebase project, and ask Stefan before touching it at all.
 - Do not re-litigate #89. It is decided.
