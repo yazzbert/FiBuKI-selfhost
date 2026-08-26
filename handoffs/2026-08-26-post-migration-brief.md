@@ -122,12 +122,37 @@ statement** with an attacker-influenced key. Changing what it writes *into* leav
 there, so the alert just moves down the file. Deleting the statement closes it. Full method in
 memory as `reference_codeql_alert_verification`.
 
-**Upstream #174 stays open for the six siblings**, and now carries their corrected line numbers —
-the four in `firestore-shim.ts` moved to 480/487/504/613 when #177 landed, so read alert NUMBERS,
-not lines. Its split: **#282/#283/#284 are mechanical** with a `Map` (check `customMetadata` in
-`storage-routes.ts` first — it is handed to the storage SDK). **#279/#280/#281 are not**: they
-walk a dot-path into an *existing* decoded document, so there is no accumulator to replace and a
-written dismissal is the likely honest answer, especially for #281, which is a `delete`.
+**Upstream #174 is closed too, and the rule is now at zero open on `main`.** PR #181 merged as
+`d727d3de`; the analysis of that head reports all six of #279–#284 `fixed`, and the trunk's
+`results_count` went **20 → 14** — exactly the six, nothing else moved. The issue auto-closed on
+merge.
+
+One prediction in the earlier version of this section was wrong, and the correction is the useful
+part. #282/#283/#284 were mechanical with a `Map`, as expected (`customMetadata` in
+`storage-routes.ts` does reach the storage SDK, so it is rebuilt into a plain object with
+`Object.fromEntries` before it leaves the block). But **#279/#280/#281 did not need the written
+dismissal this brief expected.** `deepSet`/`deepDelete` walk into an *existing* decoded document,
+so there is no accumulator to replace — the fix is to stop mutating in place: rebuild each level
+on the way out (`new Map(Object.entries(node))` → `Object.fromEntries`), return the new document,
+reassign in `applyUpdate`. That deletes the write statement *and* the `delete` statement, and all
+three closed, #281 included. **Reach for restructuring before dismissing.**
+
+Two behaviour changes shipped with it, both deliberate and both tested in the new
+`functions/src/selfhost/dot-path-update.test.ts`: writing *through* a Timestamp now replaces it
+with a map (the old walk wrote a stray property onto the Timestamp instance, which `encodeValue`
+then dropped — the update silently did nothing), and deleting an array element by index
+(`"tags.0"`) is now a no-op instead of leaving a hole that stored as `[null, "b"]`.
+
+Two operational notes for the next person doing this. The alert state only flips **after** the
+push-triggered analysis of the new trunk head finishes, about three minutes here — reading
+straight after clicking merge returns `open` for a fix that works. And a squash merge gives the
+trunk a new sha, so `git merge-base --is-ancestor <local-sha> origin/main` says **NO** even when
+the change landed; verify by content, `git show origin/main:<path>`.
+
+**Nothing to deploy for this one.** All six sites are `functions/src/selfhost/**`, which runs in
+the self-host container, not on Firebase — it is not on Felix's `firebase deploy` list. And the
+running instance tracks the fork's `stefan-prod`, so the fix reaches `fibuki.home.syh.at` when the
+repoint in item 3 happens, not before.
 
 ## Owed by Felix, unchanged
 
