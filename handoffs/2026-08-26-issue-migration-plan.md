@@ -1,4 +1,16 @@
-# Migrating the fork's issues (upstream #98) — the plan, before anything is created
+# Migrating the fork's issues (upstream #98) — EXECUTED 2026-08-26
+
+> **Done.** Stefan approved the plan and it was carried out as written. The 17 issues are
+> upstream **#155 through #171**; the mapping table is the comment on upstream #98. 22 fork
+> issues were commented and closed with their upstream number, 6 were closed without
+> travelling, 3 are held. Upstream **#89 is closed** — Felix carries the Austrian module as a
+> full feature. **#98 is deliberately still open**: the migration half is done, the archive
+> half waits on #99. The fork is down to 3 open issues, all held.
+>
+> The plan below is kept as written for the record.
+
+---
+
 
 31 open on `yazzbert/FiBuKI-selfhost` as of 2026-08-26. This is the triage Stefan asked for:
 re-evaluated, grouped, renamed into the upstream glossary, scrubbed. Nothing has been created
