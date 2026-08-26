@@ -40,10 +40,14 @@ ours to force:
 1. **The walkthrough with Felix.** He reviews all six waves with Stefan before any deploy. Put the
    four standing questions on that agenda — they have been carried since #85 and belong to him:
    why fork PR #79 was closed without a comment; one shared pagination helper instead of three
-   call sites (#116 is the natural place to settle it); whether the Paperless document anchors
+   call sites (settled in PR #175: measured, only the cursor decode was common, and the reason
+   to extract it is that it carries the ownership check — the two `nextCursor` rules stay
+   separate. Felix can still disagree, but the question now has an answer to react to); whether the Paperless document anchors
    stay in a public repository; and how the Austrian module is presented.
 2. **Another agent owns #229, #233, #232, #116 and #149.** Do not touch those files or those
-   issues. #229 and #233 are still open on the fork on purpose — they travel upstream with their
+   issues. **#116 is landed** — upstream PR #175, 9/9 green, awaiting Felix's merge call. It
+   also settles the shared-pagination-helper question below, in the PR body. **#149 has not
+   started**; its brief is `handoffs/2026-08-26-issue-149-brief.md`. #229 and #233 are still open on the fork on purpose — they travel upstream with their
    fix, not as filed defects, and #232 goes with #233 because it is the mechanism behind it.
 3. **#99, then the archive.** Repointing `fibuki.home.syh.at` at the merged `main` is parked until
    Stefan's taxes are filed. When it moves: dump first, repoint, then **archive the fork — never
