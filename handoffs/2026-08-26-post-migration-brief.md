@@ -48,16 +48,22 @@ drained of code and now of issues: **0 open** as of 2026-08-26 night, #232 being
 **Nothing here is blocking, and none of it is a lane.** Three things are moving, none of them
 ours to force:
 
-1. **The walkthrough with Felix.** He reviews all six waves with Stefan before any deploy. Put the
-   four standing questions on that agenda — they have been carried since #85 and belong to him:
-   why fork PR #79 was closed without a comment; one shared pagination helper instead of three
-   call sites (settled in PR #175: measured, only the cursor decode was common, and the reason
-   to extract it is that it carries the ownership check — the two `nextCursor` rules stay
-   separate. Felix can still disagree, but the question now has an answer to react to); and how the Austrian module is presented. **The Paperless-anchor
-   question is answered** — PR #176 replaced every `paperless-ap-NNNN`, own `IV-YY-NNNN`,
-   `FIBU_YYYYMMDD-NNNN`, the private research path and a named restaurant with descriptive
-   fixture ids, and `scripts/check-corpus-anchors.js` now fails CI before `npm ci` if one comes
-   back. Fixture prose describes documents instead of citing them.
+1. **The walkthrough with Felix.** He reviews all six waves with Stefan before any deploy. Put
+   the standing questions on that agenda — they have been carried since #85 and belong to him:
+   one shared pagination helper instead of three call sites, and how the Austrian module is
+   presented.
+   - The pagination one is **settled in PR #175**: measured, only the cursor decode was common,
+     and the reason to extract it is that it carries the ownership check — the two `nextCursor`
+     rules stay separate. Felix can still disagree, but the question now has an answer to react
+     to.
+   - The **Paperless-anchor question is answered** — PR #176 replaced every `paperless-ap-NNNN`,
+     own `IV-YY-NNNN`, `FIBU_YYYYMMDD-NNNN`, the private research path and a named restaurant
+     with descriptive fixture ids, and `scripts/check-corpus-anchors.js` now fails CI before
+     `npm ci` if one comes back. Fixture prose describes documents instead of citing them.
+   - **PR #79 is off the list entirely.** Stefan closed it himself, by mistake, and its work
+     landed anyway through #115/#116. It was on the agenda as "why was it closed without a
+     comment" — do not raise it with Felix, and it is gone from the report for him.
+
 2. **That cluster is closed.** Updated 2026-08-26, night:
    - **#229 and #233 are DONE** — upstream PR #178, 9/9 green, merged; both fork issues closed
      by hand afterwards (a cross-repo `Closes` links but never closes — see
