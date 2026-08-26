@@ -13,8 +13,13 @@ migrated.
    `feedback_concurrent_sessions_on_audit_lxc` (its 2026-08-26 paragraph is about *this* repo),
    `reference_fibuki_landing_report`, `index-webdev.md`.
 2. **The report for Felix**: `syh-company/projects/fibuki-development/reports/
-   2026-08-26-report-for-felix.md`, published as artifact `b3bf6a46`. It is the document the
-   walkthrough runs on. Do not send him the living HTML report instead — different audience.
+   2026-08-26-report-for-felix.html`, published as artifact `b3bf6a46`. **The HTML is the
+   document** — the `.md` beside it is an earlier draft covering #109–#153 only, kept for the
+   diff. It now covers #109–#181 and it is what the walkthrough runs on. Do not send him the
+   living landing report instead — different audience. Its design is a checked-in house format:
+   `BRIEFING-FORMAT.md` + `_briefing-template.html` in that folder, and any future brief for
+   Felix starts from those rather than a redesign. Edit the repo copy and republish to the same
+   artifact URL; never draft one in a scratchpad.
 3. The mapping comment on **felixtosh/FiBuKI#98**, and this repo's
    `handoffs/2026-08-26-issue-migration-plan.md` (kept as the record of how the triage was made).
 4. The living report + `STATUS.md` in `syh-company/projects/fibuki-development/`. Update the
