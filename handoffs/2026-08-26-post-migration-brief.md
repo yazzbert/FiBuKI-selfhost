@@ -42,16 +42,40 @@ ours to force:
    why fork PR #79 was closed without a comment; one shared pagination helper instead of three
    call sites (settled in PR #175: measured, only the cursor decode was common, and the reason
    to extract it is that it carries the ownership check — the two `nextCursor` rules stay
-   separate. Felix can still disagree, but the question now has an answer to react to); whether the Paperless document anchors
-   stay in a public repository; and how the Austrian module is presented.
-2. **Another agent owns #229, #233, #232, #116 and #149.** Do not touch those files or those
-   issues. **#116 is landed** — upstream PR #175, 9/9 green, awaiting Felix's merge call. It
-   also settles the shared-pagination-helper question below, in the PR body. **#149 has not
-   started**; its brief is `handoffs/2026-08-26-issue-149-brief.md`. #229 and #233 are still open on the fork on purpose — they travel upstream with their
-   fix, not as filed defects, and #232 goes with #233 because it is the mechanism behind it.
+   separate. Felix can still disagree, but the question now has an answer to react to); and how the Austrian module is presented. **The Paperless-anchor
+   question is answered** — PR #176 replaced every `paperless-ap-NNNN`, own `IV-YY-NNNN`,
+   `FIBU_YYYYMMDD-NNNN`, the private research path and a named restaurant with descriptive
+   fixture ids, and `scripts/check-corpus-anchors.js` now fails CI before `npm ci` if one comes
+   back. Fixture prose describes documents instead of citing them.
+2. **That cluster is now down to #232 and #149.** Updated 2026-08-26 evening:
+   - **#229 and #233 are DONE** — upstream PR #178, 9/9 green, merged; both fork issues closed
+     by hand afterwards (a cross-repo `Closes` links but never closes — see
+     [[reference_github_crossrepo_closes]]). The § 11 classifier now stores whether the named
+     recipient IS the user and blocks a third party's VAT from the UVA; `invoiceDirection` has
+     a review flag, a `list_files` filter, an editor on both paths, and an unplaced amount no
+     longer renders as green income.
+   - **#116 is merged** — PR #175, and with it the shared-pagination-helper answer below.
+   - **#232 is the remainder of that cluster** and is untouched: extraction misreads the
+     recipient block, which is the mechanism behind #229. #229's rule works on whatever
+     extraction produced, so a misread recipient still lands wrong — it just lands visibly now.
+   - **#149 has not started**; its brief is `handoffs/2026-08-26-issue-149-brief.md`.
 3. **#99, then the archive.** Repointing `fibuki.home.syh.at` at the merged `main` is parked until
    Stefan's taxes are filed. When it moves: dump first, repoint, then **archive the fork — never
    delete it** — and close #98.
+
+## Verify before it is forgotten
+
+**CodeQL alert closure for PR #177** (Stefan's other session: `Object.create(null)` → `Map` +
+`Object.fromEntries`, killing the computed-key sink rather than making it safe; supersedes
+#173, whose null prototype left the alert firing). At merge time 8 `js/remote-property-injection`
+alerts still read open on `main`. CodeQL has to re-run on `main` before #285/#296 close:
+
+```bash
+gh api "repos/felixtosh/FiBuKI/code-scanning/alerts?state=open&per_page=100" \
+  --jq '[.[] | select(.rule.id | test("property-injection"))] | length'
+```
+
+Upstream #174 is the tracking issue; it stays open until that count drops.
 
 ## Owed by Felix, unchanged
 
