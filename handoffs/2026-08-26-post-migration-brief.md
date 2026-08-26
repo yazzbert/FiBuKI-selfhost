@@ -30,7 +30,7 @@ bundler mangles, so every sentinel written from an app route stored as `{}` and 
 crashed every page on sign-in. That is the upstream landing of **fork #52** — close it in the
 migration rather than copying it, and note the near-miss: it looked already-landed only because
 the local checkout tracks the FORK's `main`, not `origin/main`. The fork is
-drained of code and now of issues: 3 open, all held. Upstream carries 40 open issues, of which
+drained of code and now of issues: **0 open** as of 2026-08-26 night, #232 being the last to close. Upstream carries 40 open issues, of which
 #155–#171 arrived in the migration.
 
 **#89 is closed.** Felix carries the Austrian module as a full feature; only its *presentation*
@@ -53,7 +53,7 @@ ours to force:
    `FIBU_YYYYMMDD-NNNN`, the private research path and a named restaurant with descriptive
    fixture ids, and `scripts/check-corpus-anchors.js` now fails CI before `npm ci` if one comes
    back. Fixture prose describes documents instead of citing them.
-2. **That cluster is now down to #232.** Updated 2026-08-26, late evening:
+2. **That cluster is closed.** Updated 2026-08-26, night:
    - **#229 and #233 are DONE** — upstream PR #178, 9/9 green, merged; both fork issues closed
      by hand afterwards (a cross-repo `Closes` links but never closes — see
      [[reference_github_crossrepo_closes]]). The § 11 classifier now stores whether the named
@@ -61,10 +61,27 @@ ours to force:
      a review flag, a `list_files` filter, an editor on both paths, and an unplaced amount no
      longer renders as green income.
    - **#116 is merged** — PR #175, and with it the shared-pagination-helper answer below.
-   - **#232 is the remainder of that cluster** and is untouched: extraction misreads the
-     recipient block, which is the mechanism behind #229. #229's rule works on whatever
-     extraction produced, so a misread recipient still lands wrong — it just lands visibly now.
-   - **#149 is done and waiting on Felix** — upstream PR **#179**, 9/9 green, `MERGEABLE`.
+   - **#232 is DONE** — upstream PR **#180**, merged `f6805e69`; the fork issue closed by hand.
+     Identity names are normalised and compared as token sets instead of substrings, so middle
+     names, punctuation and word order stop missing, and the U+2018 apostrophe case resolves
+     without an alias. The three drifted copies of that comparison collapsed into
+     `functions/src/utils/identity-matcher.ts` (−529/+145 across the two callers), which #229's
+     `recipientIdentityMatch` also rides on: `hasIdentitySignals` now sees every identity entity
+     in the extraction path, where it previously got three flattened fields.
+     **This one does not need a NEW function deployed** — the matcher compiles into six triggers
+     and callables that already exist in production, so the symptom until the redeploy is simply
+     that nothing changes. And the 81 files that sat at `unknown` do not re-evaluate on their
+     own: a touch to `settings/userData` fires `onUserDataUpdate` and sweeps them (capped at
+     `MAX_FILES_PER_UPDATE = 500`), or re-extract.
+     The trade-off, stated on the PR: order-independent subset matching means `Stefan Herbert`
+     now also matches an unrelated `Herbert Stefan Immobilien GmbH`. It only bites where the name
+     is the sole signal, against 27 percent of documents previously carrying no direction at all.
+     **The port is the lesson** — the fix was built on a fork branch and could NOT be PR'd from
+     there: upstream carried #229's `recipientIdentityMatch` and a whole `recipientIdentity.ts`
+     that the fork trunk has never had, so a cherry-pick would have applied cleanly and deleted
+     a shipped feature. It was replayed on `bundle/identity-name-matching` cut off `origin/main`.
+     See [[feedback_upstream_pr_needs_a_bundle_branch]].
+   - **#149 is DONE** — upstream PR **#179**, merged.
      The panel's save moved behind an `updateFileExtractedFields` callable that routes through
      the same builder the MCP tool uses, so a correction typed by a person leaves provenance and
      re-extraction refuses it. Its brief is fulfilled and removed. Two things came out of it that
@@ -115,7 +132,10 @@ written dismissal is the likely honest answer, especially for #281, which is a `
 ## Owed by Felix, unchanged
 
 `firebase deploy --only functions`. It carries `updateFileExtractedFields` (PR #179 — without it the
-file panel's save has no function to call), `retryFileExtraction` **with** its authentication
+file panel's save has no function to call), the identity-matching fix from PR #180 (no new function,
+but `extractFileData`, `extractFileDataOnUndelete`, `retryFileExtraction`, `bulkRetryExtraction`,
+`onUserDataUpdate` and `onUserDataCreated` all compile it in, and it does nothing until they are
+redeployed), `retryFileExtraction` **with** its authentication
 and ownership check (the deployed version has neither, so any caller can spend another account's
 extraction budget and reset its matching), `calculateUva` (the UVA page calls a function that does
 not exist), `prepareUvaFiling`, `scheduledRefreshEcbRates` (until it runs once, no foreign-currency
