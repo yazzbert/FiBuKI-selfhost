@@ -4,7 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # 'deploy/**' matches ci.yml. Without it the Self-host deployment lane
+    # gets no CodeQL at all, and work replayed from the retired branch can
+    # reintroduce a fixed alert on a green pull request — storage-routes.ts
+    # and js/remote-property-injection #283 being the live example.
+    branches: [main, 'deploy/**']
   schedule:
     - cron: "0 4 * * 1"
 
