@@ -2,7 +2,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # 'deploy/**' keeps the full matrix on the Self-host deployment lane.
+    # ci.yml only ever fired on the trunk, so work replayed onto a dated
+    # deployment branch (felixtosh/FiBuKI#188, #189) would otherwise land
+    # with scoped sandbox checks as its only gate.
+    branches: [main, 'deploy/**']
 
 concurrency:
   group: ci-${{ github.head_ref }}
