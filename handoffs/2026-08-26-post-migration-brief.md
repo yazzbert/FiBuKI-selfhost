@@ -56,7 +56,13 @@ ours to force:
      and the reason to extract it is that it carries the ownership check — the two `nextCursor`
      rules stay separate. Felix can still disagree, but the question now has an answer to react
      to.
-   - The **Paperless-anchor question is answered** — PR #176 replaced every `paperless-ap-NNNN`,
+   - The **Paperless-anchor question is answered, with one gap found 2026-08-27** (see
+     `2026-08-27-issue-189-outcome.md` and #198): the guard's FiBu pattern is built as
+     `["FIBU", "\\d{8}"].join("_")`, so the separator is hard-coded to an underscore and a
+     reference written with a **space** passes clean. One is on `main` right now, in
+     `functions/src/uva/nonClaimableVat.test.ts:63`. The fixtures below were genuinely
+     fixed; the guard that is supposed to keep them fixed is not airtight, and the guard is
+     what people act on. PR #176 replaced every `paperless-ap-NNNN`,
      own `IV-YY-NNNN`, `FIBU_YYYYMMDD-NNNN`, the private research path and a named restaurant
      with descriptive fixture ids, and `scripts/check-corpus-anchors.js` now fails CI before
      `npm ci` if one comes back. Fixture prose describes documents instead of citing them.
