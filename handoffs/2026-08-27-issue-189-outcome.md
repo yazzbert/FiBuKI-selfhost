@@ -93,6 +93,18 @@ Verified on both refs *after* the merges rather than trusting them: 5/5 tests pr
   `felixtosh/FiBuKI`, base `deploy/2026-08-27`). It fails at 3-way parallelism on the Mac —
   `npm ci` over virtiofs exceeds the 600s hook timeout — so `npm run smoke -- <n>` (single
   sandbox) if a run is ever wanted. **Ask before starting one.**
+- **#200 — a `js/log-injection` alert this carry INTRODUCED.** CodeQL #297, open on `main`
+  at `rate-limit.ts:45`: the new `console.warn` interpolates `req.ip`, `req.method` and
+  `req.originalUrl`, and `originalUrl` is not newline-stripped, so an encoded CR/LF in a
+  request path forges log lines. Created 16:26 UTC when #196 was first analysed. The code
+  came from `stefan-prod`, where it had never been CodeQL-scanned.
+
+  Worth stating plainly rather than burying: the hazard analysis here was scoped to files
+  where prod and trunk **conflicted**, and it worked — alert #283 stayed fixed, zero open
+  `remote-property-injection` on `main`. But a clean-carry file with no conflict brought a
+  different sink in unexamined. **A carry needs a security read of what it ADDS, not only of
+  what it would overwrite.** Apply that to #195 before carrying it.
+
 - **Cutover script** `deploy/selfhost/cutover-to-apex.sh` is *not* carried and never will
   be here. Self-host deployment lives in the operator's homelab repo.
 
