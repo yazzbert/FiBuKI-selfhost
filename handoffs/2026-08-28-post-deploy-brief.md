@@ -34,8 +34,13 @@ that policed the branch it fed. The retired branch is tagged, not deleted.
 
 ### 1. The defect, and it is the only item that touches figures
 
-**FIX OPEN as PR #204, 2026-08-28, CI green 9/9 (CodeQL included) — awaiting Stefan's
-go-ahead to merge.** Branch `fix/203-correction-derivation`, tip `74b878c5`. The shape:
+**FIXED. PR #204 merged 2026-08-28 as `a8cf0426` on Stefan's go-ahead, CI 9/9 green
+(CodeQL included); #203 auto-closed, and #185 is closed with it — every child of the
+epic is done.** Verified on the trunk by content, not sha (squash): the builder imports
+the shared reconciler, `lineItemReconciliation.ts` exists, and the panel's dead
+consolidation is gone. The fix reaches Self-host through the trunk's continuous deploy;
+the Firebase cloud deploy remains Felix's, and until he runs one, Cloud users still have
+the pre-fix behaviour described below. The shape:
 the reconciliation flag is now derived, never asserted — `buildExtractionCorrection`
 re-derives it against the corrected record, an untouched panel save re-derives against
 the stored record and no longer deletes the printed rate-group block, the panel sends
@@ -50,9 +55,8 @@ Schlussrechnung) now stays flagged and the UVA refuses it instead of silently de
 from the wrong scope. Follow-ups named on the PR, not filed yet: `updateFile`'s inline
 line-item consolidation (same defect shape, different callable), consolidating the four
 derivation copies, and the "line sum exactly 2x" cluster as its own extraction issue.
-After merge, the trunk's continuous deploy carries it to Self-host; the Firebase cloud
-deploy remains Felix's. The paragraphs below describe the PRE-FIX behaviour and remain
-the operating constraint until the merge is deployed.
+The paragraphs below describe the PRE-FIX behaviour, kept as the record of what the
+defect was — and as the operating constraint for Cloud until Felix deploys.
 
 **felixtosh/FiBuKI#203.** Correcting any VAT-bearing field on a File clears
 `extractedRateGroups` — the extracted tax table carrying the document's own totals — and
@@ -118,7 +122,8 @@ hold.
 - **homelab#141** — codify the deploy, written from what the manual run actually did rather
   than from the runbook's description of it.
 
-**felixtosh/FiBuKI#185** should be closed; every child is closed and the work is done.
+**felixtosh/FiBuKI#185 is closed** (2026-08-28, alongside the #204 merge); every child
+was closed and the work done.
 
 ## Verify before it is forgotten
 
