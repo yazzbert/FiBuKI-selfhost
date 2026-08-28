@@ -34,6 +34,26 @@ that policed the branch it fed. The retired branch is tagged, not deleted.
 
 ### 1. The defect, and it is the only item that touches figures
 
+**FIX OPEN as PR #204, 2026-08-28, CI green 9/9 (CodeQL included) — awaiting Stefan's
+go-ahead to merge.** Branch `fix/203-correction-derivation`, tip `74b878c5`. The shape:
+the reconciliation flag is now derived, never asserted — `buildExtractionCorrection`
+re-derives it against the corrected record, an untouched panel save re-derives against
+the stored record and no longer deletes the printed rate-group block, the panel sends
+only what the person typed (no more row-derived total or VAT posted as a ruling, and the
+amount box is seeded from the stored total), and all four `getEffectiveExtractedAmount`
+copies return the stored total for a flagged File. The pure reconciliation cluster moved
+out of `extractionCore` into `functions/src/extraction/lineItemReconciliation.ts` (core
+re-exports), and its candidate filter now keeps negative rows so a person completing an
+itemisation with the missing discount row reconciles. Deliberate behaviour change,
+stated on the PR: a File whose corrected total deliberately differs from its items (a
+Schlussrechnung) now stays flagged and the UVA refuses it instead of silently deriving
+from the wrong scope. Follow-ups named on the PR, not filed yet: `updateFile`'s inline
+line-item consolidation (same defect shape, different callable), consolidating the four
+derivation copies, and the "line sum exactly 2x" cluster as its own extraction issue.
+After merge, the trunk's continuous deploy carries it to Self-host; the Firebase cloud
+deploy remains Felix's. The paragraphs below describe the PRE-FIX behaviour and remain
+the operating constraint until the merge is deployed.
+
 **felixtosh/FiBuKI#203.** Correcting any VAT-bearing field on a File clears
 `extractedRateGroups` — the extracted tax table carrying the document's own totals — and
 in the same block sets `lineItemsUnreconciled` to `false`. Every derived surface then
