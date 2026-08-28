@@ -93,7 +93,15 @@ Verified on both refs *after* the merges rather than trusting them: 5/5 tests pr
   `felixtosh/FiBuKI`, base `deploy/2026-08-27`). It fails at 3-way parallelism on the Mac —
   `npm ci` over virtiofs exceeds the 600s hook timeout — so `npm run smoke -- <n>` (single
   sandbox) if a run is ever wanted. **Ask before starting one.**
-- **#200 — a `js/log-injection` alert this carry INTRODUCED.** CodeQL #297, open on `main`
+- **#200 — a `js/log-injection` alert this carry introduced. CLOSED 2026-08-28.** Fixed on
+  the trunk (#201, `7ffe68dc`) and carried to the deployment branch (#239). Alert #297 reads
+  `fixed` on `refs/heads/main`, open `js/log-injection` on main is 0 — verified against an
+  analysis created after the merge. The fix removes the request values from the log line
+  rather than sanitising them: three sanitiser shapes were all still flagged, which is the
+  same conclusion #181 reached for `js/remote-property-injection`. Per-client attribution is
+  gone; plane, cap and env var are kept. Original entry below.
+
+- **#200, as originally recorded.** CodeQL #297, open on `main`
   at `rate-limit.ts:45`: the new `console.warn` interpolates `req.ip`, `req.method` and
   `req.originalUrl`, and `originalUrl` is not newline-stripped, so an encoded CR/LF in a
   request path forges log lines. Created 16:26 UTC when #196 was first analysed. The code
