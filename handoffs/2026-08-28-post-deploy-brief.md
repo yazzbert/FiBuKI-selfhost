@@ -52,8 +52,14 @@ re-exports), and its candidate filter now keeps negative rows so a person comple
 itemisation with the missing discount row reconciles. Deliberate behaviour change,
 stated on the PR: a File whose corrected total deliberately differs from its items (a
 Schlussrechnung) now stays flagged and the UVA refuses it instead of silently deriving
-from the wrong scope. Follow-ups named on the PR, not filed yet: `updateFile`'s inline
-line-item consolidation (same defect shape, different callable), consolidating the four
+from the wrong scope. Of the follow-ups named on the PR, the `updateFile` one is DONE —
+**PR #205, merged `22a58d51` by Stefan on 2026-08-28**: `updateFile` now refuses the five
+correction-vocabulary fields (towards `updateFileExtractedFields`) and any key outside
+its declared contract — its old copy loop forwarded EVERY payload key into the Firestore
+update, so a caller could write `extractionCorrectedFields` or re-disarm
+`lineItemsUnreconciled` through the side door. Three dead paths went with it:
+`useFiles().updateExtraction`, the lib `updateFileExtraction` direct `updateDoc`, and
+the orphaned `FileExtractionData` type. Still not filed: consolidating the four
 derivation copies, and the "line sum exactly 2x" cluster as its own extraction issue.
 The paragraphs below describe the PRE-FIX behaviour, kept as the record of what the
 defect was — and as the operating constraint for Cloud until Felix deploys.
